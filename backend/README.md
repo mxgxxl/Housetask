@@ -18,6 +18,21 @@ Other scripts:
 - `npm run build` — compile TypeScript to `dist/`
 - `npm start` — run the compiled server (`node dist/app.js`)
 - `npm run typecheck` — strict type check without emitting
+- `npx ts-node src/scripts/seed.ts` — seed demo data (idempotent): user
+  `test@test.com` / `password123`, household "Casa de prueba" (invite code
+  `CASADEMO`), 5 tasks (2 recurring), 3 shopping items
+
+## API docs
+
+Interactive Swagger UI is served at **`/api/docs`** (OpenAPI 3.0).
+
+## Deployment (Railway)
+
+The repo ships a `backend/Dockerfile` (multi-stage, Node 20-alpine) and a
+root `railway.toml` configured for the `DOCKERFILE` builder. Railway builds
+with the repo root as context and starts the app with
+`node backend/dist/app.js` on port 3000. Set the environment variables from
+the table above in the Railway service.
 
 ### Environment variables
 

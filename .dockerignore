@@ -1,0 +1,11 @@
+# Keep the Docker build context small and reproducible.
+**/node_modules
+**/dist
+**/build
+frontend
+.git
+.github
+**/.env
+**/.env.*
+**/*.log
+.dart_tool

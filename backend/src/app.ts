@@ -2,7 +2,9 @@ import 'dotenv/config';
 import express, { Application, Request, Response } from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
+import swaggerUi from 'swagger-ui-express';
 
+import { swaggerSpec } from './config/swagger';
 import { connectDatabase, disconnectDatabase } from './config/database';
 import { initSocket } from './config/socket';
 import { disconnectRedis } from './config/redis';
@@ -42,6 +44,9 @@ export function createApp(): Application {
   app.get('/health', (_req: Request, res: Response) => {
     res.json({ success: true, data: { status: 'ok', uptime: process.uptime() } });
   });
+
+  // API documentation (Swagger UI).
+  app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
   // API routes.
   app.use('/api/auth', authRoutes);
