@@ -36,13 +36,14 @@ export function serializeHousehold(household: IHousehold): Record<string, unknow
     createdBy: household.createdBy.toString(),
     createdAt: household.createdAt,
     members: household.members.map((m) => {
+      // A non-populated ref is an ObjectId; anything else is a populated user.
+      const isPopulated = !(m.user instanceof Types.ObjectId);
       const populated = m.user as unknown as {
         _id?: Types.ObjectId;
         name?: string;
         email?: string;
         avatarUrl?: string;
       };
-      const isPopulated = populated && typeof populated === 'object' && '_id' in populated;
       return {
         user: isPopulated
           ? {
