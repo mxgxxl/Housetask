@@ -1,0 +1,77 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+
+import 'config/routes.dart';
+import 'config/theme.dart';
+import 'data/datasources/local/auth_local_datasource.dart';
+import 'data/datasources/remote/api_service.dart';
+import 'data/repositories/auth_repository.dart';
+import 'data/repositories/household_repository.dart';
+import 'data/repositories/shopping_repository.dart';
+import 'data/repositories/task_repository.dart';
+import 'presentation/cubit/auth_cubit.dart';
+import 'presentation/cubit/household_cubit.dart';
+import 'presentation/cubit/shopping_cubit.dart';
+import 'presentation/cubit/socket_cubit.dart';
+import 'presentation/cubit/task_cubit.dart';
+import 'services/notification_service.dart';
+import 'services/socket_service.dart';
+
+/// Root widget: wires up dependencies (data sources, repositories, cubits)
+/// and hosts the MaterialApp.
+class HomeSyncApp extends StatelessWidget {
+  const HomeSyncApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    // ---- Dependency wiring (composition root) ----
+    final local = AuthLocalDataSource();
+    final api = ApiService(local);
+
+    final authRepo = AuthRepository(api, local);
+    final householdRepo = HouseholdRepository(api, local);
+    final taskRepo = TaskRepository(api);
+    final shoppingRepo = ShoppingRepository(api);
+
+    final notifications = NotificationService();
+    final socketService = SocketService();
+
+    return MultiRepositoryProvider(
+      providers: [
+        RepositoryProvider.value(value: authRepo),
+        RepositoryProvider.value(value: householdRepo),
+        RepositoryProvider.value(value: taskRepo),
+        RepositoryProvider.value(value: shoppingRepo),
+      ],
+      child: MultiBlocProvider(
+        providers: [
+          BlocProvider(create: (_) {
+            final cubit = AuthCubit(authRepo);
+            // Force logout when the API layer can't refresh the session.
+            api.onSessionExpired = cubit.onSessionExpired;
+            return cubit;
+          }),
+          BlocProvider(create: (_) => HouseholdCubit(householdRepo)),
+          BlocProvider(create: (_) => TaskCubit(taskRepo, notifications)),
+          BlocProvider(create: (_) => ShoppingCubit(shoppingRepo)),
+          BlocProvider(
+            create: (ctx) => SocketCubit(
+              socketService,
+              local,
+              ctx.read<TaskCubit>(),
+              ctx.read<ShoppingCubit>(),
+              ctx.read<HouseholdCubit>(),
+            ),
+          ),
+        ],
+        child: MaterialApp(
+          title: 'HomeSync',
+          debugShowCheckedModeBanner: false,
+          theme: AppTheme.light,
+          initialRoute: Routes.splash,
+          onGenerateRoute: Routes.onGenerateRoute,
+        ),
+      ),
+    );
+  }
+}
