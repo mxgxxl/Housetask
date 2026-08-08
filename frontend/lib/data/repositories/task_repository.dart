@@ -41,4 +41,11 @@ class TaskRepository {
   Future<void> delete(String householdId, String taskId) async {
     await _api.delete('/households/$householdId/tasks/$taskId');
   }
+
+  /// Catch-up: ask the server to generate missed recurring occurrences.
+  /// Returns `{ generated, tasks }`.
+  Future<Map<String, dynamic>> generateRecurringInstances(String householdId) async {
+    final data = await _api.post('/households/$householdId/tasks/generate-instances');
+    return data as Map<String, dynamic>;
+  }
 }

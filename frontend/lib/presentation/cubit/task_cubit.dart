@@ -60,6 +60,20 @@ class TaskCubit extends Cubit<TaskState> {
     if (_householdId != null) await load(_householdId!);
   }
 
+  /// Ask the backend to generate any missed recurring occurrences, then reload
+  /// if new tasks were created. Silent + non-critical: never surfaces errors.
+  Future<void> catchUpRecurringTasks(String householdId) async {
+    try {
+      final data = await _repo.generateRecurringInstances(householdId);
+      final generated = (data['generated'] as num?)?.toInt() ?? 0;
+      if (generated > 0) {
+        await load(householdId);
+      }
+    } catch (_) {
+      // Non-critical background task; ignore failures.
+    }
+  }
+
   Future<Task?> createTask(Map<String, dynamic> payload) async {
     if (_householdId == null) return null;
     try {

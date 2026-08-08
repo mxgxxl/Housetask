@@ -28,6 +28,7 @@ export interface ITask extends Document {
   completedBy?: Types.ObjectId;
   isRecurring: boolean;
   recurrenceRule?: IRecurrenceRule;
+  parentTaskId?: Types.ObjectId | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -35,9 +36,9 @@ export interface ITask extends Document {
 const recurrenceRuleSchema = new Schema<IRecurrenceRule>(
   {
     type: { type: String, enum: ['daily', 'weekly', 'monthly', 'custom'] },
-    interval: { type: Number },
-    daysOfWeek: { type: [Number], default: undefined },
-    dayOfMonth: { type: Number },
+    interval: { type: Number, default: 1 },
+    daysOfWeek: { type: [{ type: Number, min: 0, max: 6 }], default: undefined },
+    dayOfMonth: { type: Number, min: 1, max: 31 },
   },
   { _id: false }
 );
@@ -66,6 +67,14 @@ const taskSchema = new Schema<ITask>(
     completedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     isRecurring: { type: Boolean, default: false },
     recurrenceRule: { type: recurrenceRuleSchema, default: undefined },
+    // Links a generated occurrence back to the original recurring task.
+    parentTaskId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Task',
+      required: false,
+      default: null,
+      index: true,
+    },
   },
   { timestamps: true, ...jsonSchemaOptions }
 );

@@ -79,6 +79,11 @@ class SocketService {
     }
   }
 
+  /// Subscribe to bulk recurring-task generation (catch-up).
+  void onTasksBatchCreated(void Function(dynamic data) cb) {
+    _socket?.on('tasks:batch_created', cb);
+  }
+
   void off(String event) => _socket?.off(event);
 
   /// Disconnect and tear down the socket (used on logout).

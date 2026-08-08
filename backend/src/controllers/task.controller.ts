@@ -72,3 +72,27 @@ export async function remove(req: AuthenticatedRequest, res: Response): Promise<
   await taskService.deleteTask(req.params.householdId, req.user!.userId, req.params.taskId);
   sendSuccess(res, { message: 'Task deleted' });
 }
+
+/**
+ * POST /api/households/:householdId/tasks/generate-instances
+ * Body: { upTo?: ISO date } (defaults to now)
+ * Catch-up: generates missed recurring occurrences up to `upTo`.
+ * Broadcasts tasks:batch_created.
+ */
+export async function generateRecurringInstances(
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> {
+  const rawUpTo = (req.body ?? {}).upTo;
+  const upTo = rawUpTo ? new Date(rawUpTo) : new Date();
+  if (Number.isNaN(upTo.getTime())) {
+    throw new AppError('Invalid upTo date', 400);
+  }
+
+  const result = await taskService.catchUpRecurring(
+    req.params.householdId,
+    req.user!.userId,
+    upTo
+  );
+  sendSuccess(res, result);
+}

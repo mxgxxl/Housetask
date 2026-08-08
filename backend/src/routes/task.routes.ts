@@ -10,6 +10,8 @@ router.use(authMiddleware);
 
 router.get('/', asyncHandler(taskController.list));
 router.post('/', asyncHandler(taskController.create));
+// Static path must precede the ':taskId' routes so it is not treated as an id.
+router.post('/generate-instances', asyncHandler(taskController.generateRecurringInstances));
 router.patch('/:taskId', asyncHandler(taskController.update));
 router.patch('/:taskId/complete', asyncHandler(taskController.complete));
 router.delete('/:taskId', asyncHandler(taskController.remove));

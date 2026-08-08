@@ -49,6 +49,8 @@ class SocketCubit extends Cubit<bool> {
     _socket.onTaskUpdated(_taskCubit.applyRealtime);
     _socket.onShoppingUpdated(_shoppingCubit.applyRealtime);
     _socket.onHouseholdUpdated(_householdCubit.applyRealtime);
+    // A batch of recurring occurrences was generated elsewhere; reload tasks.
+    _socket.onTasksBatchCreated((_) => _taskCubit.refresh());
   }
 
   /// Join a household room (call after creating/joining a household).

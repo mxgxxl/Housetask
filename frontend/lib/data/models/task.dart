@@ -18,6 +18,7 @@ class Task extends Equatable {
   final User? completedBy;
   final bool isRecurring;
   final RecurrenceRule? recurrenceRule;
+  final String? parentTaskId;
 
   const Task({
     required this.id,
@@ -34,6 +35,7 @@ class Task extends Equatable {
     this.completedBy,
     this.isRecurring = false,
     this.recurrenceRule,
+    this.parentTaskId,
   });
 
   bool get isCompleted => status == 'completed';
@@ -63,6 +65,7 @@ class Task extends Equatable {
       recurrenceRule: json['recurrenceRule'] != null
           ? RecurrenceRule.fromJson(json['recurrenceRule'] as Map<String, dynamic>)
           : null,
+      parentTaskId: json['parentTaskId']?.toString(),
     );
   }
 
@@ -77,6 +80,7 @@ class Task extends Equatable {
         'dueDate': dueDate?.toIso8601String(),
         'isRecurring': isRecurring,
         if (recurrenceRule != null) 'recurrenceRule': recurrenceRule!.toJson(),
+        'parentTaskId': parentTaskId,
       };
 
   Task copyWith({
@@ -105,6 +109,7 @@ class Task extends Equatable {
       completedBy: completedBy,
       isRecurring: isRecurring ?? this.isRecurring,
       recurrenceRule: recurrenceRule ?? this.recurrenceRule,
+      parentTaskId: parentTaskId,
     );
   }
 
@@ -121,5 +126,6 @@ class Task extends Equatable {
         dueDate,
         completedAt,
         isRecurring,
+        parentTaskId,
       ];
 }

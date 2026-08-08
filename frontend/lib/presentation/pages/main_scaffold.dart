@@ -52,6 +52,8 @@ class _MainScaffoldState extends State<MainScaffold> {
     context.read<TaskCubit>().load(householdId);
     context.read<ShoppingCubit>().load(householdId);
     context.read<SocketCubit>().joinHousehold(householdId);
+    // Generate any missed recurring occurrences for this household.
+    context.read<TaskCubit>().catchUpRecurringTasks(householdId);
   }
 
   @override
