@@ -127,6 +127,11 @@ Document key architectural decisions here. Format: Context → Decision → Cons
 - **Decision:** Keep embedded for MVP, but plan migration to separate `HouseholdMember` collection.
 - **Consequences:** Simple reads for MVP, but will hit MongoDB 16MB document limit with large households. Migration planned in Phase 2.
 
+### ADR-006: Timezone strategy for dates and recurrence
+- **Context:** Recurring tasks, dueDate and the ±1-day anti-duplicate guard are ambiguous without a defined timezone.
+- **Decision:** Store ALL timestamps in UTC (MongoDB Date). Compute recurrence and the ±1-day guard in UTC for now. Frontend displays dates in the device's local timezone. Households will gain a `timeZone` field (IANA string, default = creator's TZ at creation) and recurrence computation will migrate to household TZ in Phase 2.
+- **Consequences:** Consistent behavior across devices and DST changes today; known UX edge case (a "daily at 9am" task drifts on DST change) until TD-013 is implemented.
+
 ---
 
 ## 🛠️ Tech Stack
@@ -319,10 +324,21 @@ Error:    { "success": false, "error": "Human-readable message" }
 - **parentTaskId** links generated instances back to the original series
 - Recurrence types: `daily`, `weekly`, `monthly`, `custom`
 - Frontend calls catch-up automatically when entering a household
+- **Batch payload limit:** `tasks:batch_created` MUST be emitted in chunks of at most 20 tasks per event (multiple events if a catch-up exceeds 20) to keep socket payloads small
+
+---
+
+## ⚡ Performance Patterns
+
+- **Membership cache:** `assertMembership` runs on every household-scoped operation. To avoid one MongoDB query per request, cache membership in Redis with a short TTL (e.g. 60s), key `membership:<householdId>:<userId>`. Invalidate on `household:member_joined` / `household:member_left` events.
+- **Populate strategy:** prefer a single `.populate()` call with an array of paths over multiple sequential populate calls.
+- **List endpoints:** always paginated (cursor-based). Never return unbounded collections.
 
 ---
 
 ## 🧪 Testing Standards
+
+**⚠️ IMPORTANT — Target state, not yet installed:** The testing stack described below (Jest, Supertest, mongodb-memory-server, bloc_test) is NOT currently installed in the repo. Before writing tests, the assistant MUST first install the dependencies (see TD-005 / Phase 1). Do NOT assume tests can be executed until setup is complete.
 
 - **Backend:** Jest + Supertest for integration tests
 - **Frontend:** `flutter_test` for widget tests, `bloc_test` for Cubit tests
@@ -333,6 +349,12 @@ Error:    { "success": false, "error": "Human-readable message" }
 - **Every test must be independent** — clean state before/after each test
 - **No test should depend on external services** (no real MongoDB, no real Redis)
 - **AAA pattern:** Arrange → Act → Assert in every test
+
+**Required high-value test scenarios (cover first):**
+1. Refresh token rotation under concurrency (backend rotation + frontend single-flight pattern)
+2. Recurrence anti-duplicate guard (±1 day window)
+3. Never delete the household's last admin
+4. Idempotency of write operations under retry (401 refresh retry, socket reconnect)
 
 ---
 
@@ -350,6 +372,11 @@ Error:    { "success": false, "error": "Human-readable message" }
 10. NEVER skip error handling — every async operation must have error handling
 11. NEVER merge code without tests for new features
 12. NEVER ignore a failing test — fix it or remove it with justification
+13. **NEVER** allow write POSTs without idempotency protection: every POST that creates a resource MUST accept an `Idempotency-Key` header; backend MUST dedupe via Redis with a TTL; frontend MUST generate one stable UUID per logical operation (surviving 401 retries)
+14. **NEVER** configure `express.json()` without a payload size limit (e.g. `limit: '100kb'`)
+15. `CORS_ORIGINS` MUST be non-empty when `NODE_ENV=production`; the server MUST fail fast at startup otherwise. Wildcard `*` is only acceptable in development
+16. When a member leaves a household: their pending assigned tasks MUST be unassigned (removed from `assignedTo`), tasks they created MUST be preserved, and the UI MUST render "Former member" for dangling user refs. NEVER leave orphaned ObjectIds unhandled
+17. Resource-level authorization: only the task creator or an admin may edit/delete a task; any member may complete tasks and purchase shopping items. (MUST be enforced — currently NOT enforced, see TD-011, implement in Phase 2)
 
 ---
 
@@ -370,20 +397,27 @@ These proposals don't need to be implemented immediately, but they MUST be docum
 
 ## 📝 Technical Debt Registry
 
-Track all identified technical debt here. Format: ID | Description | Severity | Proposed Solution | Status
+Track all identified technical debt here. Format: ID | Description | Severity | Proposed Solution | Status | Owner | Created
 
-| ID | Description | Severity | Proposed Solution | Status |
-|----|-------------|----------|-------------------|--------|
-| TD-001 | Members embedded in Household document | High | Migrate to separate HouseholdMember collection | Planned (Phase 2) |
-| TD-002 | No pagination on list endpoints | High | Implement cursor-based pagination | Planned (Phase 1) |
-| TD-003 | No offline support in frontend | High | Implement Hive caching + sync queue | Planned (Phase 1) |
-| TD-004 | No input sanitization | High | Add express-mongo-sanitize + XSS escaping | Planned (Phase 1) |
-| TD-005 | No test coverage | High | Add Jest + Supertest integration tests | Planned (Phase 1) |
-| TD-006 | Rate limiting only on auth endpoints | Medium | Add global + per-endpoint rate limiting | Planned (Phase 2) |
-| TD-007 | No optimistic updates in frontend | Medium | Implement optimistic UI updates | Planned (Phase 2) |
-| TD-008 | No CI/CD pipeline | Medium | Configure GitHub Actions | Planned (Phase 2) |
-| TD-009 | No error tracking (Sentry) | Medium | Integrate Sentry backend + frontend | Planned (Phase 1) |
-| TD-010 | No database backups | Medium | Configure MongoDB Atlas backups | Planned (Phase 3) |
+| ID | Description | Severity | Proposed Solution | Status | Owner | Created |
+|----|-------------|----------|-------------------|--------|-------|---------|
+| TD-001 | Members embedded in Household document | High | Migrate to separate HouseholdMember collection | Planned (Phase 2) | TBD | 2026-08-08 |
+| TD-002 | No pagination on list endpoints | High | Implement cursor-based pagination | Planned (Phase 1) | TBD | 2026-08-08 |
+| TD-003 | No offline support in frontend | High | Implement Hive caching + sync queue | Planned (Phase 1) | TBD | 2026-08-08 |
+| TD-004 | No input sanitization | High | Add express-mongo-sanitize + XSS escaping | Planned (Phase 1) | TBD | 2026-08-08 |
+| TD-005 | No test coverage (stack not installed) | High | Add Jest + Supertest + mongodb-memory-server + bloc_test | Planned (Phase 1) | TBD | 2026-08-08 |
+| TD-006 | Rate limiting only on auth endpoints | Medium | Add global + per-endpoint rate limiting | Planned (Phase 2) | TBD | 2026-08-08 |
+| TD-007 | No optimistic updates in frontend | Medium | Implement optimistic UI updates | Planned (Phase 2) | TBD | 2026-08-08 |
+| TD-008 | No CI/CD pipeline | Medium | Configure GitHub Actions | Planned (Phase 2) | TBD | 2026-08-08 |
+| TD-009 | No error tracking (Sentry not installed) | Medium | Integrate Sentry backend + frontend | Planned (Phase 1) | TBD | 2026-08-08 |
+| TD-010 | No database backups | Medium | Configure MongoDB Atlas backups | Planned (Phase 3) | TBD | 2026-08-08 |
+| TD-011 | No resource-level authorization on tasks (any member can delete) | High | Creator-or-admin rule for edit/delete; any member can complete | Planned (Phase 2) | TBD | 2026-08-10 |
+| TD-012 | No ESLint/Prettier with no-console rule | Medium | Add lint config + pre-commit hook | Planned (Phase 2) | TBD | 2026-08-10 |
+| TD-013 | Recurrence computed in UTC without household timezone | Medium | Add household.timeZone + TZ-aware recurrence | Planned (Phase 2) | TBD | 2026-08-10 |
+| TD-014 | No idempotency on write POSTs (retry can duplicate) | High | Idempotency-Key header + Redis dedupe | Planned (Phase 1) | TBD | 2026-08-10 |
+| TD-015 | No express.json payload size limit | Medium | Add limit option | Planned (Phase 1) | TBD | 2026-08-10 |
+| TD-016 | CORS_ORIGINS empty = * allowed in production | High | Fail-fast at startup in production | Planned (Phase 1) | TBD | 2026-08-10 |
+| TD-017 | constants.dart with hardcoded local backend URL | Low | Migrate to --dart-define / env-based config | Planned (Phase 2) | TBD | 2026-08-10 |
 
 ---
 
@@ -487,21 +521,27 @@ Swagger UI available at: `http://localhost:3000/api/docs`
 ## 🔮 Roadmap
 
 ### Phase 1 — Stabilization (NOW)
-- [ ] Cursor-based pagination (backend + frontend)
-- [ ] Offline mode with Hive
-- [ ] Input sanitization and validation
-- [ ] Error tracking (Sentry)
-- [ ] Integration tests (Jest + Supertest)
+- [ ] Cursor-based pagination (TD-002)
+- [ ] Offline mode with Hive (TD-003)
+- [ ] Input sanitization and validation (TD-004)
+- [ ] Integration tests + install test stack (TD-005)
+- [ ] Error tracking with Sentry (TD-009)
+- [ ] Idempotency-Key on write POSTs (TD-014)
+- [ ] express.json payload limit (TD-015)
+- [ ] CORS fail-fast in production (TD-016)
 
 ### Phase 2 — Robustness
-- [ ] Optimistic updates
-- [ ] Global rate limiting
-- [ ] CI/CD with GitHub Actions
-- [ ] Refactor members to separate collection
-- [ ] Granular task permissions
+- [ ] Optimistic updates (TD-007)
+- [ ] Global rate limiting (TD-006)
+- [ ] CI/CD with GitHub Actions (TD-008)
+- [ ] Refactor members to separate collection (TD-001)
+- [ ] Granular task permissions (TD-011)
+- [ ] ESLint + Prettier + no-console (TD-012)
+- [ ] Household-timezone-aware recurrence (TD-013)
+- [ ] Env-based frontend config via --dart-define (TD-017)
 
 ### Phase 3 — Production
-- [ ] MongoDB backups
+- [ ] MongoDB backups (TD-010)
 - [ ] APM monitoring (Prometheus + Grafana)
 - [ ] Load testing (k6)
 - [ ] Performance optimization
