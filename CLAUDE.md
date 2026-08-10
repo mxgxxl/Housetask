@@ -433,6 +433,7 @@ to clients.
 15. NEVER ship production with empty `CORS_ORIGINS`: when `NODE_ENV=production` it MUST be non-empty and the server MUST fail fast at startup otherwise; wildcard `*` is only acceptable in development. (MUST be enforced — currently NOT implemented, see TD-016)
 16. NEVER leave orphaned references when a member leaves a household: their pending assigned tasks MUST be unassigned (removed from `assignedTo`), tasks they created MUST be preserved, and the UI MUST render "Former member" for dangling user refs. (MUST be enforced — currently NOT implemented, see TD-018)
 17. NEVER allow edit/delete of a task by anyone other than the creator or an admin; any member may complete tasks and purchase shopping items. (MUST be enforced — currently NOT implemented, see TD-011, implement in Phase 2)
+18. NEVER render user-supplied text in any HTML-capable surface (future web client, email templates, push deep-links) without escaping at render time; mobile Text() widgets are safe by construction, storage stays raw per ADR-009
 
 ---
 
@@ -483,8 +484,11 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 | TD-024 | SHA-256 migration: raw refresh tokens already persisted in Atlas will not match sha256 lookups after deploy | High | One-time action: clear refreshtokens collection when deploying b2c481e (safe now: pre-production, no real users; post-user-acquisition this would require a grace-period lookup) | Script ready (scripts/migrate-refresh-tokens.ts); run with --yes during the deploy window of b2c481e | TBD | 2026-08-10 |
 | TD-025 | Monthly recurrence anchor bug: dayOfMonth 31 clamps to Feb 28 and never recovers because the next occurrence is computed from the clamped date instead of the rule anchor | High | Anchor monthly computation to rule.dayOfMonth; add weekly/monthly/clamp unit tests | Resolved (commit 1) | TBD | 2026-08-10 |
 | TD-026 | List sort not backed by a matching compound index (in-memory sort per page) | High | Add sort-exact compound indexes on Task and ShoppingItem | Resolved (commit 3) | TBD | 2026-08-10 |
-| TD-027 | Frontend repositories broken against paginated backend (data array → object) | Medium | Adapt Flutter repositories/cubits to the paginated envelope | Planned (Prompt 1.5) | TBD | 2026-08-10 |
+| TD-027 | Frontend repositories broken against paginated backend (data array → object) | Medium | Adapt Flutter repositories/cubits to the paginated envelope | Resolved (commit 2) | TBD | 2026-08-10 |
 | TD-028 | Validation scattered across controllers/services; express-mongo-sanitize incompatible with Express 5 | Medium | Zod schemas per endpoint as middleware; explicit body sanitization replaces global middleware | Planned (Phase 2) | TBD | 2026-08-10 |
+| TD-029 | Text persisted HTML-escaped during the escaping window remains escaped | Low | Won't fix: pre-production, only local test data affected; re-seed if cosmetic noise bothers; a one-off unescape pass would only be justified if a real household existed in the window | Won't fix | TBD | 2026-08-10 |
+| TD-030 | Index tests were temporarily downgraded to schema-declaration level while host disk had <500 MB free | Low | Host disk freed; listIndexes() built-index assertions restored | Resolved (commit 1) | TBD | 2026-08-10 |
+| TD-031 | POSTs carrying Idempotency-Key hang forever when Redis is unreachable (ioredis maxRetriesPerRequest:null queues commands indefinitely) | High | Bound the store: commandTimeout on the Redis client + fail-open (proceed without idempotency) or fail-fast 503 instead of hanging | Planned (Phase 1) | TBD | 2026-08-10 |
 
 ---
 
@@ -581,7 +585,7 @@ Swagger UI available at: `http://localhost:3000/api/docs`
 ### One-time deploy action (TD-024)
 When deploying commit b2c481e (SHA-256 refresh tokens) to any environment with persisted refreshtokens: clear the refreshtokens collection during the deploy window. All active sessions will require a clean re-login. This is safe today (pre-production). After real user acquisition, equivalent migrations MUST use a grace-period dual lookup instead.
 
-Execute during the deploy window: `npx ts-node src/scripts/migrate-refresh-tokens.ts --yes` (or the compiled dist equivalent).
+Execute during the deploy window: `npm run migrate:refresh-tokens` (compiled; works in the production container where ts-node is not installed).
 
 ### Frontend
 - Android: applicationId `com.homesync.app`, minSdkVersion 21
