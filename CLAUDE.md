@@ -134,7 +134,7 @@ Document key architectural decisions here. Format: Context → Decision → Cons
 
 ### ADR-007: Idempotency-Key semantics (replay and concurrency)
 - **Context:** Dio 401-retries and socket reconnects can duplicate write POSTs; two identical requests can also race in parallel.
-- **Decision:** POSTs that create resources accept an `Idempotency-Key` header. Backend acquires the key in Redis with `SET <key> <placeholder> NX EX <ttl>` BEFORE creating the resource. If SET NX fails: stored value is a completed result → return the original resource with HTTP 200 and do NOT re-emit socket events; stored value is in-progress → poll up to 2s for completion, then return the original with 200; timeout → 409 Conflict. Frontend generates one stable UUID per logical operation (surviving 401 retries) and NEVER auto-retries a 409. The header is optional during the migration window; the Flutter client starts sending it in Prompt 1.5; making it mandatory on household-scoped POSTs is a candidate hard rule once the client ships. Keys are scoped server-side per user and route before hashing (sha256(userId:route:key)) to prevent cross-user response poisoning; failed attempts call release() so a validation error never traps the client in 409 for the key TTL.
+- **Decision:** POSTs that create resources accept an `Idempotency-Key` header. Backend acquires the key in Redis with `SET <key> <placeholder> NX EX <ttl>` BEFORE creating the resource. If SET NX fails: stored value is a completed result → return the original resource with HTTP 200 and do NOT re-emit socket events; stored value is in-progress → poll up to 2s for completion, then return the original with 200; timeout → 409 Conflict. Frontend generates one stable UUID per logical operation (surviving 401 retries) and NEVER auto-retries a 409. The header is optional during the migration window; the Flutter client starts sending it in Prompt 1.5; making it mandatory on household-scoped POSTs is a candidate hard rule once the client ships. Keys are scoped server-side per user and route before hashing (sha256(userId:route:key)) to prevent cross-user response poisoning; failed attempts call release() so a validation error never traps the client in 409 for the key TTL. The IdempotencyStore is failure-tolerant by design: on any store failure (Redis outage, timeout, exception) the middleware fail-opens and processes the request without idempotency, logging a security-grade warning. Idempotency is a correctness improvement, not a requirement; its absence MUST NOT cause a write outage.
 - **Consequences:** prevents duplicates on retry and on race; requires storing the serialized result in Redis with TTL; 409 is a safe terminal response for clients.
 
 ### ADR-008: Forward-only cursor pagination with full sort-position encoding
@@ -488,7 +488,7 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 | TD-028 | Validation scattered across controllers/services; express-mongo-sanitize incompatible with Express 5 | Medium | Zod schemas per endpoint as middleware; explicit body sanitization replaces global middleware | Planned (Phase 2) | TBD | 2026-08-10 |
 | TD-029 | Text persisted HTML-escaped during the escaping window remains escaped | Low | Won't fix: pre-production, only local test data affected; re-seed if cosmetic noise bothers; a one-off unescape pass would only be justified if a real household existed in the window | Won't fix | TBD | 2026-08-10 |
 | TD-030 | Index tests were temporarily downgraded to schema-declaration level while host disk had <500 MB free | Low | Host disk freed; listIndexes() built-index assertions restored | Resolved (commit 1) | TBD | 2026-08-10 |
-| TD-031 | POSTs carrying Idempotency-Key hang forever when Redis is unreachable (ioredis maxRetriesPerRequest:null queues commands indefinitely) | High | Bound the store: commandTimeout on the Redis client + fail-open (proceed without idempotency) or fail-fast 503 instead of hanging | Planned (Phase 1) | TBD | 2026-08-10 |
+| TD-031 | POSTs carrying Idempotency-Key hang forever when Redis is unreachable (ioredis maxRetriesPerRequest:null queues commands indefinitely) | High | commandTimeout 1000ms on ioredis + fail-open in middleware with security-grade warn | Resolved (commit 1) | TBD | 2026-08-10 |
 
 ---
 
@@ -582,10 +582,12 @@ Swagger UI available at: `http://localhost:3000/api/docs`
 - Start command: `node backend/dist/app.js`
 - Set all environment variables in Railway dashboard
 
-### One-time deploy action (TD-024)
-When deploying commit b2c481e (SHA-256 refresh tokens) to any environment with persisted refreshtokens: clear the refreshtokens collection during the deploy window. All active sessions will require a clean re-login. This is safe today (pre-production). After real user acquisition, equivalent migrations MUST use a grace-period dual lookup instead.
-
-Execute during the deploy window: `npm run migrate:refresh-tokens` (compiled; works in the production container where ts-node is not installed).
+### Deployment order (MANDATORY after TD-027)
+The paginated envelope (commit 9f9f629 backend / 597515e frontend) is a breaking change between the two halves of the monorepo. Deploy order MUST be:
+1. Deploy backend (Railway picks up the new startCommand).
+2. During the deploy window, run `npm run migrate:refresh-tokens` once (TD-024 one-time wipe).
+3. Release the Flutter app to the stores.
+Publishing the app first would make every list break for users until the backend catches up.
 
 ### Frontend
 - Android: applicationId `com.homesync.app`, minSdkVersion 21
