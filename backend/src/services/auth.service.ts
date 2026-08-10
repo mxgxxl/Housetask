@@ -108,8 +108,21 @@ export async function login(
 }
 
 /**
+ * Revoke every refresh token belonging to a user, ending all their sessions.
+ * Used when a replayed (already-rotated) token is detected.
+ */
+async function revokeAllUserTokens(userId: string): Promise<void> {
+  await RefreshTokenModel.deleteMany({ userId: new Types.ObjectId(userId) });
+}
+
+/**
  * Rotate tokens. Verifies the refresh JWT, confirms a matching DB record
  * exists, deletes it, and issues a new pair (rotation prevents reuse).
+ *
+ * Replay handling: a token with a valid signature but no DB row has already
+ * been rotated, so the entire token family for that user is revoked. A token
+ * whose signature does not verify is simply rejected — an attacker must never
+ * be able to log a victim out by posting garbage with their user id.
  */
 export async function refresh(refreshToken: string): Promise<TokenPair> {
   let payload: { userId: string; tokenId: string };
@@ -124,7 +137,21 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
   // and both mint new pairs; findOneAndDelete is a single atomic operation, so
   // exactly one caller receives the document and the loser gets a 401.
   const stored = await RefreshTokenModel.findOneAndDelete({ token: refreshToken });
-  if (!stored || stored.userId.toString() !== payload.userId) {
+
+  // A correctly signed token with no matching row was already rotated away —
+  // i.e. someone is replaying an old token. The legitimate holder cannot tell
+  // us apart from the thief, so revoke the whole family and force everyone to
+  // re-authenticate; otherwise a stolen token's session would outlive the
+  // rotation that was supposed to invalidate it.
+  if (!stored) {
+    await revokeAllUserTokens(payload.userId);
+    throw new AppError('Invalid or expired refresh token', 401);
+  }
+
+  // Signature says one user, the stored row says another: tampering, not a
+  // race. Same response, same revocation.
+  if (stored.userId.toString() !== payload.userId) {
+    await revokeAllUserTokens(payload.userId);
     throw new AppError('Invalid or expired refresh token', 401);
   }
 

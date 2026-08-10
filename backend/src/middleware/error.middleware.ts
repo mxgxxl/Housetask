@@ -39,7 +39,15 @@ export function errorHandler(
     return;
   }
 
-  const error = err as { name?: string; code?: number; message?: string };
+  const error = err as { name?: string; code?: number; message?: string; type?: string };
+
+  // body-parser rejects oversized bodies with type 'entity.too.large'. Without
+  // this branch it would fall through to the catch-all and surface as a 500,
+  // hiding a client mistake behind a server error.
+  if (error.type === 'entity.too.large') {
+    sendError(res, 'Payload too large', 413);
+    return;
+  }
 
   // Mongoose validation error.
   if (error.name === 'ValidationError') {

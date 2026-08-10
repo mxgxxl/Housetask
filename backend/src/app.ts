@@ -5,11 +5,21 @@ import swaggerUi from 'swagger-ui-express';
 import { swaggerSpec } from './config/swagger';
 import { notFoundHandler, errorHandler } from './middleware/error.middleware';
 
-import authRoutes from './routes/auth.routes';
+import { createAuthRouter } from './routes/auth.routes';
 import householdRoutes from './routes/household.routes';
 import taskRoutes from './routes/task.routes';
 import shoppingRoutes from './routes/shopping.routes';
 import userRoutes from './routes/user.routes';
+
+export interface CreateAppOptions {
+  /**
+   * Force the credential rate limiter on or off. Defaults to enabled
+   * everywhere except NODE_ENV=test, where hundreds of logins from a single
+   * IP would otherwise exhaust the 5-per-15-minutes window and mask real
+   * assertions. The test that asserts the 429 passes `true` explicitly.
+   */
+  authRateLimit?: boolean;
+}
 
 /**
  * Build and configure the Express application.
@@ -19,8 +29,10 @@ import userRoutes from './routes/user.routes';
  * lets tests mount the app against an in-memory MongoDB with no other
  * infrastructure running.
  */
-export function createApp(): Application {
+export function createApp(options: CreateAppOptions = {}): Application {
   const app = express();
+
+  const authRateLimit = options.authRateLimit ?? process.env.NODE_ENV !== 'test';
 
   // Behind a proxy (e.g. Railway) so rate-limit sees the real client IP.
   app.set('trust proxy', 1);
@@ -34,7 +46,9 @@ export function createApp(): Application {
     })
   );
 
-  app.use(express.json({ limit: '1mb' }));
+  // Hard Rule 14: a bounded body is the cheapest defence against a trivial
+  // memory-exhaustion DoS.
+  app.use(express.json({ limit: '100kb' }));
   app.use(express.urlencoded({ extended: true }));
 
   // Health check.
@@ -46,7 +60,7 @@ export function createApp(): Application {
   app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
   // API routes.
-  app.use('/api/auth', authRoutes);
+  app.use('/api/auth', createAuthRouter({ rateLimit: authRateLimit }));
   app.use('/api/users', userRoutes);
   app.use('/api/households', householdRoutes);
   // Nested, household-scoped resources.

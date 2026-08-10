@@ -1,7 +1,7 @@
 import { Server, createServer } from 'http';
 import mongoose from 'mongoose';
 
-import { createApp } from '../app';
+import { CreateAppOptions, createApp } from '../app';
 
 // Redundant with jest.config.js (which sets this before any module loads) but
 // kept so the intent is explicit when reading the setup file on its own.
@@ -24,8 +24,8 @@ const openServers: Server[] = [];
  * "Parse Error: Expected HTTP/, RTSP/ or ICE/". One long-lived server per
  * suite removes that whole class of flakiness.
  */
-export async function buildTestApp(): Promise<Server> {
-  const server = createServer(createApp());
+export async function buildTestApp(options: CreateAppOptions = {}): Promise<Server> {
+  const server = createServer(createApp(options));
   await new Promise<void>((resolve) => {
     server.listen(0, resolve);
   });
@@ -40,7 +40,13 @@ beforeAll(async () => {
   if (!uri) {
     throw new Error('MONGO_TEST_URI is not set — globalSetup did not run');
   }
-  await mongoose.connect(uri);
+  // bufferCommands:false makes a broken globalSetup fail on the first query
+  // with a clear "not connected" error instead of every operation silently
+  // buffering for 10s and then timing out somewhere unrelated.
+  await mongoose.connect(uri, {
+    bufferCommands: false,
+    serverSelectionTimeoutMS: 5000,
+  });
 });
 
 // Every test starts from an empty database so suites and cases are independent.

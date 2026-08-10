@@ -142,6 +142,47 @@ describe('POST /api/auth/refresh', () => {
 
     expect(res.status).toBe(401);
   });
+
+  it('should revoke the whole token family when an already-rotated token is replayed', async () => {
+    const user = await createTestUser(app);
+
+    // Legitimate rotation.
+    const rotated = await request(app)
+      .post('/api/auth/refresh')
+      .send({ refreshToken: user.refreshToken });
+    expect(rotated.status).toBe(200);
+    const freshToken = rotated.body.data.refreshToken as string;
+
+    // A thief replays the token that rotation already consumed.
+    const replay = await request(app)
+      .post('/api/auth/refresh')
+      .send({ refreshToken: user.refreshToken });
+    expect(replay.status).toBe(401);
+    expect(replay.body.error).toBe('Invalid or expired refresh token');
+
+    // The replay must also kill the token handed out by the legitimate
+    // rotation — we cannot tell victim from thief, so every session dies and
+    // the real user re-authenticates.
+    const afterRevocation = await request(app)
+      .post('/api/auth/refresh')
+      .send({ refreshToken: freshToken });
+    expect(afterRevocation.status).toBe(401);
+  });
+
+  it('should NOT revoke anything when the replayed token has an invalid signature', async () => {
+    const user = await createTestUser(app);
+
+    // Well-formed JWT shape but signed with the wrong key.
+    const forged = `${user.refreshToken.split('.')[0]}.${user.refreshToken.split('.')[1]}.forged`;
+    const res = await request(app).post('/api/auth/refresh').send({ refreshToken: forged });
+    expect(res.status).toBe(401);
+
+    // Otherwise anyone could log any user out by posting garbage on their behalf.
+    const stillValid = await request(app)
+      .post('/api/auth/refresh')
+      .send({ refreshToken: user.refreshToken });
+    expect(stillValid.status).toBe(200);
+  });
 });
 
 describe('POST /api/auth/logout', () => {

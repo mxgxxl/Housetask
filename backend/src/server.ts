@@ -6,6 +6,7 @@ import { connectDatabase, disconnectDatabase } from './config/database';
 import { initSocket } from './config/socket';
 import { disconnectRedis } from './config/redis';
 import { logger } from './utils/logger';
+import { validateProductionEnv } from './utils/env';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -18,6 +19,9 @@ const PORT = Number(process.env.PORT) || 3000;
  */
 export async function start(): Promise<void> {
   try {
+    // Refuse to boot a misconfigured production process before anything binds.
+    validateProductionEnv();
+
     await connectDatabase();
 
     const app = createApp();

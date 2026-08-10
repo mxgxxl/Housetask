@@ -139,6 +139,19 @@ describe('GET /api/households/:householdId/tasks', () => {
 });
 
 describe('POST /api/households/:householdId/tasks', () => {
+  it('should reject a body over the 100kb limit with a 413 envelope, not a 500', async () => {
+    const { user, household } = await setupHousehold();
+
+    const res = await request(app)
+      .post(await tasksUrl(household))
+      .set(authHeader(user.accessToken))
+      .send({ title: 'Enorme', description: 'x'.repeat(200 * 1024) });
+
+    expect(res.status).toBe(413);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toBe('Payload too large');
+  });
+
   it('should create a task and return 201 with the persisted payload', async () => {
     const { user, household } = await setupHousehold();
 
