@@ -1,11 +1,22 @@
-import { getRedis } from '../config/redis';
+import { getCommandClient } from '../config/redis';
 import { sha256 } from '../utils/hash';
+import { logger } from '../utils/logger';
 
 /** A captured response, replayed verbatim for a repeated Idempotency-Key. */
 export interface IdempotencyResult {
   status: number;
   body: unknown;
 }
+
+/**
+ * Outcome of reserving a key.
+ *
+ * `failed` means the store itself is unavailable — not that the key is taken.
+ * Callers MUST treat it as "proceed without idempotency" (fail-open): losing
+ * duplicate protection is a correctness regression, hanging or refusing every
+ * write is an outage (TD-031).
+ */
+export type AcquireOutcome = 'acquired' | 'exists' | 'failed';
 
 /**
  * Marker stored while the original request is still running, so a concurrent
@@ -20,13 +31,17 @@ const POLL_INTERVAL_MS = 25;
  *
  * `acquire` must be atomic: it is the reservation that makes two simultaneous
  * requests resolve to a single creation.
+ *
+ * Every method is failure-tolerant: implementations MUST NOT propagate
+ * exceptions to the request path. A broken store degrades the feature, never
+ * the endpoint.
  */
 export interface IdempotencyStore {
   /** Reserve a key. 'acquired' means this caller owns the operation. */
-  acquire(key: string, ttlMs: number): Promise<'acquired' | 'exists'>;
+  acquire(key: string, ttlMs: number): Promise<AcquireOutcome>;
   /** Publish the finished response for replay. */
   setResult(key: string, result: IdempotencyResult, ttlMs: number): Promise<void>;
-  /** Finished response, or null when unknown or still in progress. */
+  /** Finished response, or null when unknown, in progress, or unavailable. */
   getResult(key: string): Promise<IdempotencyResult | null>;
   /** Poll `getResult` until it resolves or `timeoutMs` elapses. */
   waitForResult(key: string, timeoutMs: number): Promise<IdempotencyResult | null>;
@@ -60,21 +75,52 @@ function parseResult(raw: string | null): IdempotencyResult | null {
 }
 
 /**
+ * Log a store failure once per occurrence. Security-grade: losing idempotency
+ * silently is how duplicate writes reach production unnoticed.
+ */
+function reportUnavailable(operation: string, error: unknown): void {
+  logger.warn('idempotency-store unavailable, fail-open', {
+    operation,
+    error: (error as Error)?.message ?? String(error),
+  });
+}
+
+/**
  * Production store. `SET key <marker> NX PX ttl` is the atomic reservation, so
  * exactly one of N racing requests proceeds even across server instances.
+ *
+ * Every call runs on the dedicated command client, whose `commandTimeout`
+ * makes a Redis outage surface as a rejected promise within ~1s instead of an
+ * indefinitely queued command.
  */
 export class RedisIdempotencyStore implements IdempotencyStore {
-  async acquire(key: string, ttlMs: number): Promise<'acquired' | 'exists'> {
-    const result = await getRedis().set(storageKey(key), IN_PROGRESS, 'PX', ttlMs, 'NX');
-    return result === 'OK' ? 'acquired' : 'exists';
+  async acquire(key: string, ttlMs: number): Promise<AcquireOutcome> {
+    try {
+      const result = await getCommandClient().set(storageKey(key), IN_PROGRESS, 'PX', ttlMs, 'NX');
+      return result === 'OK' ? 'acquired' : 'exists';
+    } catch (err) {
+      reportUnavailable('acquire', err);
+      return 'failed';
+    }
   }
 
   async setResult(key: string, result: IdempotencyResult, ttlMs: number): Promise<void> {
-    await getRedis().set(storageKey(key), JSON.stringify(result), 'PX', ttlMs);
+    try {
+      await getCommandClient().set(storageKey(key), JSON.stringify(result), 'PX', ttlMs);
+    } catch (err) {
+      // The response was already produced; failing to record it only means a
+      // later replay re-executes, which is the pre-ADR-007 behaviour.
+      reportUnavailable('setResult', err);
+    }
   }
 
   async getResult(key: string): Promise<IdempotencyResult | null> {
-    return parseResult(await getRedis().get(storageKey(key)));
+    try {
+      return parseResult(await getCommandClient().get(storageKey(key)));
+    } catch (err) {
+      reportUnavailable('getResult', err);
+      return null;
+    }
   }
 
   async waitForResult(key: string, timeoutMs: number): Promise<IdempotencyResult | null> {
@@ -82,7 +128,11 @@ export class RedisIdempotencyStore implements IdempotencyStore {
   }
 
   async release(key: string): Promise<void> {
-    await getRedis().del(storageKey(key));
+    try {
+      await getCommandClient().del(storageKey(key));
+    } catch (err) {
+      reportUnavailable('release', err);
+    }
   }
 }
 
@@ -105,23 +155,37 @@ export class InMemoryIdempotencyStore implements IdempotencyStore {
     return entry.value;
   }
 
-  async acquire(key: string, ttlMs: number): Promise<'acquired' | 'exists'> {
-    if (this.read(key) !== null) {
-      return 'exists';
+  async acquire(key: string, ttlMs: number): Promise<AcquireOutcome> {
+    try {
+      if (this.read(key) !== null) {
+        return 'exists';
+      }
+      this.entries.set(storageKey(key), { value: IN_PROGRESS, expiresAt: Date.now() + ttlMs });
+      return 'acquired';
+    } catch (err) {
+      reportUnavailable('acquire', err);
+      return 'failed';
     }
-    this.entries.set(storageKey(key), { value: IN_PROGRESS, expiresAt: Date.now() + ttlMs });
-    return 'acquired';
   }
 
   async setResult(key: string, result: IdempotencyResult, ttlMs: number): Promise<void> {
-    this.entries.set(storageKey(key), {
-      value: JSON.stringify(result),
-      expiresAt: Date.now() + ttlMs,
-    });
+    try {
+      this.entries.set(storageKey(key), {
+        value: JSON.stringify(result),
+        expiresAt: Date.now() + ttlMs,
+      });
+    } catch (err) {
+      reportUnavailable('setResult', err);
+    }
   }
 
   async getResult(key: string): Promise<IdempotencyResult | null> {
-    return parseResult(this.read(key));
+    try {
+      return parseResult(this.read(key));
+    } catch (err) {
+      reportUnavailable('getResult', err);
+      return null;
+    }
   }
 
   async waitForResult(key: string, timeoutMs: number): Promise<IdempotencyResult | null> {
@@ -129,12 +193,17 @@ export class InMemoryIdempotencyStore implements IdempotencyStore {
   }
 
   async release(key: string): Promise<void> {
-    this.entries.delete(storageKey(key));
+    try {
+      this.entries.delete(storageKey(key));
+    } catch (err) {
+      reportUnavailable('release', err);
+    }
   }
 }
 
 /**
  * Shared polling loop: both stores wait the same way, only their reads differ.
+ * `getResult` already absorbs its own failures, so this never throws either.
  */
 async function pollForResult(
   store: IdempotencyStore,

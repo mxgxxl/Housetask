@@ -1,6 +1,12 @@
 import { Server } from 'http';
 import request from 'supertest';
 
+import {
+  AcquireOutcome,
+  IdempotencyResult,
+  IdempotencyStore,
+  RedisIdempotencyStore,
+} from '../services/idempotency.store';
 import { buildTestApp } from './setup';
 import {
   TestHousehold,
@@ -217,5 +223,144 @@ describe('Idempotency-Key on shopping item creation', () => {
       .query({ limit: 100 })
       .set(authHeader(user.accessToken));
     expect(list.body.data.items).toHaveLength(1);
+  });
+});
+
+
+/**
+ * A store that is always unavailable — models a Redis outage or a timeout
+ * exceeding commandTimeout. Every method reports failure instead of throwing,
+ * exactly as the real stores do once their try/catch absorbs the error.
+ */
+class FaultyStore implements IdempotencyStore {
+  acquireCalls = 0;
+
+  async acquire(): Promise<AcquireOutcome> {
+    this.acquireCalls++;
+    return 'failed';
+  }
+
+  async setResult(): Promise<void> {}
+
+  async getResult(): Promise<IdempotencyResult | null> {
+    return null;
+  }
+
+  async waitForResult(): Promise<IdempotencyResult | null> {
+    return null;
+  }
+
+  async release(): Promise<void> {}
+}
+
+/** A store whose acquire never resolves in time, i.e. a hung Redis command. */
+class SlowStore extends FaultyStore {
+
+  async acquire(): Promise<AcquireOutcome> {
+    this.acquireCalls++;
+    // The real client rejects after commandTimeout; the store's catch turns
+    // that into 'failed'. Simulated here so the test needs no Redis.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    return 'failed';
+  }
+}
+
+describe('Idempotency-Key when the store is unavailable (TD-031)', () => {
+  let faultyApp: Server;
+  let faulty: FaultyStore;
+
+  beforeAll(async () => {
+    faulty = new FaultyStore();
+    faultyApp = await buildTestApp({ idempotencyStore: faulty });
+  });
+
+  it('should still create the resource and answer 201 (fail-open)', async () => {
+    const user = await createTestUser(faultyApp);
+    const household = await createTestHousehold(faultyApp, user);
+    const url = `/api/households/${household.id}/tasks`;
+
+    const started = Date.now();
+    const res = await request(faultyApp)
+      .post(url)
+      .set(authHeader(user.accessToken))
+      .set('Idempotency-Key', 'outage-key')
+      .send({ title: 'Durante la caída' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.title).toBe('Durante la caída');
+    // The whole point of TD-031: an unavailable store must not stall the write.
+    expect(Date.now() - started).toBeLessThan(3000);
+    expect(faulty.acquireCalls).toBeGreaterThan(0);
+  });
+
+  it('should fall back to pre-ADR-007 behaviour: a repeated key creates again', async () => {
+    const user = await createTestUser(faultyApp);
+    const household = await createTestHousehold(faultyApp, user);
+    const url = `/api/households/${household.id}/tasks`;
+    const send = (): Promise<request.Response> =>
+      request(faultyApp)
+        .post(url)
+        .set(authHeader(user.accessToken))
+        .set('Idempotency-Key', 'same-key-twice')
+        .send({ title: 'Sin dedupe' });
+
+    const first = await send();
+    const second = await send();
+
+    // Without a store there is no dedupe. Losing that is the accepted trade —
+    // duplicate protection is an improvement, not a correctness requirement.
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(second.body.data.id).not.toBe(first.body.data.id);
+
+    const list = await request(faultyApp)
+      .get(url)
+      .query({ limit: 100 })
+      .set(authHeader(user.accessToken));
+    expect(list.body.data.items).toHaveLength(2);
+  });
+
+  it('should not hang when acquire exceeds the command timeout', async () => {
+    const slow = new SlowStore();
+    const slowApp = await buildTestApp({ idempotencyStore: slow });
+    const user = await createTestUser(slowApp);
+    const household = await createTestHousehold(slowApp, user);
+
+    const started = Date.now();
+    const res = await request(slowApp)
+      .post(`/api/households/${household.id}/tasks`)
+      .set(authHeader(user.accessToken))
+      .set('Idempotency-Key', 'slow-key')
+      .send({ title: 'Store lento' });
+
+    expect(res.status).toBe(201);
+    expect(Date.now() - started).toBeLessThan(3000);
+    expect(slow.acquireCalls).toBe(1);
+  });
+});
+
+
+describe('RedisIdempotencyStore with an unavailable Redis', () => {
+  // Redis is never initialized in this suite, so getRedis() throws — the same
+  // shape of failure as an outage or a commandTimeout rejection.
+  const store = new RedisIdempotencyStore();
+
+  it('should report acquire as failed instead of throwing', async () => {
+    await expect(store.acquire('k', 1000)).resolves.toBe('failed');
+  });
+
+  it('should return null from getResult instead of throwing', async () => {
+    await expect(store.getResult('k')).resolves.toBeNull();
+  });
+
+  it('should swallow setResult and release failures', async () => {
+    await expect(store.setResult('k', { status: 201, body: {} }, 1000)).resolves.toBeUndefined();
+    await expect(store.release('k')).resolves.toBeUndefined();
+  });
+
+  it('should return null from waitForResult without hanging', async () => {
+    const started = Date.now();
+    await expect(store.waitForResult('k', 100)).resolves.toBeNull();
+    expect(Date.now() - started).toBeLessThan(2000);
   });
 });
