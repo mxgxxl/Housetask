@@ -49,7 +49,9 @@ export function createApp(options: CreateAppOptions = {}): Application {
   // Hard Rule 14: a bounded body is the cheapest defence against a trivial
   // memory-exhaustion DoS.
   app.use(express.json({ limit: '100kb' }));
-  app.use(express.urlencoded({ extended: true }));
+  // No urlencoded parser: the API is JSON-only, so parsing form bodies would
+  // only widen the attack surface (extended:true pulls in qs prototype/deep
+  // object parsing) for input no route ever reads.
 
   // Health check.
   app.get('/health', (_req: Request, res: Response) => {

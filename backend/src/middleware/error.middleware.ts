@@ -49,6 +49,14 @@ export function errorHandler(
     return;
   }
 
+  // Malformed JSON is a client mistake, not a server fault. Left to the
+  // catch-all it would answer 500, breaking the envelope's meaning and burying
+  // real server errors in client noise once error tracking is wired up.
+  if (error.type === 'entity.parse.failed') {
+    sendError(res, 'Invalid JSON payload', 400);
+    return;
+  }
+
   // Mongoose validation error.
   if (error.name === 'ValidationError') {
     sendError(res, error.message || 'Validation error', 400);

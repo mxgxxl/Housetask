@@ -1,6 +1,8 @@
 import { Server } from 'http';
 import request from 'supertest';
 
+import { RefreshTokenModel } from '../models/RefreshToken';
+import { logger } from '../utils/logger';
 import { buildTestApp } from './setup';
 import { createTestUser } from './helpers';
 
@@ -57,6 +59,17 @@ describe('POST /api/auth/register', () => {
     expect(res.body.error).toBe('Password must be at least 6 characters');
   });
 
+  it('should persist the refresh token as a SHA-256 digest, never in the clear', async () => {
+    const user = await createTestUser(app, { email: 'hashed@test.com' });
+
+    const stored = await RefreshTokenModel.findOne({}).lean();
+
+    expect(stored).not.toBeNull();
+    // A dump of this collection must be worthless to an attacker (TD-023).
+    expect(stored!.token).not.toBe(user.refreshToken);
+    expect(stored!.token).toMatch(/^[a-f0-9]{64}$/);
+  });
+
   it('should return 400 when the email is not a valid address', async () => {
     const res = await request(app)
       .post('/api/auth/register')
@@ -64,6 +77,19 @@ describe('POST /api/auth/register', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('A valid email is required');
+  });
+});
+
+describe('malformed request bodies', () => {
+  it('should answer 400 with the standard envelope for malformed JSON, never 500', async () => {
+    const res = await request(app)
+      .post('/api/auth/login')
+      .set('Content-Type', 'application/json')
+      .send('{invalid');
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toBe('Invalid JSON payload');
   });
 });
 
@@ -141,6 +167,22 @@ describe('POST /api/auth/refresh', () => {
     const res = await request(app).post('/api/auth/refresh').send({ refreshToken: 'garbage' });
 
     expect(res.status).toBe(401);
+  });
+
+  it('should emit a security log naming the user when it revokes a family', async () => {
+    const user = await createTestUser(app);
+    const warn = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+
+    try {
+      await request(app).post('/api/auth/refresh').send({ refreshToken: user.refreshToken });
+      await request(app).post('/api/auth/refresh').send({ refreshToken: user.refreshToken });
+
+      // The audit hook Sentry will attach to (TD-009): a successful token theft
+      // must not be invisible in the logs.
+      expect(warn).toHaveBeenCalledWith('refresh-token replay detected', { userId: user.id });
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('should revoke the whole token family when an already-rotated token is replayed', async () => {

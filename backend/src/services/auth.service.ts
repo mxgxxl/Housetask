@@ -3,6 +3,8 @@ import { Types } from 'mongoose';
 import { UserModel, IUser } from '../models/User';
 import { RefreshTokenModel } from '../models/RefreshToken';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../utils/jwt';
+import { sha256 } from '../utils/hash';
+import { logger } from '../utils/logger';
 import { AppError } from '../middleware/error.middleware';
 
 const BCRYPT_ROUNDS = 10;
@@ -46,7 +48,9 @@ async function generateTokens(userId: string, email: string): Promise<TokenPair>
 
   await RefreshTokenModel.create({
     _id: tokenId,
-    token: refreshToken,
+    // Only the digest is persisted: a dump of this collection must not hand an
+    // attacker working sessions (TD-023).
+    token: sha256(refreshToken),
     userId: new Types.ObjectId(userId),
     expiresAt: new Date(Date.now() + REFRESH_TTL_MS),
   });
@@ -136,7 +140,7 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
   // lets two concurrent requests carrying the same token both pass the check
   // and both mint new pairs; findOneAndDelete is a single atomic operation, so
   // exactly one caller receives the document and the loser gets a 401.
-  const stored = await RefreshTokenModel.findOneAndDelete({ token: refreshToken });
+  const stored = await RefreshTokenModel.findOneAndDelete({ token: sha256(refreshToken) });
 
   // A correctly signed token with no matching row was already rotated away —
   // i.e. someone is replaying an old token. The legitimate holder cannot tell
@@ -144,6 +148,7 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
   // re-authenticate; otherwise a stolen token's session would outlive the
   // rotation that was supposed to invalidate it.
   if (!stored) {
+    logger.warn('refresh-token replay detected', { userId: payload.userId });
     await revokeAllUserTokens(payload.userId);
     throw new AppError('Invalid or expired refresh token', 401);
   }
@@ -151,6 +156,7 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
   // Signature says one user, the stored row says another: tampering, not a
   // race. Same response, same revocation.
   if (stored.userId.toString() !== payload.userId) {
+    logger.warn('refresh-token replay detected', { userId: payload.userId });
     await revokeAllUserTokens(payload.userId);
     throw new AppError('Invalid or expired refresh token', 401);
   }
@@ -168,7 +174,7 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
  * token was already removed.
  */
 export async function logout(refreshToken: string): Promise<void> {
-  await RefreshTokenModel.deleteOne({ token: refreshToken });
+  await RefreshTokenModel.deleteOne({ token: sha256(refreshToken) });
 }
 
 /**
