@@ -263,61 +263,98 @@ Error:    { "success": false, "error": "Human-readable message" }
 
 ## 🗄️ Database Models
 
-### User
+Tables below mirror `backend/src/models/*.ts` field by field. All five schemas use
+`{ timestamps: true }` (adding `createdAt` / `updatedAt`) unless noted, and all except
+RefreshToken spread `jsonSchemaOptions` from `utils/toJSON.ts`, which exposes a virtual
+`id`, drops `_id` and `__v`, and strips any `password` that leaked into a document.
+
+### User (`users`)
 | Field | Type | Notes |
 |-------|------|-------|
-| email | String | unique, lowercase, indexed |
-| password | String | bcrypt hashed, `select: false` |
-| name | String | required |
+| email | String | required, unique, lowercase, trim, indexed |
+| password | String | required, minlength 6, `select: false` (bcrypt hash, never returned) |
+| name | String | required, trim |
 | avatarUrl | String | optional |
 | households | ObjectId[] | ref Household |
+| createdAt / updatedAt | Date | from `timestamps: true` |
 
-### Household
+### Household (`households`)
 | Field | Type | Notes |
 |-------|------|-------|
-| name | String | required |
-| inviteCode | String | unique, 8 chars uppercase, indexed |
-| members | IHouseholdMember[] | embedded: `{ user, role, joinedAt }` |
-| createdBy | ObjectId | ref User |
+| name | String | required, trim |
+| inviteCode | String | required, unique, uppercase, exactly 8 chars (min/maxlength 8), indexed |
+| members | IHouseholdMember[] | embedded subdocument array, default `[]` |
+| createdBy | ObjectId | ref User, required |
+| createdAt / updatedAt | Date | from `timestamps: true` |
 
-### Task
+**Embedded `IHouseholdMember`** (`_id: false`):
 | Field | Type | Notes |
 |-------|------|-------|
-| householdId | ObjectId | required, indexed |
-| title | String | required |
+| user | ObjectId | ref User, required |
+| role | Enum | `admin` / `member`, default `member` |
+| joinedAt | Date | default `Date.now` |
+
+### Task (`tasks`)
+| Field | Type | Notes |
+|-------|------|-------|
+| householdId | ObjectId | ref Household, required, indexed |
+| title | String | required, trim |
 | description | String | optional |
 | assignedTo | ObjectId[] | ref User |
 | createdBy | ObjectId | ref User, required |
-| status | Enum | `pending` / `completed`, default `pending` |
+| status | Enum | `pending` / `completed`, default `pending`, indexed |
 | priority | Enum | `low` / `medium` / `high`, default `medium` |
-| category | Enum | `cleaning` / `cooking` / `shopping` / `maintenance` / `other` |
+| category | Enum | `cleaning` / `cooking` / `shopping` / `maintenance` / `other`, default `other` |
 | dueDate | Date | optional |
 | completedAt | Date | set on completion |
-| completedBy | ObjectId | set on completion |
+| completedBy | ObjectId | ref User, set on completion |
 | isRecurring | Boolean | default false |
-| recurrenceRule | Object | `{ type, interval, daysOfWeek, dayOfMonth }` |
-| parentTaskId | ObjectId | links recurring instances, indexed |
+| recurrenceRule | IRecurrenceRule | embedded subdocument, default `undefined` |
+| parentTaskId | ObjectId | ref Task, default `null`, indexed — links generated occurrences to their series |
+| createdAt / updatedAt | Date | from `timestamps: true` |
 
-**Indexes:** `{ householdId: 1, status: 1, dueDate: 1 }` (compound)
-
-### ShoppingItem
+**Embedded `IRecurrenceRule`** (`_id: false`):
 | Field | Type | Notes |
 |-------|------|-------|
-| householdId | ObjectId | required, indexed |
-| name | String | required |
-| quantity | Number | default 1 |
-| category | String | optional |
-| purchased | Boolean | default false |
+| type | Enum | `daily` / `weekly` / `monthly` / `custom` |
+| interval | Number | default 1 |
+| daysOfWeek | Number[] | each 0–6 (0 = Sunday), default `undefined` |
+| dayOfMonth | Number | 1–31 |
+
+**Indexes:** `{ householdId: 1, status: 1, dueDate: 1 }` (compound), plus the single-field
+indexes on `householdId`, `status` and `parentTaskId`.
+
+### ShoppingItem (`shoppingitems`)
+| Field | Type | Notes |
+|-------|------|-------|
+| householdId | ObjectId | ref Household, required, indexed |
+| name | String | required, trim |
+| quantity | Number | default 1, min 0 |
+| unit | String | default `'uds'` |
+| category | Enum | `fridge` / `pantry` / `cleaning` / `personal` / `other`, default `other` |
+| isPurchased | Boolean | default false, indexed — **note: `isPurchased`, not `purchased`** |
 | purchasedAt | Date | set on purchase |
-| purchasedBy | ObjectId | set on purchase |
-| createdBy | ObjectId | ref User |
+| purchasedBy | ObjectId | ref User, set on purchase |
+| addedBy | ObjectId | ref User, required — **note: `addedBy`, not `createdBy`** |
+| isRecurring | Boolean | default false |
+| recurrenceIntervalDays | Number | optional |
+| lastAddedAt | Date | optional in the schema; set to now by `createItem` |
+| estimatedPrice | Number | optional |
+| createdAt / updatedAt | Date | from `timestamps: true` |
 
-### RefreshToken
+**Indexes:** `{ householdId: 1, isPurchased: 1, createdAt: -1 }` (compound), plus the
+single-field indexes on `householdId` and `isPurchased`.
+
+### RefreshToken (`refreshtokens`)
 | Field | Type | Notes |
 |-------|------|-------|
-| token | String | hashed, unique |
-| userId | ObjectId | ref User |
-| expiresAt | Date | TTL index for auto-cleanup |
+| token | String | required, unique, indexed — stores the **raw JWT, not a hash** (see TD-023) |
+| userId | ObjectId | ref User, required, indexed |
+| expiresAt | Date | required; TTL index (`expireAfterSeconds: 0`) purges expired rows |
+| createdAt | Date | `timestamps: { createdAt: true, updatedAt: false }` — no `updatedAt` |
+
+Does **not** apply `jsonSchemaOptions`: these documents are internal and never serialized
+to clients.
 
 ---
 
@@ -368,7 +405,7 @@ Error:    { "success": false, "error": "Human-readable message" }
 ## 🚫 Hard Rules (Never Break These)
 
 1. NEVER store passwords in plain text or return them in responses
-2. NEVER reveal whether an email exists in register/login error messages
+2. NEVER reveal whether an email exists in register/login error messages (this includes HTTP status codes: duplicate email on register MUST return 400 with the generic message, never 409 Conflict, because 409 confirms account existence)
 3. NEVER trust client input — always validate and sanitize on the server
 4. NEVER put business logic in controllers — always delegate to services
 5. NEVER use `any` type in TypeScript unless there's no alternative
@@ -427,6 +464,10 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 | TD-017 | constants.dart with hardcoded local backend URL | Low | Migrate to --dart-define / env-based config | Planned (Phase 2) | TBD | 2026-08-10 |
 | TD-018 | Member-leave lifecycle not handled (orphaned assignedTo refs, no "Former member" UI) | High | Unassign pending tasks on leave/removal + Former member fallback in UI | Planned (Phase 2 — High severity deliberately deferred from Phase 1: low-frequency edge case; Phase 1 scope is stabilization-critical) | TBD | 2026-08-10 |
 | TD-019 | pubspec.lock ignored in frontend/.gitignore (non-reproducible builds) | High | Remove from .gitignore and commit the lockfile | Resolved (2026-08-10, Parte 0 chore) | TBD | 2026-08-10 |
+| TD-020 | Auth rate limiter had no test (skipped under NODE_ENV=test) | Medium | createApp({ authRateLimit }) opt-in + dedicated 429 test | Resolved (2026-08-10, commit B) | TBD | 2026-08-10 |
+| TD-021 | Mongoose test connection without bufferCommands:false (slow opaque failures) | Low | bufferCommands:false + serverSelectionTimeoutMS 5000 in test harness | Resolved (2026-08-10, commit B) | TBD | 2026-08-10 |
+| TD-022 | Refresh token replay did not revoke the token family (stolen-token session survived) | High | Detect rotated-token replay via valid signature + missing row, revoke all user refresh tokens | Resolved (2026-08-10, commit B) | TBD | 2026-08-10 |
+| TD-023 | Refresh tokens stored as raw JWTs, not hashed (this file previously claimed otherwise) | High | Store SHA-256 of the token and look up by hash; a DB leak must not yield usable tokens | Planned (Phase 1) | TBD | 2026-08-10 |
 
 ---
 
