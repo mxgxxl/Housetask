@@ -4,6 +4,8 @@ import swaggerUi from 'swagger-ui-express';
 
 import { swaggerSpec } from './config/swagger';
 import { notFoundHandler, errorHandler } from './middleware/error.middleware';
+import { IDEMPOTENCY_STORE_KEY } from './middleware/idempotency.middleware';
+import { IdempotencyStore, InMemoryIdempotencyStore } from './services/idempotency.store';
 
 import { createAuthRouter } from './routes/auth.routes';
 import householdRoutes from './routes/household.routes';
@@ -19,6 +21,12 @@ export interface CreateAppOptions {
    * assertions. The test that asserts the 429 passes `true` explicitly.
    */
   authRateLimit?: boolean;
+  /**
+   * Backing store for Idempotency-Key handling (ADR-007). Omitted outside
+   * tests means the feature is off and the header is ignored; server.ts wires
+   * the Redis-backed store.
+   */
+  idempotencyStore?: IdempotencyStore;
 }
 
 /**
@@ -33,6 +41,13 @@ export function createApp(options: CreateAppOptions = {}): Application {
   const app = express();
 
   const authRateLimit = options.authRateLimit ?? process.env.NODE_ENV !== 'test';
+
+  // Routers read the store off the app so they can stay module singletons.
+  app.set(
+    IDEMPOTENCY_STORE_KEY,
+    options.idempotencyStore ??
+      (process.env.NODE_ENV === 'test' ? new InMemoryIdempotencyStore() : null)
+  );
 
   // Behind a proxy (e.g. Railway) so rate-limit sees the real client IP.
   app.set('trust proxy', 1);

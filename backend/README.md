@@ -90,6 +90,24 @@ Every endpoint responds with:
 | GET    | `/api/households/:id/members`              | members only                       |
 | DELETE | `/api/households/:id/members/:userId`      | admin only, can't remove last admin|
 
+## Idempotency-Key (optional)
+
+Resource-creating POSTs accept an optional `Idempotency-Key` header:
+`POST /api/households`, `POST /api/households/join`,
+`POST /api/households/:householdId/tasks`, `POST /api/households/:householdId/shopping`.
+
+| Situation                                   | Response                                          |
+| ------------------------------------------- | ------------------------------------------------- |
+| No header                                    | Unchanged behaviour — every call creates          |
+| First call with key K                        | `201` with the created resource                   |
+| Repeat of K, original finished               | `200` with the **stored** body; nothing recreated, no socket event re-emitted |
+| Repeat of K while the original is in flight  | Waits up to 2s for the result, then `200`; `409` if it never arrives |
+| Original failed (4xx/5xx)                    | Key released, so the same K can be retried        |
+
+Send one stable UUID per logical user action and reuse it across retries
+(including retries after a 401 refresh). Keys are scoped per user and route,
+stored hashed, and expire after 24h. Never auto-retry a `409`. See ADR-007.
+
 ## Cursor pagination
 
 List endpoints return a page object instead of a bare array:

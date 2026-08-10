@@ -7,6 +7,7 @@ import { initSocket } from './config/socket';
 import { disconnectRedis } from './config/redis';
 import { logger } from './utils/logger';
 import { validateProductionEnv } from './utils/env';
+import { RedisIdempotencyStore } from './services/idempotency.store';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -24,7 +25,10 @@ export async function start(): Promise<void> {
 
     await connectDatabase();
 
-    const app = createApp();
+    // Redis-backed so idempotency holds across horizontally scaled instances.
+    // The store resolves its client lazily, so it may be built before initSocket
+    // establishes the Redis connection.
+    const app = createApp({ idempotencyStore: new RedisIdempotencyStore() });
     const httpServer = createServer(app);
 
     // Attach Socket.io (initializes Redis + adapter internally).

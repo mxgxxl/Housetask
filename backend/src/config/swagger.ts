@@ -5,6 +5,21 @@
 
 const bearerAuth = [{ bearerAuth: [] }];
 
+/**
+ * Optional Idempotency-Key header accepted by every resource-creating POST
+ * (ADR-007). Repeating a key replays the stored response with HTTP 200.
+ */
+const idempotencyKeyHeader = {
+  name: 'Idempotency-Key',
+  in: 'header',
+  required: false,
+  description:
+    'Optional. One stable UUID per logical operation, reused across retries. ' +
+    'A repeat replays the original response with HTTP 200 and creates nothing; ' +
+    'a repeat racing the in-flight original may answer 409 (never auto-retry it).',
+  schema: { type: 'string' },
+};
+
 export const swaggerSpec: Record<string, unknown> = {
   openapi: '3.0.3',
   info: {
@@ -223,6 +238,7 @@ export const swaggerSpec: Record<string, unknown> = {
         tags: ['Households'],
         summary: 'Create a household',
         security: bearerAuth,
+        parameters: [idempotencyKeyHeader],
         requestBody: {
           required: true,
           content: {
@@ -243,6 +259,7 @@ export const swaggerSpec: Record<string, unknown> = {
         tags: ['Households'],
         summary: 'Join a household by invite code',
         security: bearerAuth,
+        parameters: [idempotencyKeyHeader],
         requestBody: {
           required: true,
           content: {
@@ -338,6 +355,7 @@ export const swaggerSpec: Record<string, unknown> = {
         security: bearerAuth,
         parameters: [
           { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+          idempotencyKeyHeader,
         ],
         responses: { '201': { description: 'Created' } },
       },
@@ -438,6 +456,7 @@ export const swaggerSpec: Record<string, unknown> = {
         security: bearerAuth,
         parameters: [
           { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+          idempotencyKeyHeader,
         ],
         responses: { '201': { description: 'Created' } },
       },

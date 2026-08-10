@@ -2,6 +2,7 @@ import { Router } from 'express';
 import * as taskController from '../controllers/task.controller';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { requireMembership } from '../middleware/membership.middleware';
+import { idempotency } from '../middleware/idempotency.middleware';
 import { asyncHandler } from '../utils/asyncHandler';
 
 // mergeParams lets us read :householdId from the parent mount path.
@@ -12,7 +13,7 @@ router.use(authMiddleware);
 router.use(requireMembership);
 
 router.get('/', asyncHandler(taskController.list));
-router.post('/', asyncHandler(taskController.create));
+router.post('/', idempotency, asyncHandler(taskController.create));
 // Static path must precede the ':taskId' routes so it is not treated as an id.
 router.post('/generate-instances', asyncHandler(taskController.generateRecurringInstances));
 router.patch('/:taskId', asyncHandler(taskController.update));
