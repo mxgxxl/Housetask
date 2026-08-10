@@ -394,6 +394,151 @@ describe('PATCH /api/households/:householdId/tasks/:taskId/complete', () => {
   });
 });
 
+describe('PATCH /api/households/:householdId/tasks/:taskId — status transitions', () => {
+  it('should set completedAt and completedBy when status moves to completed', async () => {
+    const { user, household } = await setupHousehold();
+    const task = await createTask(user, household, { title: 'Planchar' });
+
+    const res = await request(app)
+      .patch(`${await tasksUrl(household)}/${task.id}`)
+      .set(authHeader(user.accessToken))
+      .send({ status: 'completed' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('completed');
+    expect(res.body.data.completedAt).toBeDefined();
+    expect(res.body.data.completedBy.id).toBe(user.id);
+  });
+
+  it('should clear completion metadata when status moves back to pending', async () => {
+    const { user, household } = await setupHousehold();
+    const task = await createTask(user, household, { title: 'Reabrir' });
+    await request(app)
+      .patch(`${await tasksUrl(household)}/${task.id}`)
+      .set(authHeader(user.accessToken))
+      .send({ status: 'completed' });
+
+    const res = await request(app)
+      .patch(`${await tasksUrl(household)}/${task.id}`)
+      .set(authHeader(user.accessToken))
+      .send({ status: 'pending' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('pending');
+    // Stale completion metadata on a pending task would corrupt any later
+    // "who finished this?" read.
+    expect(res.body.data.completedAt).toBeUndefined();
+    expect(res.body.data.completedBy).toBeUndefined();
+  });
+
+  it('should leave completion metadata untouched when status is not part of the update', async () => {
+    const { user, household } = await setupHousehold();
+    const task = await createTask(user, household, { title: 'Intacta' });
+    const completed = await request(app)
+      .patch(`${await tasksUrl(household)}/${task.id}/complete`)
+      .set(authHeader(user.accessToken));
+    const completedAt = completed.body.data.completedAt as string;
+
+    const res = await request(app)
+      .patch(`${await tasksUrl(household)}/${task.id}`)
+      .set(authHeader(user.accessToken))
+      .send({ title: 'Intacta renombrada', priority: 'high' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.title).toBe('Intacta renombrada');
+    expect(res.body.data.status).toBe('completed');
+    expect(res.body.data.completedAt).toBe(completedAt);
+    expect(res.body.data.completedBy.id).toBe(user.id);
+  });
+});
+
+describe('POST /api/households/:householdId/tasks/generate-instances', () => {
+  /**
+   * Seed a completed recurring series with no pending successor.
+   *
+   * Completing a recurring task immediately generates its next occurrence, and
+   * that pending row would trip the ±1-day duplicate guard on the first
+   * catch-up iteration, so it is removed to model a series that fell behind.
+   */
+  async function seedLapsedSeries(
+    user: TestUser,
+    household: TestHousehold,
+    dueDate: string,
+    intervalDays: number
+  ): Promise<void> {
+    const url = await tasksUrl(household);
+    const task = await createTask(user, household, {
+      title: 'Serie atrasada',
+      dueDate,
+      isRecurring: true,
+      recurrenceRule: { type: 'daily', interval: intervalDays },
+    });
+    await request(app).patch(`${url}/${task.id}/complete`).set(authHeader(user.accessToken));
+
+    const pending = await request(app)
+      .get(url)
+      .query({ status: 'pending', limit: 100 })
+      .set(authHeader(user.accessToken));
+    for (const stale of pending.body.data.items as TaskResponse[]) {
+      await request(app).delete(`${url}/${stale.id}`).set(authHeader(user.accessToken));
+    }
+  }
+
+  it('should generate exactly the missed occurrences up to the horizon', async () => {
+    const { user, household } = await setupHousehold();
+    // Weekly cadence 21 days back: occurrences fall at -14, -7 and today.
+    await seedLapsedSeries(user, household, daysFromNow(-21), 7);
+
+    const res = await request(app)
+      .post(`${await tasksUrl(household)}/generate-instances`)
+      .set(authHeader(user.accessToken))
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.generated).toBe(3);
+  });
+
+  it('should be idempotent: a second consecutive catch-up generates nothing', async () => {
+    const { user, household } = await setupHousehold();
+    await seedLapsedSeries(user, household, daysFromNow(-21), 7);
+    const url = `${await tasksUrl(household)}/generate-instances`;
+
+    const first = await request(app).post(url).set(authHeader(user.accessToken)).send({});
+    const second = await request(app).post(url).set(authHeader(user.accessToken)).send({});
+
+    expect(first.body.data.generated).toBe(3);
+    // The ±1-day duplicate guard stops the walk on the first already-planned
+    // occurrence, so re-entering a household never multiplies its tasks.
+    expect(second.body.data.generated).toBe(0);
+  });
+
+  it('should cap generation at 52 iterations however wide the horizon is', async () => {
+    const { user, household } = await setupHousehold();
+    await seedLapsedSeries(user, household, daysFromNow(0), 7);
+
+    const res = await request(app)
+      .post(`${await tasksUrl(household)}/generate-instances`)
+      .set(authHeader(user.accessToken))
+      .send({ upTo: daysFromNow(3650) });
+
+    expect(res.status).toBe(200);
+    // Without the cap a ten-year horizon would create ~520 rows in one request.
+    expect(res.body.data.generated).toBeLessThanOrEqual(52);
+    expect(res.body.data.generated).toBe(52);
+  });
+
+  it('should return 400 for an unparseable upTo', async () => {
+    const { user, household } = await setupHousehold();
+
+    const res = await request(app)
+      .post(`${await tasksUrl(household)}/generate-instances`)
+      .set(authHeader(user.accessToken))
+      .send({ upTo: 'not-a-date' });
+
+    expect(res.status).toBe(400);
+  });
+});
+
 describe('DELETE /api/households/:householdId/tasks/:taskId', () => {
   it('should return 404 for a task id that does not exist', async () => {
     const { user, household } = await setupHousehold();
