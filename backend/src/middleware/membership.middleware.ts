@@ -14,8 +14,9 @@ import { AuthenticatedRequest } from '../types';
  * destructive-operation bypass in Phase 2 (see Performance Patterns).
  *
  * Runs after `authMiddleware`, reads `:householdId` from the route, and
- * attaches the caller's membership to `req.member` so controllers can make
- * role-based decisions without a second query.
+ * attaches the caller's membership to `req.member` — role, joinedAt and the
+ * household's full member id list — so controllers can make role-based and
+ * reference-validation decisions without a second query.
  *
  * Responds 404 when the household does not exist and 403 when the caller is
  * not one of its members.
@@ -40,7 +41,12 @@ export const requireMembership = asyncHandler(
       throw new AppError('You are not a member of this household', 403);
     }
 
-    req.member = { role: member.role, joinedAt: member.joinedAt };
+    req.member = {
+      role: member.role,
+      joinedAt: member.joinedAt,
+      // Free: the household document is already in hand.
+      memberIds: household.members.map((m) => m.user.toString()),
+    };
     next();
   }
 );

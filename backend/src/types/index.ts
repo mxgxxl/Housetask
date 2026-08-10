@@ -24,6 +24,12 @@ export interface JwtRefreshPayload {
 export interface RequesterMembership {
   role: Role;
   joinedAt: Date;
+  /**
+   * Ids of every member of the household, taken from the document the
+   * middleware already loaded. Lets handlers validate references to other
+   * members (assignees, removals) without a second round trip.
+   */
+  memberIds: string[];
 }
 
 /**

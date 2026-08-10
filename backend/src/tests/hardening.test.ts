@@ -240,10 +240,18 @@ describe('Content-Type enforcement', () => {
 });
 
 describe('list indexes match the listing sort', () => {
-  it('should declare a Task index with exactly the listing sort key pattern', async () => {
-    await TaskModel.createIndexes();
-    const indexes = await TaskModel.listIndexes();
-    const patterns = indexes.map((i) => JSON.stringify(i.key));
+  /**
+   * Asserted on the schema declaration rather than on listIndexes(): building
+   * indexes needs 500MB of free disk, which makes a DB-level assertion fail for
+   * reasons unrelated to the code. The declaration is what this repo controls;
+   * Mongoose builds it on connect.
+   */
+  function declaredKeyPatterns(schema: { indexes(): Array<[Record<string, unknown>, unknown]> }) {
+    return schema.indexes().map(([key]) => JSON.stringify(key));
+  }
+
+  it('should declare a Task index with exactly the listing sort key pattern', () => {
+    const patterns = declaredKeyPatterns(TaskModel.schema);
 
     // Same fields AND same directions as { status: -1, dueDate: 1, _id: -1 },
     // otherwise MongoDB sorts in memory (32MB cap) on every page.
@@ -253,10 +261,8 @@ describe('list indexes match the listing sort', () => {
     expect(patterns).not.toContain(JSON.stringify({ householdId: 1, status: 1, dueDate: 1 }));
   });
 
-  it('should declare a ShoppingItem index with exactly the listing sort key pattern', async () => {
-    await ShoppingItemModel.createIndexes();
-    const indexes = await ShoppingItemModel.listIndexes();
-    const patterns = indexes.map((i) => JSON.stringify(i.key));
+  it('should declare a ShoppingItem index with exactly the listing sort key pattern', () => {
+    const patterns = declaredKeyPatterns(ShoppingItemModel.schema);
 
     expect(patterns).toContain(JSON.stringify({ householdId: 1, isPurchased: 1, _id: -1 }));
     expect(patterns).not.toContain(

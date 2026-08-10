@@ -5,7 +5,6 @@ import { emitToHousehold } from '../config/socket';
 import { calculateNextDueDate } from '../utils/recurrence';
 import { logger } from '../utils/logger';
 import { sanitizeDate, sanitizeString } from '../utils/sanitize';
-import { HouseholdModel } from '../models/Household';
 import { Page, decodeCursor, encodeCursor } from '../utils/pagination';
 import { TaskStatus, TaskPriority, TaskCategory } from '../types';
 
@@ -20,18 +19,17 @@ const MAX_DESCRIPTION_LENGTH = 2000;
  * Without this an authenticated member could assign work to an arbitrary user
  * id, leaking that account's name and avatar through the populated task and
  * putting a stranger's row into the household's list.
+ *
+ * The member ids come from requireMembership, which already loaded the
+ * household to authorize the request — re-querying here would double the reads
+ * on the hottest write path.
  */
-async function assertAssigneesAreMembers(householdId: string, assignedTo: string[]): Promise<void> {
+function assertAssigneesAreMembers(assignedTo: string[], memberIds: string[]): void {
   if (assignedTo.length === 0) return;
 
-  const household = await HouseholdModel.findById(householdId).select('members').lean();
-  if (!household) {
-    throw new AppError('Household not found', 404);
-  }
-
-  const memberIds = new Set(household.members.map((m) => m.user.toString()));
+  const members = new Set(memberIds);
   for (const id of assignedTo) {
-    if (!Types.ObjectId.isValid(id) || !memberIds.has(id)) {
+    if (!Types.ObjectId.isValid(id) || !members.has(id)) {
       throw new AppError('Invalid assigned member', 400);
     }
   }
@@ -246,14 +244,15 @@ export async function listTasks(
 export async function createTask(
   householdId: string,
   userId: string,
-  input: CreateTaskInput
+  input: CreateTaskInput,
+  memberIds: string[]
 ): Promise<ITask> {
   if (!input.title || input.title.trim() === '') {
     throw new AppError('Task title is required', 400);
   }
 
   const assignedTo = input.assignedTo || [];
-  await assertAssigneesAreMembers(householdId, assignedTo);
+  assertAssigneesAreMembers(assignedTo, memberIds);
 
   const task = await TaskModel.create({
     householdId: new Types.ObjectId(householdId),
@@ -283,7 +282,8 @@ export async function updateTask(
   householdId: string,
   userId: string,
   taskId: string,
-  input: UpdateTaskInput
+  input: UpdateTaskInput,
+  memberIds: string[]
 ): Promise<ITask> {
   const task = await TaskModel.findOne({ _id: taskId, householdId });
   if (!task) {
@@ -297,7 +297,7 @@ export async function updateTask(
     task.description = sanitizeString(input.description, MAX_DESCRIPTION_LENGTH, 'Task description');
   }
   if (input.assignedTo !== undefined) {
-    await assertAssigneesAreMembers(householdId, input.assignedTo);
+    assertAssigneesAreMembers(input.assignedTo, memberIds);
     task.assignedTo = input.assignedTo.map((id) => new Types.ObjectId(id));
   }
   if (input.dueDate !== undefined) {

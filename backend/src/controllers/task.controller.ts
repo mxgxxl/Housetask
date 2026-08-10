@@ -38,7 +38,8 @@ export async function create(req: AuthenticatedRequest, res: Response): Promise<
   const task = await taskService.createTask(
     req.params.householdId,
     req.user!.userId,
-    req.body ?? {}
+    req.body ?? {},
+    req.member!.memberIds
   );
   sendSuccess(res, task, 201);
 }
@@ -52,7 +53,8 @@ export async function update(req: AuthenticatedRequest, res: Response): Promise<
     req.params.householdId,
     req.user!.userId,
     req.params.taskId,
-    req.body ?? {}
+    req.body ?? {},
+    req.member!.memberIds
   );
   sendSuccess(res, task);
 }
