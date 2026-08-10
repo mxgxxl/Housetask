@@ -488,7 +488,10 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 | TD-028 | Validation scattered across controllers/services; express-mongo-sanitize incompatible with Express 5 | Medium | Zod schemas per endpoint as middleware; explicit body sanitization replaces global middleware | Planned (Phase 2) | TBD | 2026-08-10 |
 | TD-029 | Text persisted HTML-escaped during the escaping window remains escaped | Low | Won't fix: pre-production, only local test data affected; re-seed if cosmetic noise bothers; a one-off unescape pass would only be justified if a real household existed in the window | Won't fix | TBD | 2026-08-10 |
 | TD-030 | Index tests were temporarily downgraded to schema-declaration level while host disk had <500 MB free | Low | Host disk freed; listIndexes() built-index assertions restored | Resolved (commit 1) | TBD | 2026-08-10 |
-| TD-031 | POSTs carrying Idempotency-Key hang forever when Redis is unreachable (ioredis maxRetriesPerRequest:null queues commands indefinitely) | High | commandTimeout 1000ms on ioredis + fail-open in middleware with security-grade warn | Resolved (commit 1) | TBD | 2026-08-10 |
+| TD-031 | POSTs carrying Idempotency-Key hang forever when Redis is unreachable (ioredis maxRetriesPerRequest:null queues commands indefinitely) | High | commandTimeout configurable (default 2500ms, env REDIS_COMMAND_TIMEOUT_MS) on a dedicated app-only Redis connection; pub/sub connections stay timeout-free to preserve Socket.io adapter stability; fail-open in middleware | Resolved (commit 1) | TBD | 2026-08-10 |
+| TD-032 | Socket.io Redis adapter does not catch its own command rejections; Node 24 kills the process on unhandledRejection | High | Global unhandledRejection handler that logs and does not exit (Node 24 default would kill the process) | Resolved (commit 1) | TBD | 2026-08-10 |
+| TD-033 | Idempotency fail-open not observable: silent log spam during Redis outage, no metric for postmortem duplicate analysis | Medium | In-memory fail-open counter + rate-limited log + JSON endpoint; Prometheus hook when APM lands | Resolved (commit 1) | TBD | 2026-08-10 |
+| TD-034 | No deploy-order safety net between backend and Flutter app (versioned /health check) | Medium | Add API version to /health and a client-side check that shows "update the app" when incompatible; requires API versioning (Phase 3) | Planned (Phase 3) | TBD | 2026-08-10 |
 
 ---
 
@@ -557,6 +560,7 @@ Swagger UI available at: `http://localhost:3000/api/docs`
 | JWT_ACCESS_EXPIRES | Access token lifetime (default 15m) | No |
 | JWT_REFRESH_EXPIRES | Refresh token lifetime (default 7d) | No |
 | REDIS_URL | Redis connection URL | Yes |
+| REDIS_COMMAND_TIMEOUT_MS | Timeout in ms for application Redis commands (default 2500; pub/sub connections are not affected) | No |
 | CORS_ORIGINS | Comma-separated allowed origins (empty = allow *) | No |
 | NODE_ENV | development / production | No |
 | SENTRY_DSN | Sentry error tracking DSN | No |
@@ -579,7 +583,7 @@ Swagger UI available at: `http://localhost:3000/api/docs`
 ### Backend (Railway)
 - Multi-stage Dockerfile in `backend/Dockerfile` (Node 20-alpine)
 - `railway.toml` configured for Docker builder
-- Start command: `node backend/dist/app.js`
+- Start command: `node backend/dist/server.js`
 - Set all environment variables in Railway dashboard
 
 ### Deployment order (MANDATORY after TD-027)
