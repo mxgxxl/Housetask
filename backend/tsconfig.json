@@ -20,5 +20,6 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  // Tests are type-checked via tsconfig.test.json but never emitted to dist/.
+  "exclude": ["node_modules", "dist", "src/tests"]
 }

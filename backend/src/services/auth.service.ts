@@ -119,13 +119,14 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
     throw new AppError('Invalid or expired refresh token', 401);
   }
 
-  const stored = await RefreshTokenModel.findOne({ token: refreshToken });
+  // Rotate atomically: the delete IS the claim. A separate find-then-delete
+  // lets two concurrent requests carrying the same token both pass the check
+  // and both mint new pairs; findOneAndDelete is a single atomic operation, so
+  // exactly one caller receives the document and the loser gets a 401.
+  const stored = await RefreshTokenModel.findOneAndDelete({ token: refreshToken });
   if (!stored || stored.userId.toString() !== payload.userId) {
     throw new AppError('Invalid or expired refresh token', 401);
   }
-
-  // Rotate: invalidate the used token.
-  await stored.deleteOne();
 
   const user = await UserModel.findById(payload.userId).lean();
   if (!user) {
