@@ -4,6 +4,7 @@ import { AppError } from '../middleware/error.middleware';
 import { emitToHousehold } from '../config/socket';
 import { calculateNextDueDate } from '../utils/recurrence';
 import { logger } from '../utils/logger';
+import { Page, decodeCursor, encodeCursor } from '../utils/pagination';
 import { TaskStatus, TaskPriority, TaskCategory } from '../types';
 
 const POPULATE_FIELDS = 'name email avatarUrl';
@@ -104,23 +105,111 @@ async function generateNextInstance(task: ITask): Promise<void> {
 }
 
 /**
- * List a household's tasks. Pending tasks come first, then by dueDate asc.
- * Optionally filter by status via the `status` argument.
+ * Total order used for listing and for keyset pagination.
+ *
+ * `status: -1` puts "pending" before "completed", then earliest dueDate first.
+ * `_id` is the final tiebreaker instead of `createdAt`: ObjectIds embed their
+ * creation time so the visible order is unchanged, but unlike `createdAt` they
+ * can never tie — and a cursor over a non-total order skips or repeats rows.
+ */
+const TASK_SORT = { status: -1, dueDate: 1, _id: -1 } as const;
+
+/**
+ * Sort position of the last task on a page, carried in the opaque cursor.
+ * `d` is the dueDate as ISO string, or null when the task has none.
+ */
+interface TaskCursor {
+  s: TaskStatus;
+  d: string | null;
+  id: string;
+}
+
+function isTaskCursor(value: unknown): value is TaskCursor {
+  if (typeof value !== 'object' || value === null) return false;
+  const c = value as Record<string, unknown>;
+  if (c.s !== 'pending' && c.s !== 'completed') return false;
+  if (c.d !== null && typeof c.d !== 'string') return false;
+  if (typeof c.d === 'string' && Number.isNaN(Date.parse(c.d))) return false;
+  return typeof c.id === 'string' && Types.ObjectId.isValid(c.id);
+}
+
+/**
+ * Build the "strictly after this position" predicate for TASK_SORT.
+ *
+ * Null dueDates need their own branch: MongoDB's range operators only match
+ * within a BSON type, so `{ dueDate: { $gt: null } }` matches nothing and
+ * would silently truncate the list at the first dated task.
+ */
+function taskCursorFilter(cursor: TaskCursor): Record<string, unknown> {
+  const dueEquals = cursor.d === null ? { dueDate: null } : { dueDate: new Date(cursor.d) };
+  const dueAfter =
+    cursor.d === null ? { dueDate: { $ne: null } } : { dueDate: { $gt: new Date(cursor.d) } };
+
+  return {
+    $or: [
+      // status descending: anything ordered after the cursor's status.
+      { status: { $lt: cursor.s } },
+      // same status, later dueDate.
+      { status: cursor.s, ...dueAfter },
+      // same status and dueDate, smaller _id (descending tiebreaker).
+      { status: cursor.s, ...dueEquals, _id: { $lt: new Types.ObjectId(cursor.id) } },
+    ],
+  };
+}
+
+export interface ListTasksOptions {
+  status?: TaskStatus;
+  limit: number;
+  cursor?: string;
+}
+
+/**
+ * List one page of a household's tasks. Pending tasks come first, then by
+ * dueDate asc. Optionally filtered by status, which combines with the cursor.
  */
 export async function listTasks(
   householdId: string,
   userId: string,
-  status?: TaskStatus
-): Promise<ITask[]> {
-  const filter: Record<string, unknown> = { householdId: new Types.ObjectId(householdId) };
-  if (status) filter.status = status;
+  options: ListTasksOptions
+): Promise<Page<ITask>> {
+  const baseFilter: Record<string, unknown> = { householdId: new Types.ObjectId(householdId) };
+  if (options.status) baseFilter.status = options.status;
 
-  // status:-1 puts "pending" before "completed"; then earliest dueDate first.
-  return TaskModel.find(filter)
-    .sort({ status: -1, dueDate: 1, createdAt: -1 })
-    .populate('assignedTo', POPULATE_FIELDS)
-    .populate('createdBy', POPULATE_FIELDS)
-    .populate('completedBy', POPULATE_FIELDS);
+  const pageFilter = { ...baseFilter };
+  if (options.cursor) {
+    Object.assign(pageFilter, taskCursorFilter(decodeCursor(options.cursor, isTaskCursor)));
+  }
+
+  // `total` deliberately ignores the cursor: it is the size of the whole
+  // result set, not of what remains after the current page.
+  const [total, docs] = await Promise.all([
+    TaskModel.countDocuments(baseFilter),
+    TaskModel.find(pageFilter)
+      .sort(TASK_SORT)
+      // One extra row is the cheapest way to know whether another page exists.
+      .limit(options.limit + 1)
+      .populate('assignedTo', POPULATE_FIELDS)
+      .populate('createdBy', POPULATE_FIELDS)
+      .populate('completedBy', POPULATE_FIELDS),
+  ]);
+
+  const hasMore = docs.length > options.limit;
+  const items = hasMore ? docs.slice(0, options.limit) : docs;
+  const last = items[items.length - 1];
+
+  return {
+    items,
+    hasMore,
+    total,
+    nextCursor:
+      hasMore && last
+        ? encodeCursor({
+            s: last.status,
+            d: last.dueDate ? last.dueDate.toISOString() : null,
+            id: last._id.toString(),
+          })
+        : null,
+  };
 }
 
 /**

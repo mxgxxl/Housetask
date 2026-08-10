@@ -90,17 +90,49 @@ Every endpoint responds with:
 | GET    | `/api/households/:id/members`              | members only                       |
 | DELETE | `/api/households/:id/members/:userId`      | admin only, can't remove last admin|
 
+## Cursor pagination
+
+List endpoints return a page object instead of a bare array:
+
+```json
+{
+  "success": true,
+  "data": {
+    "items": [ /* ... */ ],
+    "nextCursor": "eyJzIjoicGVuZGluZyIsImQiOm51bGwsImlkIjoiNjZi..." ,
+    "hasMore": true,
+    "total": 23
+  }
+}
+```
+
+- `total` counts every row matching the filter, ignoring the cursor.
+- `hasMore` is true when rows exist after this page; when false, `nextCursor` is `null`.
+- `cursor` is **opaque**: base64 JSON encoding the full sort position, not just an id.
+  Clients must pass it back verbatim and never construct or parse one.
+- Forward-only: fetch the next page with `?cursor=<nextCursor>`; to restart, omit it.
+  See ADR-008 in the root `CLAUDE.md`.
+
 ## Tasks (household-scoped)
 
 | Method | Path                                                        |
 | ------ | ---------------------------------------------------------- |
-| GET    | `/api/households/:householdId/tasks?status=pending\|completed` |
+| GET    | `/api/households/:householdId/tasks?status=&limit=&cursor=` |
 | POST   | `/api/households/:householdId/tasks`                       |
 | PATCH  | `/api/households/:householdId/tasks/:taskId`               |
 | PATCH  | `/api/households/:householdId/tasks/:taskId/complete`      |
 | DELETE | `/api/households/:householdId/tasks/:taskId`               |
 
-Listing order: pending tasks first, then by `dueDate` ascending.
+Listing order: pending tasks first, then by `dueDate` ascending (`_id` descending
+breaks ties).
+
+`GET` is **paginated** — see [Cursor pagination](#cursor-pagination). Query params:
+
+| Param    | Type   | Notes                                                       |
+| -------- | ------ | ----------------------------------------------------------- |
+| `status` | enum   | `pending` \| `completed`; combines with the cursor          |
+| `limit`  | int    | default 50, min 1, max 100; out of range → 400              |
+| `cursor` | string | opaque token from `nextCursor`; malformed → 400             |
 
 ## Shopping (household-scoped)
 
@@ -112,7 +144,14 @@ Listing order: pending tasks first, then by `dueDate` ascending.
 | PATCH  | `/api/households/:householdId/shopping/:itemId/purchase`     |
 | DELETE | `/api/households/:householdId/shopping/:itemId`              |
 
-Listing order: not-purchased items first.
+Listing order: not-purchased items first, then newest first (`_id` descending).
+
+`GET` is **paginated** — see [Cursor pagination](#cursor-pagination). Query params:
+
+| Param    | Type   | Notes                                            |
+| -------- | ------ | ------------------------------------------------ |
+| `limit`  | int    | default 50, min 1, max 100; out of range → 400   |
+| `cursor` | string | opaque token from `nextCursor`; malformed → 400  |
 
 ## Realtime (Socket.io)
 

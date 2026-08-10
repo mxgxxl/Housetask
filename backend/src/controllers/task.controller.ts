@@ -2,13 +2,15 @@ import { Response } from 'express';
 import * as taskService from '../services/task.service';
 import { AppError } from '../middleware/error.middleware';
 import { sendSuccess } from '../utils/response';
+import { parseCursorParam, parseLimit } from '../utils/pagination';
 import { AuthenticatedRequest, TaskStatus } from '../types';
 
 const VALID_STATUS: TaskStatus[] = ['pending', 'completed'];
 
 /**
- * GET /api/households/:householdId/tasks?status=pending|completed
- * Lists tasks (pending first, then by dueDate asc).
+ * GET /api/households/:householdId/tasks?status=&limit=&cursor=
+ * Lists one page of tasks (pending first, then by dueDate asc).
+ * Responds with { items, nextCursor, hasMore, total }.
  */
 export async function list(req: AuthenticatedRequest, res: Response): Promise<void> {
   const statusParam = req.query.status;
@@ -20,8 +22,12 @@ export async function list(req: AuthenticatedRequest, res: Response): Promise<vo
     status = statusParam as TaskStatus;
   }
 
-  const tasks = await taskService.listTasks(req.params.householdId, req.user!.userId, status);
-  sendSuccess(res, tasks);
+  const page = await taskService.listTasks(req.params.householdId, req.user!.userId, {
+    status,
+    limit: parseLimit(req.query.limit),
+    cursor: parseCursorParam(req.query.cursor),
+  });
+  sendSuccess(res, page);
 }
 
 /**

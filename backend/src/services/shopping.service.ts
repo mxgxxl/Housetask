@@ -3,6 +3,7 @@ import { ShoppingItemModel, IShoppingItem } from '../models/ShoppingItem';
 import { AppError } from '../middleware/error.middleware';
 import { emitToHousehold } from '../config/socket';
 import { ShoppingCategory } from '../types';
+import { Page, decodeCursor, encodeCursor } from '../utils/pagination';
 
 const POPULATE_FIELDS = 'name email avatarUrl';
 
@@ -35,14 +36,90 @@ async function populated(item: IShoppingItem): Promise<IShoppingItem> {
 }
 
 /**
- * List a household's shopping items, not-purchased first, newest first.
+ * Total order used for listing and for keyset pagination.
+ *
+ * `isPurchased: 1` puts false (not purchased) before true, then newest first.
+ * `_id` replaces `createdAt` as the tiebreaker for the same reason as tasks:
+ * ObjectIds are ordered by creation time but, unlike timestamps, never tie, and
+ * a cursor over a non-total order skips or repeats rows.
  */
-export async function listItems(householdId: string, userId: string): Promise<IShoppingItem[]> {
-  // isPurchased:1 puts false (not purchased) before true.
-  return ShoppingItemModel.find({ householdId: new Types.ObjectId(householdId) })
-    .sort({ isPurchased: 1, createdAt: -1 })
-    .populate('addedBy', POPULATE_FIELDS)
-    .populate('purchasedBy', POPULATE_FIELDS);
+const SHOPPING_SORT = { isPurchased: 1, _id: -1 } as const;
+
+/**
+ * Sort position of the last item on a page, carried in the opaque cursor.
+ */
+interface ShoppingCursor {
+  p: boolean;
+  id: string;
+}
+
+function isShoppingCursor(value: unknown): value is ShoppingCursor {
+  if (typeof value !== 'object' || value === null) return false;
+  const c = value as Record<string, unknown>;
+  return typeof c.p === 'boolean' && typeof c.id === 'string' && Types.ObjectId.isValid(c.id);
+}
+
+/**
+ * Build the "strictly after this position" predicate for SHOPPING_SORT.
+ */
+function shoppingCursorFilter(cursor: ShoppingCursor): Record<string, unknown> {
+  return {
+    $or: [
+      // isPurchased ascending: false is followed by true.
+      { isPurchased: { $gt: cursor.p } },
+      // same purchase state, smaller _id (descending tiebreaker).
+      { isPurchased: cursor.p, _id: { $lt: new Types.ObjectId(cursor.id) } },
+    ],
+  };
+}
+
+export interface ListItemsOptions {
+  limit: number;
+  cursor?: string;
+}
+
+/**
+ * List one page of a household's shopping items, not-purchased first, newest
+ * first.
+ */
+export async function listItems(
+  householdId: string,
+  userId: string,
+  options: ListItemsOptions
+): Promise<Page<IShoppingItem>> {
+  const baseFilter: Record<string, unknown> = { householdId: new Types.ObjectId(householdId) };
+
+  const pageFilter = { ...baseFilter };
+  if (options.cursor) {
+    Object.assign(
+      pageFilter,
+      shoppingCursorFilter(decodeCursor(options.cursor, isShoppingCursor))
+    );
+  }
+
+  // `total` deliberately ignores the cursor: it is the size of the whole
+  // result set, not of what remains after the current page.
+  const [total, docs] = await Promise.all([
+    ShoppingItemModel.countDocuments(baseFilter),
+    ShoppingItemModel.find(pageFilter)
+      .sort(SHOPPING_SORT)
+      // One extra row is the cheapest way to know whether another page exists.
+      .limit(options.limit + 1)
+      .populate('addedBy', POPULATE_FIELDS)
+      .populate('purchasedBy', POPULATE_FIELDS),
+  ]);
+
+  const hasMore = docs.length > options.limit;
+  const items = hasMore ? docs.slice(0, options.limit) : docs;
+  const last = items[items.length - 1];
+
+  return {
+    items,
+    hasMore,
+    total,
+    nextCursor:
+      hasMore && last ? encodeCursor({ p: last.isPurchased, id: last._id.toString() }) : null,
+  };
 }
 
 /**

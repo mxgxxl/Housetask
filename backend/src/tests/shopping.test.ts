@@ -92,12 +92,90 @@ describe('GET /api/households/:householdId/shopping', () => {
     const res = await request(app).get(url).set(authHeader(user.accessToken));
 
     expect(res.status).toBe(200);
-    const items = res.body.data as ShoppingResponse[];
+    const items = res.body.data.items as ShoppingResponse[];
     expect(items).toHaveLength(2);
     expect(items[0].name).toBe('Pendiente');
     expect(items[0].isPurchased).toBe(false);
     expect(items[1].name).toBe('Comprado');
     expect(items[1].isPurchased).toBe(true);
+  });
+});
+
+describe('GET /api/households/:householdId/shopping — pagination', () => {
+  it('should walk every page with nextCursor covering all rows exactly once, in global order', async () => {
+    const { user, url } = await setupHousehold();
+
+    // 12 items, every third purchased so the leading sort key varies.
+    for (let i = 0; i < 12; i++) {
+      const created = await request(app)
+        .post(url)
+        .set(authHeader(user.accessToken))
+        .send({ name: `Item ${i}` });
+      if (i % 3 === 0) {
+        await request(app)
+          .patch(`${url}/${created.body.data.id}/purchase`)
+          .set(authHeader(user.accessToken));
+      }
+    }
+
+    const full = await request(app).get(url).query({ limit: 100 }).set(authHeader(user.accessToken));
+    const expected = (full.body.data.items as ShoppingResponse[]).map((i) => i.id);
+    expect(expected).toHaveLength(12);
+
+    const walked: ShoppingResponse[] = [];
+    let cursor: string | null = null;
+    let pages = 0;
+
+    for (;;) {
+      const query: Record<string, string> = { limit: '5' };
+      if (cursor) query.cursor = cursor;
+
+      const res = await request(app).get(url).query(query).set(authHeader(user.accessToken));
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.total).toBe(12);
+      walked.push(...(res.body.data.items as ShoppingResponse[]));
+      pages += 1;
+
+      if (!res.body.data.hasMore) {
+        expect(res.body.data.nextCursor).toBeNull();
+        break;
+      }
+      cursor = res.body.data.nextCursor as string;
+      expect(pages).toBeLessThan(10);
+    }
+
+    const walkedIds = walked.map((i) => i.id);
+    expect(pages).toBe(3);
+    expect(walkedIds).toEqual(expected);
+    expect(new Set(walkedIds).size).toBe(12);
+
+    // Not-purchased items must all precede purchased ones across page bounds.
+    const flags = walked.map((i) => i.isPurchased);
+    expect(flags.indexOf(true)).toBeGreaterThan(flags.lastIndexOf(false));
+  });
+
+  it('should return an empty page with hasMore false and nextCursor null', async () => {
+    const { user, url } = await setupHousehold();
+
+    const res = await request(app).get(url).query({ limit: '5' }).set(authHeader(user.accessToken));
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ items: [], nextCursor: null, hasMore: false, total: 0 });
+  });
+
+  it('should reject limits outside 1..100 and malformed cursors with 400', async () => {
+    const { user, url } = await setupHousehold();
+    const auth = authHeader(user.accessToken);
+
+    const zero = await request(app).get(url).query({ limit: '0' }).set(auth);
+    const tooBig = await request(app).get(url).query({ limit: '101' }).set(auth);
+    const garbage = await request(app).get(url).query({ cursor: 'garbage' }).set(auth);
+
+    expect(zero.status).toBe(400);
+    expect(tooBig.status).toBe(400);
+    expect(garbage.status).toBe(400);
+    expect(garbage.body.error).toBe('Invalid cursor');
   });
 });
 
@@ -145,6 +223,6 @@ describe('DELETE /api/households/:householdId/shopping/:itemId', () => {
     expect(res.status).toBe(200);
 
     const list = await request(app).get(url).set(authHeader(user.accessToken));
-    expect(list.body.data).toEqual([]);
+    expect(list.body.data.items).toEqual([]);
   });
 });

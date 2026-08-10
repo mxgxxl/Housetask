@@ -20,6 +20,25 @@ export const swaggerSpec: Record<string, unknown> = {
       bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
     },
     schemas: {
+      Page: {
+        type: 'object',
+        description:
+          'Cursor-paginated page. `nextCursor` is opaque: it encodes the full sort ' +
+          'position (not just an id) and must be passed back verbatim. See ADR-008.',
+        properties: {
+          items: { type: 'array', items: {} },
+          nextCursor: {
+            type: 'string',
+            nullable: true,
+            description: 'Opaque base64 cursor for the next page; null when hasMore is false',
+          },
+          hasMore: { type: 'boolean', description: 'Whether rows exist after this page' },
+          total: {
+            type: 'integer',
+            description: 'Rows matching the filter, ignoring the cursor',
+          },
+        },
+      },
       Error: {
         type: 'object',
         properties: {
@@ -261,23 +280,55 @@ export const swaggerSpec: Record<string, unknown> = {
             name: 'status',
             in: 'query',
             required: false,
+            description: 'Filter by status; combines with the cursor',
             schema: { type: 'string', enum: ['pending', 'completed'] },
+          },
+          {
+            name: 'limit',
+            in: 'query',
+            required: false,
+            description: 'Page size; out of range responds 400',
+            schema: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
+          },
+          {
+            name: 'cursor',
+            in: 'query',
+            required: false,
+            description: 'Opaque cursor from a previous nextCursor; malformed responds 400',
+            schema: { type: 'string' },
           },
         ],
         responses: {
           '200': {
-            description: 'OK',
+            description: 'One page of tasks',
             content: {
               'application/json': {
                 schema: {
                   type: 'object',
                   properties: {
                     success: { type: 'boolean' },
-                    data: { type: 'array', items: { $ref: '#/components/schemas/Task' } },
+                    data: {
+                      allOf: [
+                        { $ref: '#/components/schemas/Page' },
+                        {
+                          type: 'object',
+                          properties: {
+                            items: {
+                              type: 'array',
+                              items: { $ref: '#/components/schemas/Task' },
+                            },
+                          },
+                        },
+                      ],
+                    },
                   },
                 },
               },
             },
+          },
+          '400': {
+            description: 'Invalid limit, cursor or status filter',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
           },
         },
       },
@@ -332,8 +383,54 @@ export const swaggerSpec: Record<string, unknown> = {
         security: bearerAuth,
         parameters: [
           { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+          {
+            name: 'limit',
+            in: 'query',
+            required: false,
+            description: 'Page size; out of range responds 400',
+            schema: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
+          },
+          {
+            name: 'cursor',
+            in: 'query',
+            required: false,
+            description: 'Opaque cursor from a previous nextCursor; malformed responds 400',
+            schema: { type: 'string' },
+          },
         ],
-        responses: { '200': { description: 'OK' } },
+        responses: {
+          '200': {
+            description: 'One page of shopping items',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    data: {
+                      allOf: [
+                        { $ref: '#/components/schemas/Page' },
+                        {
+                          type: 'object',
+                          properties: {
+                            items: {
+                              type: 'array',
+                              items: { $ref: '#/components/schemas/ShoppingItem' },
+                            },
+                          },
+                        },
+                      ],
+                    },
+                  },
+                },
+              },
+            },
+          },
+          '400': {
+            description: 'Invalid limit or cursor',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
+        },
       },
       post: {
         tags: ['Shopping'],

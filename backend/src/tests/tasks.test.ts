@@ -83,7 +83,7 @@ describe('GET /api/households/:householdId/tasks', () => {
       .set(authHeader(user.accessToken));
 
     expect(res.status).toBe(200);
-    expect(res.body.data).toEqual([]);
+    expect(res.body.data.items).toEqual([]);
   });
 
   it('should return only pending tasks when filtering by status=pending', async () => {
@@ -100,8 +100,8 @@ describe('GET /api/households/:householdId/tasks', () => {
       .set(authHeader(user.accessToken));
 
     expect(res.status).toBe(200);
-    expect(res.body.data).toHaveLength(1);
-    expect(res.body.data[0].title).toBe('Still pending');
+    expect(res.body.data.items).toHaveLength(1);
+    expect(res.body.data.items[0].title).toBe('Still pending');
   });
 
   it('should return 400 for an unsupported status filter', async () => {
@@ -132,9 +132,143 @@ describe('GET /api/households/:householdId/tasks', () => {
       .set(authHeader(user.accessToken));
 
     expect(res.status).toBe(200);
-    const ids = (res.body.data as TaskResponse[]).map((t) => t.id);
+    const ids = (res.body.data.items as TaskResponse[]).map((t) => t.id);
     // Completed goes last even though its dueDate is the earliest.
     expect(ids).toEqual([sooner.id, later.id, finished.id]);
+  });
+});
+
+describe('GET /api/households/:householdId/tasks — pagination', () => {
+  /**
+   * 12 tasks with deliberately unsorted dueDates and a mix of statuses, so a
+   * cursor that only carried _id would visibly skip or repeat rows.
+   */
+  async function seedTwelve(
+    user: TestUser,
+    household: TestHousehold
+  ): Promise<void> {
+    const offsets = [7, 2, 11, 0, 5, 9, 1, 8, 3, 10, 4, 6];
+    for (let i = 0; i < offsets.length; i++) {
+      const task = await createTask(user, household, {
+        title: `Task ${i}`,
+        dueDate: daysFromNow(offsets[i]),
+      });
+      // Every third task is completed, so the status key actually varies.
+      if (i % 3 === 0) {
+        await request(app)
+          .patch(`${await tasksUrl(household)}/${task.id}/complete`)
+          .set(authHeader(user.accessToken));
+      }
+    }
+  }
+
+  it('should walk every page with nextCursor covering all rows exactly once, in global order', async () => {
+    const { user, household } = await setupHousehold();
+    await seedTwelve(user, household);
+
+    const full = await request(app)
+      .get(await tasksUrl(household))
+      .query({ limit: 100 })
+      .set(authHeader(user.accessToken));
+    const expected = (full.body.data.items as TaskResponse[]).map((t) => t.id);
+    expect(expected).toHaveLength(12);
+
+    const walked: TaskResponse[] = [];
+    let cursor: string | null = null;
+    let pages = 0;
+
+    for (;;) {
+      const query: Record<string, string> = { limit: '5' };
+      if (cursor) query.cursor = cursor;
+
+      const res = await request(app)
+        .get(await tasksUrl(household))
+        .query(query)
+        .set(authHeader(user.accessToken));
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.total).toBe(12);
+      walked.push(...(res.body.data.items as TaskResponse[]));
+      pages += 1;
+
+      if (!res.body.data.hasMore) {
+        expect(res.body.data.nextCursor).toBeNull();
+        break;
+      }
+      cursor = res.body.data.nextCursor as string;
+      expect(typeof cursor).toBe('string');
+      expect(pages).toBeLessThan(10); // guard against a cursor that never advances
+    }
+
+    const walkedIds = walked.map((t) => t.id);
+    expect(pages).toBe(3);
+    // No omissions, no duplicates, and identical order to the unpaginated read.
+    expect(walkedIds).toEqual(expected);
+    expect(new Set(walkedIds).size).toBe(12);
+
+    // Global ordering: every pending task precedes every completed one, and
+    // dueDate ascends within each status block.
+    const statuses = walked.map((t) => t.status);
+    expect(statuses.indexOf('completed')).toBeGreaterThan(statuses.lastIndexOf('pending'));
+    for (const status of ['pending', 'completed'] as const) {
+      const dues = walked.filter((t) => t.status === status).map((t) => Date.parse(t.dueDate!));
+      expect(dues).toEqual([...dues].sort((a, b) => a - b));
+    }
+  });
+
+  it('should combine the status filter with the cursor and report a filtered total', async () => {
+    const { user, household } = await setupHousehold();
+    await seedTwelve(user, household);
+
+    const first = await request(app)
+      .get(await tasksUrl(household))
+      .query({ status: 'pending', limit: '5' })
+      .set(authHeader(user.accessToken));
+
+    expect(first.status).toBe(200);
+    // 4 of the 12 were completed (i % 3 === 0), so 8 remain pending.
+    expect(first.body.data.total).toBe(8);
+    expect(first.body.data.items).toHaveLength(5);
+    expect(first.body.data.hasMore).toBe(true);
+
+    const second = await request(app)
+      .get(await tasksUrl(household))
+      .query({ status: 'pending', limit: '5', cursor: first.body.data.nextCursor })
+      .set(authHeader(user.accessToken));
+
+    expect(second.body.data.total).toBe(8);
+    expect(second.body.data.items).toHaveLength(3);
+    expect(second.body.data.hasMore).toBe(false);
+    expect(second.body.data.nextCursor).toBeNull();
+    (second.body.data.items as TaskResponse[]).forEach((t) => expect(t.status).toBe('pending'));
+  });
+
+  it('should return an empty page with hasMore false and nextCursor null', async () => {
+    const { user, household } = await setupHousehold();
+
+    const res = await request(app)
+      .get(await tasksUrl(household))
+      .query({ limit: '5' })
+      .set(authHeader(user.accessToken));
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ items: [], nextCursor: null, hasMore: false, total: 0 });
+  });
+
+  it('should reject limits outside 1..100 and malformed cursors with 400', async () => {
+    const { user, household } = await setupHousehold();
+    const url = await tasksUrl(household);
+    const auth = authHeader(user.accessToken);
+
+    const zero = await request(app).get(url).query({ limit: '0' }).set(auth);
+    const tooBig = await request(app).get(url).query({ limit: '101' }).set(auth);
+    const garbage = await request(app).get(url).query({ cursor: 'garbage' }).set(auth);
+
+    expect(zero.status).toBe(400);
+    expect(tooBig.status).toBe(400);
+    expect(garbage.status).toBe(400);
+    expect(garbage.body.error).toBe('Invalid cursor');
+    expect(garbage.body.success).toBe(false);
   });
 });
 
@@ -214,8 +348,8 @@ describe('PATCH /api/households/:householdId/tasks/:taskId/complete', () => {
       .query({ status: 'pending' })
       .set(authHeader(user.accessToken));
 
-    expect(res.body.data).toHaveLength(1);
-    const next = res.body.data[0] as TaskResponse;
+    expect(res.body.data.items).toHaveLength(1);
+    const next = res.body.data.items[0] as TaskResponse;
     expect(next.title).toBe('Regar las plantas');
     expect(next.id).not.toBe(task.id);
     expect(next.parentTaskId).toBe(task.id);
@@ -240,7 +374,7 @@ describe('PATCH /api/households/:householdId/tasks/:taskId/complete', () => {
     const before = await request(app)
       .get(await tasksUrl(household))
       .set(authHeader(user.accessToken));
-    const countBefore = (before.body.data as TaskResponse[]).filter(
+    const countBefore = (before.body.data.items as TaskResponse[]).filter(
       (t) => t.title === 'Sacar reciclaje'
     ).length;
 
@@ -251,7 +385,7 @@ describe('PATCH /api/households/:householdId/tasks/:taskId/complete', () => {
     const after = await request(app)
       .get(await tasksUrl(household))
       .set(authHeader(user.accessToken));
-    const countAfter = (after.body.data as TaskResponse[]).filter(
+    const countAfter = (after.body.data.items as TaskResponse[]).filter(
       (t) => t.title === 'Sacar reciclaje'
     ).length;
 
@@ -286,6 +420,6 @@ describe('DELETE /api/households/:householdId/tasks/:taskId', () => {
     const list = await request(app)
       .get(await tasksUrl(household))
       .set(authHeader(user.accessToken));
-    expect(list.body.data).toEqual([]);
+    expect(list.body.data.items).toEqual([]);
   });
 });
