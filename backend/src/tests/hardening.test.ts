@@ -25,7 +25,21 @@ async function setupHousehold(): Promise<{ user: TestUser; household: TestHouseh
 }
 
 describe('input sanitization', () => {
-  it('should persist HTML-significant characters escaped', async () => {
+  it('should store text containing markup characters exactly as typed', async () => {
+    const { user, url } = await setupHousehold();
+
+    const res = await request(app)
+      .post(url)
+      .set(authHeader(user.accessToken))
+      .send({ title: 'Tom & Jerry <3' });
+
+    expect(res.status).toBe(201);
+    // ADR-009: escaping here would show the user "Tom &amp; Jerry" in a widget
+    // that never interprets markup anyway.
+    expect(res.body.data.title).toBe('Tom & Jerry <3');
+  });
+
+  it('should store a script-like title raw, leaving escaping to the renderer', async () => {
     const { user, url } = await setupHousehold();
 
     const res = await request(app)
@@ -34,18 +48,7 @@ describe('input sanitization', () => {
       .send({ title: '<script>alert(1)</script>' });
 
     expect(res.status).toBe(201);
-    expect(res.body.data.title).toBe('&lt;script&gt;alert(1)&lt;/script&gt;');
-  });
-
-  it('should escape & before the other entities so they are not double-escaped', async () => {
-    const { user, url } = await setupHousehold();
-
-    const res = await request(app)
-      .post(url)
-      .set(authHeader(user.accessToken))
-      .send({ title: 'Tom & Jerry <b>' });
-
-    expect(res.body.data.title).toBe('Tom &amp; Jerry &lt;b&gt;');
+    expect(res.body.data.title).toBe('<script>alert(1)</script>');
   });
 
   it('should reject a task title longer than 200 characters', async () => {

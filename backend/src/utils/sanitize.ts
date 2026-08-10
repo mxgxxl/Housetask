@@ -1,30 +1,12 @@
 import { AppError } from '../middleware/error.middleware';
 
 /**
- * Escape the five HTML-significant characters.
+ * Trim and length-check a user-supplied string.
  *
- * `&` MUST be replaced first: doing it later would re-escape the ampersands
- * introduced by the other rules, turning `<` into `&amp;lt;`.
- *
- * This is defence in depth, not the primary control — the Flutter client
- * renders text, not HTML. It matters the day this data reaches a web view, an
- * email or an export, where stored markup would execute.
- */
-export function escapeHtml(input: string): string {
-  return input
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-/**
- * Trim, length-check and escape a user-supplied string.
- *
- * The length is measured on the trimmed input, before escaping: escaping can
- * multiply a string's length sixfold, so checking afterwards would reject
- * legitimate text for containing quotes.
+ * The value is stored RAW (ADR-009): HTML escaping is a rendering concern, and
+ * escaping at storage time made Flutter — whose Text() never interprets markup
+ * — display "Tom &amp; Jerry" to the user. NoSQL injection is blocked at the
+ * edge by express-mongo-sanitize, not here.
  *
  * @param input Raw value from the request body.
  * @param maxLength Maximum accepted length after trimming.
@@ -38,7 +20,7 @@ export function sanitizeString(input: string, maxLength: number, field = 'value'
     throw new AppError(`${field} must be at most ${maxLength} characters`, 400);
   }
 
-  return escapeHtml(trimmed);
+  return trimmed;
 }
 
 /** Earliest date the API accepts — anything older is a client bug or an attack. */
