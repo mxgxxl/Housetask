@@ -12,26 +12,57 @@ class TaskState extends Equatable {
   final List<Task> tasks;
   final String? error;
 
+  /// Cursor for the next page, or null when the list is fully loaded.
+  final String? nextCursor;
+
+  /// Whether the server reported more rows after the last page.
+  final bool hasMore;
+
+  /// A page fetch is in flight; guards against the scroll listener firing
+  /// repeatedly while one request is already running.
+  final bool isLoadingMore;
+
+  /// Server-side total, captured from the first page (later pages send null).
+  final int? total;
+
   const TaskState({
     this.status = TaskStatusUi.initial,
     this.tasks = const [],
     this.error,
+    this.nextCursor,
+    this.hasMore = false,
+    this.isLoadingMore = false,
+    this.total,
   });
 
   List<Task> get pending => tasks.where((t) => !t.isCompleted).toList();
   List<Task> get completed => tasks.where((t) => t.isCompleted).toList();
   List<Task> get recurring => tasks.where((t) => t.isRecurring).toList();
 
-  TaskState copyWith({TaskStatusUi? status, List<Task>? tasks, String? error}) {
+  TaskState copyWith({
+    TaskStatusUi? status,
+    List<Task>? tasks,
+    String? error,
+    String? nextCursor,
+    bool? hasMore,
+    bool? isLoadingMore,
+    int? total,
+  }) {
     return TaskState(
       status: status ?? this.status,
       tasks: tasks ?? this.tasks,
       error: error,
+      // Explicitly nullable: reaching the last page must be able to clear it.
+      nextCursor: nextCursor,
+      hasMore: hasMore ?? this.hasMore,
+      isLoadingMore: isLoadingMore ?? this.isLoadingMore,
+      total: total ?? this.total,
     );
   }
 
   @override
-  List<Object?> get props => [status, tasks, error];
+  List<Object?> get props =>
+      [status, tasks, error, nextCursor, hasMore, isLoadingMore, total];
 }
 
 /// Manages the task list for the active household, including realtime sync.
@@ -45,14 +76,49 @@ class TaskCubit extends Cubit<TaskState> {
 
   String? get householdId => _householdId;
 
+  /// Load the FIRST page, replacing whatever was loaded before and resetting
+  /// the cursor. Used by initial load and pull-to-refresh.
   Future<void> load(String householdId) async {
     _householdId = householdId;
     emit(state.copyWith(status: TaskStatusUi.loading, error: null));
     try {
-      final tasks = await _repo.list(householdId);
-      emit(state.copyWith(status: TaskStatusUi.loaded, tasks: _sorted(tasks)));
+      final page = await _repo.list(householdId);
+      emit(state.copyWith(
+        status: TaskStatusUi.loaded,
+        tasks: _sorted(page.items),
+        nextCursor: page.nextCursor,
+        hasMore: page.hasMore,
+        isLoadingMore: false,
+        total: page.total,
+      ));
     } on Failure catch (f) {
       emit(state.copyWith(status: TaskStatusUi.error, error: f.message));
+    }
+  }
+
+  /// Append the next page. No-op when the list is exhausted or a fetch is
+  /// already running — the scroll listener fires on every pixel of movement.
+  Future<void> loadMore() async {
+    if (_householdId == null) return;
+    if (!state.hasMore || state.isLoadingMore || state.nextCursor == null) return;
+
+    emit(state.copyWith(nextCursor: state.nextCursor, isLoadingMore: true, error: null));
+    try {
+      final page = await _repo.list(_householdId!, cursor: state.nextCursor);
+      emit(state.copyWith(
+        status: TaskStatusUi.loaded,
+        tasks: _sorted([...state.tasks, ...page.items]),
+        nextCursor: page.nextCursor,
+        hasMore: page.hasMore,
+        isLoadingMore: false,
+      ));
+    } on Failure catch (f) {
+      // Keep the pages already loaded; only surface the error.
+      emit(state.copyWith(
+        nextCursor: state.nextCursor,
+        isLoadingMore: false,
+        error: f.message,
+      ));
     }
   }
 
@@ -148,12 +214,16 @@ class TaskCubit extends Cubit<TaskState> {
     } else {
       list.add(task);
     }
-    emit(state.copyWith(status: TaskStatusUi.loaded, tasks: _sorted(list)));
+    emit(state.copyWith(
+      status: TaskStatusUi.loaded,
+      tasks: _sorted(list),
+      nextCursor: state.nextCursor,
+    ));
   }
 
   void _remove(String id) {
     final list = state.tasks.where((t) => t.id != id).toList();
-    emit(state.copyWith(tasks: list));
+    emit(state.copyWith(tasks: list, nextCursor: state.nextCursor));
   }
 
   /// Pending first, then by due date ascending (nulls last).

@@ -1,24 +1,43 @@
+import 'package:uuid/uuid.dart';
+
 import '../datasources/remote/api_service.dart';
+import '../models/paginated_response.dart';
 import '../models/shopping_item.dart';
 
 /// CRUD for household shopping items.
 class ShoppingRepository {
   final ApiService _api;
+  final Uuid _uuid;
 
-  ShoppingRepository(this._api);
+  ShoppingRepository(this._api, {Uuid? uuid}) : _uuid = uuid ?? const Uuid();
 
-  Future<List<ShoppingItem>> list(String householdId) async {
-    final data = await _api.get('/households/$householdId/shopping');
-    return (data as List<dynamic>)
-        .map((e) => ShoppingItem.fromJson(e as Map<String, dynamic>))
-        .toList();
+  /// Fetch one page of items. Omit [cursor] for the first page.
+  Future<PaginatedResponse<ShoppingItem>> list(
+    String householdId, {
+    int limit = 50,
+    String? cursor,
+  }) async {
+    final data = await _api.get(
+      '/households/$householdId/shopping',
+      query: {'limit': limit, if (cursor != null) 'cursor': cursor},
+    );
+    return PaginatedResponse<ShoppingItem>.fromJson(
+      Map<String, dynamic>.from(data as Map),
+      ShoppingItem.fromJson,
+    );
   }
 
+  /// Create an item, carrying one Idempotency-Key per call so a 401-refresh
+  /// retry replays the same key instead of adding the item twice (ADR-007).
   Future<ShoppingItem> create(
     String householdId,
     Map<String, dynamic> payload,
   ) async {
-    final data = await _api.post('/households/$householdId/shopping', body: payload);
+    final data = await _api.post(
+      '/households/$householdId/shopping',
+      body: payload,
+      headers: {'Idempotency-Key': _uuid.v4()},
+    );
     return ShoppingItem.fromJson(data as Map<String, dynamic>);
   }
 

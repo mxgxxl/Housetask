@@ -18,6 +18,13 @@ class AuthFailure extends Failure {
   const AuthFailure(super.message);
 }
 
+/// The server refused because an identical operation is already in flight
+/// (HTTP 409 from Idempotency-Key handling). Never retry automatically:
+/// the original request is still running and will succeed on its own.
+class ConflictFailure extends Failure {
+  const ConflictFailure(super.message);
+}
+
 /// Local cache / storage failure.
 class CacheFailure extends Failure {
   const CacheFailure(super.message);

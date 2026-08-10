@@ -21,15 +21,18 @@ class ApiService {
   // De-duplicates concurrent refresh attempts.
   Completer<String?>? _refreshCompleter;
 
-  ApiService(this._local) {
-    _dio = Dio(
-      BaseOptions(
-        baseUrl: AppConfig.baseUrl,
-        connectTimeout: AppConfig.connectTimeout,
-        receiveTimeout: AppConfig.receiveTimeout,
-        headers: {'Content-Type': 'application/json'},
-      ),
-    );
+  /// [dio] is injectable so tests can swap the HTTP adapter; production always
+  /// uses the configured instance built below.
+  ApiService(this._local, {Dio? dio}) {
+    _dio = dio ??
+        Dio(
+          BaseOptions(
+            baseUrl: AppConfig.baseUrl,
+            connectTimeout: AppConfig.connectTimeout,
+            receiveTimeout: AppConfig.receiveTimeout,
+            headers: {'Content-Type': 'application/json'},
+          ),
+        );
 
     _dio.interceptors.add(
       InterceptorsWrapper(
@@ -115,11 +118,14 @@ class ApiService {
   Future<dynamic> get(String path, {Map<String, dynamic>? query}) =>
       _request(() => _dio.get(path, queryParameters: query));
 
-  Future<dynamic> post(String path, {Object? body}) =>
-      _request(() => _dio.post(path, data: body));
+  /// [headers] carries per-request metadata such as `Idempotency-Key`. It is
+  /// part of the RequestOptions, so the 401-retry below replays the very same
+  /// key instead of minting a new one — which is what makes the retry safe.
+  Future<dynamic> post(String path, {Object? body, Map<String, String>? headers}) =>
+      _request(() => _dio.post(path, data: body, options: Options(headers: headers)));
 
-  Future<dynamic> patch(String path, {Object? body}) =>
-      _request(() => _dio.patch(path, data: body));
+  Future<dynamic> patch(String path, {Object? body, Map<String, String>? headers}) =>
+      _request(() => _dio.patch(path, data: body, options: Options(headers: headers)));
 
   Future<dynamic> delete(String path, {Object? body}) =>
       _request(() => _dio.delete(path, data: body));
@@ -157,6 +163,14 @@ class ApiService {
     }
 
     if (status == 401) return AuthFailure(message);
+    if (status == 409) {
+      // Idempotency-Key collision: the original request is still in flight.
+      // Only 401 is ever retried automatically (see _onError); retrying a 409
+      // would hammer the server while its twin is mid-write.
+      return const ConflictFailure(
+        'Operation already in progress, please try again in a moment',
+      );
+    }
     return ServerFailure(message, statusCode: status);
   }
 }

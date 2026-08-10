@@ -1,3 +1,5 @@
+import 'package:uuid/uuid.dart';
+
 import '../datasources/local/auth_local_datasource.dart';
 import '../datasources/remote/api_service.dart';
 import '../models/household.dart';
@@ -7,11 +9,19 @@ import '../models/member.dart';
 class HouseholdRepository {
   final ApiService _api;
   final AuthLocalDataSource _local;
+  final Uuid _uuid;
 
-  HouseholdRepository(this._api, this._local);
+  HouseholdRepository(this._api, this._local, {Uuid? uuid})
+      : _uuid = uuid ?? const Uuid();
 
+  /// One Idempotency-Key per call, so a 401-refresh retry cannot create a
+  /// second household (ADR-007).
   Future<Household> create(String name) async {
-    final data = await _api.post('/households', body: {'name': name});
+    final data = await _api.post(
+      '/households',
+      body: {'name': name},
+      headers: {'Idempotency-Key': _uuid.v4()},
+    );
     return Household.fromJson(data as Map<String, dynamic>);
   }
 
@@ -21,7 +31,11 @@ class HouseholdRepository {
   }
 
   Future<Household> join(String inviteCode) async {
-    final data = await _api.post('/households/join', body: {'inviteCode': inviteCode});
+    final data = await _api.post(
+      '/households/join',
+      body: {'inviteCode': inviteCode},
+      headers: {'Idempotency-Key': _uuid.v4()},
+    );
     return Household.fromJson(data as Map<String, dynamic>);
   }
 
