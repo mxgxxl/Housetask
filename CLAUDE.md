@@ -333,6 +333,7 @@ Error:    { "success": false, "error": "Human-readable message" }
 - **Membership cache:** `assertMembership` runs on every household-scoped operation. To avoid one MongoDB query per request, cache membership in Redis with a short TTL (e.g. 60s), key `membership:<householdId>:<userId>`. Invalidate on `household:member_joined` / `household:member_left` events.
 - **Populate strategy:** prefer a single `.populate()` call with an array of paths over multiple sequential populate calls.
 - **List endpoints:** always paginated (cursor-based). Never return unbounded collections.
+- **Cache bypass for destructive ops:** the membership cache (TTL 60s) MUST NOT be used for destructive or authorization-critical operations (delete household, remove member, change role, last-admin checks). Those MUST query MongoDB directly so a removed member never retains authorization for up to 60s.
 
 ---
 
@@ -372,11 +373,11 @@ Error:    { "success": false, "error": "Human-readable message" }
 10. NEVER skip error handling — every async operation must have error handling
 11. NEVER merge code without tests for new features
 12. NEVER ignore a failing test — fix it or remove it with justification
-13. **NEVER** allow write POSTs without idempotency protection: every POST that creates a resource MUST accept an `Idempotency-Key` header; backend MUST dedupe via Redis with a TTL; frontend MUST generate one stable UUID per logical operation (surviving 401 retries)
-14. **NEVER** configure `express.json()` without a payload size limit (e.g. `limit: '100kb'`)
-15. `CORS_ORIGINS` MUST be non-empty when `NODE_ENV=production`; the server MUST fail fast at startup otherwise. Wildcard `*` is only acceptable in development
-16. When a member leaves a household: their pending assigned tasks MUST be unassigned (removed from `assignedTo`), tasks they created MUST be preserved, and the UI MUST render "Former member" for dangling user refs. NEVER leave orphaned ObjectIds unhandled
-17. Resource-level authorization: only the task creator or an admin may edit/delete a task; any member may complete tasks and purchase shopping items. (MUST be enforced — currently NOT enforced, see TD-011, implement in Phase 2)
+13. NEVER allow write POSTs without idempotency protection: every POST that creates a resource MUST accept an `Idempotency-Key` header; backend MUST dedupe via Redis with a TTL; frontend MUST generate one stable UUID per logical operation (surviving 401 retries). On duplicate key detection the backend MUST return the original resource with HTTP 200 and MUST NOT re-emit socket events. (MUST be enforced — currently NOT implemented, see TD-014)
+14. NEVER configure `express.json()` without a payload size limit (e.g. `limit: '100kb'`). (MUST be enforced — currently NOT implemented, see TD-015)
+15. NEVER ship production with empty `CORS_ORIGINS`: when `NODE_ENV=production` it MUST be non-empty and the server MUST fail fast at startup otherwise; wildcard `*` is only acceptable in development. (MUST be enforced — currently NOT implemented, see TD-016)
+16. NEVER leave orphaned references when a member leaves a household: their pending assigned tasks MUST be unassigned (removed from `assignedTo`), tasks they created MUST be preserved, and the UI MUST render "Former member" for dangling user refs. (MUST be enforced — currently NOT implemented, see TD-018)
+17. NEVER allow edit/delete of a task by anyone other than the creator or an admin; any member may complete tasks and purchase shopping items. (MUST be enforced — currently NOT implemented, see TD-011, implement in Phase 2)
 
 ---
 
@@ -418,6 +419,7 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 | TD-015 | No express.json payload size limit | Medium | Add limit option | Planned (Phase 1) | TBD | 2026-08-10 |
 | TD-016 | CORS_ORIGINS empty = * allowed in production | High | Fail-fast at startup in production | Planned (Phase 1) | TBD | 2026-08-10 |
 | TD-017 | constants.dart with hardcoded local backend URL | Low | Migrate to --dart-define / env-based config | Planned (Phase 2) | TBD | 2026-08-10 |
+| TD-018 | Member-leave lifecycle not handled (orphaned assignedTo refs, no "Former member" UI) | High | Unassign pending tasks on leave/removal + Former member fallback in UI | Planned (Phase 2) | TBD | 2026-08-10 |
 
 ---
 
@@ -539,6 +541,7 @@ Swagger UI available at: `http://localhost:3000/api/docs`
 - [ ] ESLint + Prettier + no-console (TD-012)
 - [ ] Household-timezone-aware recurrence (TD-013)
 - [ ] Env-based frontend config via --dart-define (TD-017)
+- [ ] Member-leave lifecycle (TD-018)
 
 ### Phase 3 — Production
 - [ ] MongoDB backups (TD-010)
