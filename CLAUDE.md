@@ -134,13 +134,13 @@ Document key architectural decisions here. Format: Context → Decision → Cons
 
 ### ADR-007: Idempotency-Key semantics (replay and concurrency)
 - **Context:** Dio 401-retries and socket reconnects can duplicate write POSTs; two identical requests can also race in parallel.
-- **Decision:** POSTs that create resources accept an `Idempotency-Key` header. Backend acquires the key in Redis with `SET <key> <placeholder> NX EX <ttl>` BEFORE creating the resource. If SET NX fails: stored value is a completed result → return the original resource with HTTP 200 and do NOT re-emit socket events; stored value is in-progress → poll up to 2s for completion, then return the original with 200; timeout → 409 Conflict. Frontend generates one stable UUID per logical operation (surviving 401 retries) and NEVER auto-retries a 409.
+- **Decision:** POSTs that create resources accept an `Idempotency-Key` header. Backend acquires the key in Redis with `SET <key> <placeholder> NX EX <ttl>` BEFORE creating the resource. If SET NX fails: stored value is a completed result → return the original resource with HTTP 200 and do NOT re-emit socket events; stored value is in-progress → poll up to 2s for completion, then return the original with 200; timeout → 409 Conflict. Frontend generates one stable UUID per logical operation (surviving 401 retries) and NEVER auto-retries a 409. The header is optional during the migration window; the Flutter client starts sending it in Prompt 1.5; making it mandatory on household-scoped POSTs is a candidate hard rule once the client ships.
 - **Consequences:** prevents duplicates on retry and on race; requires storing the serialized result in Redis with TTL; 409 is a safe terminal response for clients.
 
 ### ADR-008: Forward-only cursor pagination with full sort-position encoding
 - **Context:** List endpoints must paginate without skipping/duplicating rows under a compound sort (status, dueDate, _id).
 - **Decision:** Cursor is an opaque base64 token encoding the full sort position (status, dueDate, _id), not just _id. Only forward direction is implemented (YAGNI): the mobile UX is infinite scroll down + pull-to-refresh that resets pagination; backward mode will be added only if a real use case appears.
-- **Consequences:** Correct paging under compound sort; simpler client; total requires a separate countDocuments query.
+- **Consequences:** Correct paging under compound sort; simpler client; total requires a separate countDocuments query. total is returned only on the first page (no cursor); paged requests return total: null to avoid a redundant countDocuments per page.
 
 ---
 
@@ -455,7 +455,7 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 | TD-001 | Members embedded in Household document | High | Migrate to separate HouseholdMember collection | Planned (Phase 2) | TBD | 2026-08-08 |
 | TD-002 | No pagination on list endpoints | High | Implement cursor-based pagination | Planned (Phase 1) | TBD | 2026-08-08 |
 | TD-003 | No offline support in frontend | High | Implement Hive caching + sync queue | Planned (Phase 1) | TBD | 2026-08-08 |
-| TD-004 | No input sanitization | High | Add express-mongo-sanitize + XSS escaping | Planned (Phase 1) | TBD | 2026-08-08 |
+| TD-004 | No input sanitization | High | Add express-mongo-sanitize + XSS escaping | Resolved (commit 3) | TBD | 2026-08-08 |
 | TD-005 | No test coverage (stack not installed) | High | Add Jest + Supertest + mongodb-memory-server + bloc_test | Planned (Phase 1) | TBD | 2026-08-08 |
 | TD-006 | Rate limiting only on auth endpoints | Medium | Add global + per-endpoint rate limiting | Planned (Phase 2) | TBD | 2026-08-08 |
 | TD-007 | No optimistic updates in frontend | Medium | Implement optimistic UI updates | Planned (Phase 2) | TBD | 2026-08-08 |
@@ -465,7 +465,7 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 | TD-011 | No resource-level authorization on tasks (any member can delete) | High | Creator-or-admin rule for edit/delete; any member can complete | Planned (Phase 2) | TBD | 2026-08-10 |
 | TD-012 | No ESLint/Prettier with no-console rule | Medium | Add lint config + pre-commit hook | Planned (Phase 2) | TBD | 2026-08-10 |
 | TD-013 | Recurrence computed in UTC without household timezone | Medium | Add household.timeZone + TZ-aware recurrence | Planned (Phase 2) | TBD | 2026-08-10 |
-| TD-014 | No idempotency on write POSTs (retry can duplicate) | High | Idempotency-Key header + Redis dedupe | Planned (Phase 1) | TBD | 2026-08-10 |
+| TD-014 | No idempotency on write POSTs (retry can duplicate) | High | Idempotency-Key header + Redis dedupe | Resolved (commit 2) | TBD | 2026-08-10 |
 | TD-015 | No express.json payload size limit | Medium | Add limit option | Planned (Phase 1) | TBD | 2026-08-10 |
 | TD-016 | CORS_ORIGINS empty = * allowed in production | High | Fail-fast at startup in production | Planned (Phase 1) | TBD | 2026-08-10 |
 | TD-017 | constants.dart with hardcoded local backend URL | Low | Migrate to --dart-define / env-based config | Planned (Phase 2) | TBD | 2026-08-10 |
@@ -476,7 +476,9 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 | TD-022 | Refresh token replay did not revoke the token family (stolen-token session survived) | High | Detect rotated-token replay via valid signature + missing row, revoke all user refresh tokens | Resolved (2026-08-10, commit B) | TBD | 2026-08-10 |
 | TD-023 | Refresh tokens stored as raw JWTs, not hashed (this file previously claimed otherwise) | High | Store SHA-256 of the token and look up by hash; a DB leak must not yield usable tokens | Resolved (2026-08-10, commit B) | TBD | 2026-08-10 |
 | TD-024 | SHA-256 migration: raw refresh tokens already persisted in Atlas will not match sha256 lookups after deploy | High | One-time action: clear refreshtokens collection when deploying b2c481e (safe now: pre-production, no real users; post-user-acquisition this would require a grace-period lookup) | Pending deploy action | TBD | 2026-08-10 |
-| TD-025 | Monthly recurrence anchor bug: dayOfMonth 31 clamps to Feb 28 and never recovers because the next occurrence is computed from the clamped date instead of the rule anchor | High | Anchor monthly computation to rule.dayOfMonth; add weekly/monthly/clamp unit tests | Planned (Prompt 1.4) | TBD | 2026-08-10 |
+| TD-025 | Monthly recurrence anchor bug: dayOfMonth 31 clamps to Feb 28 and never recovers because the next occurrence is computed from the clamped date instead of the rule anchor | High | Anchor monthly computation to rule.dayOfMonth; add weekly/monthly/clamp unit tests | Resolved (commit 1) | TBD | 2026-08-10 |
+| TD-026 | List sort not backed by a matching compound index (in-memory sort per page) | High | Add sort-exact compound indexes on Task and ShoppingItem | Resolved (commit 3) | TBD | 2026-08-10 |
+| TD-027 | Frontend repositories broken against paginated backend (data array → object) | Medium | Adapt Flutter repositories/cubits to the paginated envelope | Planned (Prompt 1.5) | TBD | 2026-08-10 |
 
 ---
 
