@@ -59,7 +59,7 @@ export async function listMembers(req: AuthenticatedRequest, res: Response): Pro
 export async function removeMember(req: AuthenticatedRequest, res: Response): Promise<void> {
   const household = await householdService.removeMember(
     req.params.householdId,
-    req.user!.userId,
+    req.member!,
     req.params.userId
   );
   sendSuccess(res, householdService.serializeHousehold(household));

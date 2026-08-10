@@ -241,28 +241,33 @@ describe('Content-Type enforcement', () => {
 
 describe('list indexes match the listing sort', () => {
   /**
-   * Asserted on the schema declaration rather than on listIndexes(): building
-   * indexes needs 500MB of free disk, which makes a DB-level assertion fail for
-   * reasons unrelated to the code. The declaration is what this repo controls;
-   * Mongoose builds it on connect.
+   * Asserted against MongoDB, not just the schema: a declaration that never
+   * gets built is worth nothing, and the failure mode this guards (an
+   * in-memory sort on every page) only exists at the database level.
    */
-  function declaredKeyPatterns(schema: { indexes(): Array<[Record<string, unknown>, unknown]> }) {
-    return schema.indexes().map(([key]) => JSON.stringify(key));
+  async function builtKeyPatterns(model: {
+    createIndexes(): Promise<unknown>;
+    listIndexes(): Promise<Array<{ key: Record<string, unknown> }>>;
+  }): Promise<string[]> {
+    await model.createIndexes();
+    const indexes = await model.listIndexes();
+    return indexes.map((i) => JSON.stringify(i.key));
   }
 
-  it('should declare a Task index with exactly the listing sort key pattern', () => {
-    const patterns = declaredKeyPatterns(TaskModel.schema);
+  it('should have built a Task index with exactly the listing sort key pattern', async () => {
+    const patterns = await builtKeyPatterns(TaskModel);
 
     // Same fields AND same directions as { status: -1, dueDate: 1, _id: -1 },
     // otherwise MongoDB sorts in memory (32MB cap) on every page.
     expect(patterns).toContain(
       JSON.stringify({ householdId: 1, status: -1, dueDate: 1, _id: -1 })
     );
+    // The superseded index must be gone: keeping it is pure write overhead.
     expect(patterns).not.toContain(JSON.stringify({ householdId: 1, status: 1, dueDate: 1 }));
   });
 
-  it('should declare a ShoppingItem index with exactly the listing sort key pattern', () => {
-    const patterns = declaredKeyPatterns(ShoppingItemModel.schema);
+  it('should have built a ShoppingItem index with exactly the listing sort key pattern', async () => {
+    const patterns = await builtKeyPatterns(ShoppingItemModel);
 
     expect(patterns).toContain(JSON.stringify({ householdId: 1, isPurchased: 1, _id: -1 }));
     expect(patterns).not.toContain(

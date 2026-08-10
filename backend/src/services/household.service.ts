@@ -3,7 +3,7 @@ import { HouseholdModel, IHousehold } from '../models/Household';
 import { UserModel } from '../models/User';
 import { AppError } from '../middleware/error.middleware';
 import { emitToHousehold } from '../config/socket';
-import { Role } from '../types';
+import { RequesterMembership, Role } from '../types';
 import { sanitizeString } from '../utils/sanitize';
 
 const MAX_HOUSEHOLD_NAME_LENGTH = 100;
@@ -132,20 +132,27 @@ export async function joinHousehold(userId: string, inviteCode: string): Promise
 /**
  * Remove a member from a household. Only admins may remove members. The last
  * remaining admin cannot be removed (which would leave the household leaderless).
+ *
+ * @param requester The caller's membership, as attached by requireMembership.
  */
 export async function removeMember(
   householdId: string,
-  requesterId: string,
+  requester: RequesterMembership,
   targetUserId: string
 ): Promise<IHousehold> {
+  // Both rejections are answered from what requireMembership already loaded,
+  // so an unauthorized or bogus request never costs a second read.
+  if (requester.role !== 'admin') {
+    throw new AppError('Only admins can remove members', 403);
+  }
+  if (!requester.memberIds.includes(targetUserId)) {
+    throw new AppError('Target user is not a member of this household', 404);
+  }
+
+  // Only a request that will actually mutate reaches the database.
   const household = await HouseholdModel.findById(householdId);
   if (!household) {
     throw new AppError('Household not found', 404);
-  }
-
-  const requester = household.members.find((m) => m.user.toString() === requesterId);
-  if (!requester || requester.role !== 'admin') {
-    throw new AppError('Only admins can remove members', 403);
   }
 
   const target = household.members.find((m) => m.user.toString() === targetUserId);
@@ -154,6 +161,8 @@ export async function removeMember(
   }
 
   // Prevent removing the last admin (protects both self-removal and others).
+  // Roles are read from the freshly loaded document rather than from the
+  // request-scoped snapshot: a concurrent demotion must not slip past here.
   const adminCount = household.members.filter((m) => m.role === 'admin').length;
   if (target.role === 'admin' && adminCount <= 1) {
     throw new AppError('Cannot remove the last admin of the household', 400);
