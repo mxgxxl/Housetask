@@ -4,10 +4,38 @@ import { AppError } from '../middleware/error.middleware';
 import { emitToHousehold } from '../config/socket';
 import { calculateNextDueDate } from '../utils/recurrence';
 import { logger } from '../utils/logger';
+import { sanitizeDate, sanitizeString } from '../utils/sanitize';
+import { HouseholdModel } from '../models/Household';
 import { Page, decodeCursor, encodeCursor } from '../utils/pagination';
 import { TaskStatus, TaskPriority, TaskCategory } from '../types';
 
 const POPULATE_FIELDS = 'name email avatarUrl';
+
+const MAX_TITLE_LENGTH = 200;
+const MAX_DESCRIPTION_LENGTH = 2000;
+
+/**
+ * Ensure every assignee actually belongs to the household.
+ *
+ * Without this an authenticated member could assign work to an arbitrary user
+ * id, leaking that account's name and avatar through the populated task and
+ * putting a stranger's row into the household's list.
+ */
+async function assertAssigneesAreMembers(householdId: string, assignedTo: string[]): Promise<void> {
+  if (assignedTo.length === 0) return;
+
+  const household = await HouseholdModel.findById(householdId).select('members').lean();
+  if (!household) {
+    throw new AppError('Household not found', 404);
+  }
+
+  const memberIds = new Set(household.members.map((m) => m.user.toString()));
+  for (const id of assignedTo) {
+    if (!Types.ObjectId.isValid(id) || !memberIds.has(id)) {
+      throw new AppError('Invalid assigned member', 400);
+    }
+  }
+}
 
 export interface CreateTaskInput {
   title: string;
@@ -180,10 +208,10 @@ export async function listTasks(
     Object.assign(pageFilter, taskCursorFilter(decodeCursor(options.cursor, isTaskCursor)));
   }
 
-  // `total` deliberately ignores the cursor: it is the size of the whole
-  // result set, not of what remains after the current page.
+  // Counted only on the first page: the value is identical for every page of a
+  // walk, so recomputing it per page is a pure waste of a collection scan.
   const [total, docs] = await Promise.all([
-    TaskModel.countDocuments(baseFilter),
+    options.cursor ? Promise.resolve(null) : TaskModel.countDocuments(baseFilter),
     TaskModel.find(pageFilter)
       .sort(TASK_SORT)
       // One extra row is the cheapest way to know whether another page exists.
@@ -224,15 +252,21 @@ export async function createTask(
     throw new AppError('Task title is required', 400);
   }
 
+  const assignedTo = input.assignedTo || [];
+  await assertAssigneesAreMembers(householdId, assignedTo);
+
   const task = await TaskModel.create({
     householdId: new Types.ObjectId(householdId),
-    title: input.title.trim(),
-    description: input.description,
-    assignedTo: (input.assignedTo || []).map((id) => new Types.ObjectId(id)),
+    title: sanitizeString(input.title, MAX_TITLE_LENGTH, 'Task title'),
+    description:
+      input.description === undefined
+        ? undefined
+        : sanitizeString(input.description, MAX_DESCRIPTION_LENGTH, 'Task description'),
+    assignedTo: assignedTo.map((id) => new Types.ObjectId(id)),
     createdBy: new Types.ObjectId(userId),
     priority: input.priority || 'medium',
     category: input.category || 'other',
-    dueDate: input.dueDate ? new Date(input.dueDate) : undefined,
+    dueDate: input.dueDate ? sanitizeDate(input.dueDate, 'dueDate') : undefined,
     isRecurring: input.isRecurring ?? false,
     recurrenceRule: input.recurrenceRule,
   });
@@ -256,13 +290,18 @@ export async function updateTask(
     throw new AppError('Task not found', 404);
   }
 
-  if (input.title !== undefined) task.title = input.title.trim();
-  if (input.description !== undefined) task.description = input.description;
+  if (input.title !== undefined) {
+    task.title = sanitizeString(input.title, MAX_TITLE_LENGTH, 'Task title');
+  }
+  if (input.description !== undefined) {
+    task.description = sanitizeString(input.description, MAX_DESCRIPTION_LENGTH, 'Task description');
+  }
   if (input.assignedTo !== undefined) {
+    await assertAssigneesAreMembers(householdId, input.assignedTo);
     task.assignedTo = input.assignedTo.map((id) => new Types.ObjectId(id));
   }
   if (input.dueDate !== undefined) {
-    task.dueDate = input.dueDate ? new Date(input.dueDate) : undefined;
+    task.dueDate = input.dueDate ? sanitizeDate(input.dueDate, 'dueDate') : undefined;
   }
   if (input.priority !== undefined) task.priority = input.priority;
   if (input.category !== undefined) task.category = input.category;

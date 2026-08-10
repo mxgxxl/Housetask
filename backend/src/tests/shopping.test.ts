@@ -133,7 +133,7 @@ describe('GET /api/households/:householdId/shopping — pagination', () => {
       const res = await request(app).get(url).query(query).set(authHeader(user.accessToken));
 
       expect(res.status).toBe(200);
-      expect(res.body.data.total).toBe(12);
+      expect(res.body.data.total).toBe(cursor ? null : 12);
       walked.push(...(res.body.data.items as ShoppingResponse[]));
       pages += 1;
 

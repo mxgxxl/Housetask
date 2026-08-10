@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { UserModel } from '../models/User';
 import { toPublicUser } from '../services/auth.service';
 import { AppError } from '../middleware/error.middleware';
+import { sanitizeString } from '../utils/sanitize';
 import { sendSuccess } from '../utils/response';
 import { AuthenticatedRequest } from '../types';
 
@@ -30,7 +31,7 @@ export async function updateProfile(req: AuthenticatedRequest, res: Response): P
     if (typeof name !== 'string' || name.trim().length === 0) {
       throw new AppError('Name must be a non-empty string', 400);
     }
-    update.name = name.trim();
+    update.name = sanitizeString(name, 100, 'Name');
   }
   if (avatarUrl !== undefined) {
     if (typeof avatarUrl !== 'string') {

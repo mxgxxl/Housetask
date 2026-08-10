@@ -52,7 +52,9 @@ const shoppingItemSchema = new Schema<IShoppingItem>(
   { timestamps: true, ...jsonSchemaOptions }
 );
 
-// Optimizes "not purchased first" listing per household.
-shoppingItemSchema.index({ householdId: 1, isPurchased: 1, createdAt: -1 });
+// Matches the listing sort EXACTLY: householdId equality, isPurchased asc,
+// _id desc. The previous index ended in createdAt, which the sort no longer
+// uses, so it could not serve it (TD-026).
+shoppingItemSchema.index({ householdId: 1, isPurchased: 1, _id: -1 });
 
 export const ShoppingItemModel = model<IShoppingItem>('ShoppingItem', shoppingItemSchema);

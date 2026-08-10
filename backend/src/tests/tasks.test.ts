@@ -187,7 +187,8 @@ describe('GET /api/households/:householdId/tasks — pagination', () => {
         .set(authHeader(user.accessToken));
 
       expect(res.status).toBe(200);
-      expect(res.body.data.total).toBe(12);
+      // total only on the first page; later pages return null (ADR-008).
+      expect(res.body.data.total).toBe(cursor ? null : 12);
       walked.push(...(res.body.data.items as TaskResponse[]));
       pages += 1;
 
@@ -236,7 +237,7 @@ describe('GET /api/households/:householdId/tasks — pagination', () => {
       .query({ status: 'pending', limit: '5', cursor: first.body.data.nextCursor })
       .set(authHeader(user.accessToken));
 
-    expect(second.body.data.total).toBe(8);
+    expect(second.body.data.total).toBeNull();
     expect(second.body.data.items).toHaveLength(3);
     expect(second.body.data.hasMore).toBe(false);
     expect(second.body.data.nextCursor).toBeNull();

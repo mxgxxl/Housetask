@@ -4,10 +4,12 @@ import { UserModel, IUser } from '../models/User';
 import { RefreshTokenModel } from '../models/RefreshToken';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../utils/jwt';
 import { sha256 } from '../utils/hash';
+import { sanitizeString } from '../utils/sanitize';
 import { logger } from '../utils/logger';
 import { AppError } from '../middleware/error.middleware';
 
 const BCRYPT_ROUNDS = 10;
+const MAX_NAME_LENGTH = 100;
 const REFRESH_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 export interface TokenPair {
@@ -79,7 +81,7 @@ export async function register(
   const user = await UserModel.create({
     email: normalizedEmail,
     password: hashed,
-    name: name.trim(),
+    name: sanitizeString(name, MAX_NAME_LENGTH, 'Name'),
   });
 
   const tokens = await generateTokens(user._id.toString(), user.email);
@@ -148,7 +150,10 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
   // re-authenticate; otherwise a stolen token's session would outlive the
   // rotation that was supposed to invalidate it.
   if (!stored) {
-    logger.warn('refresh-token replay detected', { userId: payload.userId });
+    logger.warn('refresh-token replay detected', {
+      userId: payload.userId,
+      trigger: 'missing_row',
+    });
     await revokeAllUserTokens(payload.userId);
     throw new AppError('Invalid or expired refresh token', 401);
   }
@@ -156,7 +161,10 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
   // Signature says one user, the stored row says another: tampering, not a
   // race. Same response, same revocation.
   if (stored.userId.toString() !== payload.userId) {
-    logger.warn('refresh-token replay detected', { userId: payload.userId });
+    logger.warn('refresh-token replay detected', {
+      userId: payload.userId,
+      trigger: 'user_mismatch',
+    });
     await revokeAllUserTokens(payload.userId);
     throw new AppError('Invalid or expired refresh token', 401);
   }

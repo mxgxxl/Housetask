@@ -7,14 +7,16 @@ export const MAX_PAGE_LIMIT = 100;
 /**
  * One page of a cursor-paginated list.
  *
- * `total` counts every row matching the filter, ignoring the cursor, so a
- * client can show "23 tasks" while holding only the first page.
+ * `total` counts every row matching the filter and is returned ONLY on the
+ * first page (no cursor), so a client can show "23 tasks" while holding one
+ * page. Paged requests get `null` instead of paying for an identical
+ * countDocuments on every scroll step (ADR-008).
  */
 export interface Page<T> {
   items: T[];
   nextCursor: string | null;
   hasMore: boolean;
-  total: number;
+  total: number | null;
 }
 
 /**

@@ -124,7 +124,9 @@ List endpoints return a page object instead of a bare array:
 }
 ```
 
-- `total` counts every row matching the filter, ignoring the cursor.
+- `total` counts every row matching the filter and is returned **only on the first
+  page** (no `cursor`); paged requests get `total: null` to avoid an identical
+  `countDocuments` on every scroll step.
 - `hasMore` is true when rows exist after this page; when false, `nextCursor` is `null`.
 - `cursor` is **opaque**: base64 JSON encoding the full sort position, not just an id.
   Clients must pass it back verbatim and never construct or parse one.

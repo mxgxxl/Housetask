@@ -50,7 +50,10 @@ export const swaggerSpec: Record<string, unknown> = {
           hasMore: { type: 'boolean', description: 'Whether rows exist after this page' },
           total: {
             type: 'integer',
-            description: 'Rows matching the filter, ignoring the cursor',
+            nullable: true,
+            description:
+              'Rows matching the filter. Returned only on the first page (no cursor); ' +
+              'null on paged requests.',
           },
         },
       },

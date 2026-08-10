@@ -1,10 +1,12 @@
 import express, { Application, Request, Response } from 'express';
 import cors from 'cors';
+import mongoSanitize from 'express-mongo-sanitize';
 import swaggerUi from 'swagger-ui-express';
 
 import { swaggerSpec } from './config/swagger';
 import { notFoundHandler, errorHandler } from './middleware/error.middleware';
 import { IDEMPOTENCY_STORE_KEY } from './middleware/idempotency.middleware';
+import { requireJsonContentType } from './middleware/contentType.middleware';
 import { IdempotencyStore, InMemoryIdempotencyStore } from './services/idempotency.store';
 
 import { createAuthRouter } from './routes/auth.routes';
@@ -61,9 +63,17 @@ export function createApp(options: CreateAppOptions = {}): Application {
     })
   );
 
+  // Reject non-JSON payloads before parsing so they fail with 415 rather than
+  // arriving as a silently empty body.
+  app.use(requireJsonContentType);
+
   // Hard Rule 14: a bounded body is the cheapest defence against a trivial
   // memory-exhaustion DoS.
   app.use(express.json({ limit: '100kb' }));
+
+  // Strip $-prefixed and dotted keys from body/params/query so a payload like
+  // { "email": { "$ne": null } } cannot turn a findOne into an operator (TD-004).
+  app.use(mongoSanitize());
   // No urlencoded parser: the API is JSON-only, so parsing form bodies would
   // only widen the attack surface (extended:true pulls in qs prototype/deep
   // object parsing) for input no route ever reads.

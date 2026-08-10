@@ -179,7 +179,10 @@ describe('POST /api/auth/refresh', () => {
 
       // The audit hook Sentry will attach to (TD-009): a successful token theft
       // must not be invisible in the logs.
-      expect(warn).toHaveBeenCalledWith('refresh-token replay detected', { userId: user.id });
+      expect(warn).toHaveBeenCalledWith('refresh-token replay detected', {
+        userId: user.id,
+        trigger: 'missing_row',
+      });
     } finally {
       warn.mockRestore();
     }

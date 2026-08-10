@@ -4,6 +4,9 @@ import { UserModel } from '../models/User';
 import { AppError } from '../middleware/error.middleware';
 import { emitToHousehold } from '../config/socket';
 import { Role } from '../types';
+import { sanitizeString } from '../utils/sanitize';
+
+const MAX_HOUSEHOLD_NAME_LENGTH = 100;
 
 const INVITE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous 0/O/1/I
 const INVITE_LENGTH = 8;
@@ -68,7 +71,7 @@ export async function createHousehold(userId: string, name: string): Promise<IHo
   const inviteCode = await generateUniqueInviteCode();
 
   const household = await HouseholdModel.create({
-    name: name.trim(),
+    name: sanitizeString(name, MAX_HOUSEHOLD_NAME_LENGTH, 'Household name'),
     inviteCode,
     createdBy: new Types.ObjectId(userId),
     members: [{ user: new Types.ObjectId(userId), role: 'admin' as Role, joinedAt: new Date() }],
@@ -124,14 +127,6 @@ export async function joinHousehold(userId: string, inviteCode: string): Promise
 
   await household.populate('members.user', 'name email avatarUrl');
   return household;
-}
-
-/**
- * List members of a household (guarded by requireMembership).
- */
-export async function getMembers(householdId: string): Promise<IHousehold['members']> {
-  const household = await getHousehold(householdId);
-  return household.members;
 }
 
 /**

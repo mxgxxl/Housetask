@@ -79,7 +79,12 @@ const taskSchema = new Schema<ITask>(
   { timestamps: true, ...jsonSchemaOptions }
 );
 
-// Compound index optimizes the default listing (household + status + dueDate).
-taskSchema.index({ householdId: 1, status: 1, dueDate: 1 });
+// Matches the listing sort EXACTLY (householdId equality, then status desc,
+// dueDate asc, _id desc). Directions must mirror the sort or MongoDB falls back
+// to an in-memory sort, which is capped at 32MB and defeats pagination (TD-026).
+// It also subsumes the previous { householdId, status, dueDate } index: every
+// other query on those fields uses equality on status, where direction is
+// irrelevant, so the old one was pure write overhead.
+taskSchema.index({ householdId: 1, status: -1, dueDate: 1, _id: -1 });
 
 export const TaskModel = model<ITask>('Task', taskSchema);

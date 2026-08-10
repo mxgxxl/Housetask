@@ -4,8 +4,11 @@ import { AppError } from '../middleware/error.middleware';
 import { emitToHousehold } from '../config/socket';
 import { ShoppingCategory } from '../types';
 import { Page, decodeCursor, encodeCursor } from '../utils/pagination';
+import { sanitizeString } from '../utils/sanitize';
 
 const POPULATE_FIELDS = 'name email avatarUrl';
+
+const MAX_ITEM_NAME_LENGTH = 200;
 
 export interface CreateShoppingInput {
   name: string;
@@ -97,10 +100,10 @@ export async function listItems(
     );
   }
 
-  // `total` deliberately ignores the cursor: it is the size of the whole
-  // result set, not of what remains after the current page.
+  // Counted only on the first page: the value is identical for every page of a
+  // walk, so recomputing it per page is a pure waste of a collection scan.
   const [total, docs] = await Promise.all([
-    ShoppingItemModel.countDocuments(baseFilter),
+    options.cursor ? Promise.resolve(null) : ShoppingItemModel.countDocuments(baseFilter),
     ShoppingItemModel.find(pageFilter)
       .sort(SHOPPING_SORT)
       // One extra row is the cheapest way to know whether another page exists.
@@ -136,7 +139,7 @@ export async function createItem(
 
   const item = await ShoppingItemModel.create({
     householdId: new Types.ObjectId(householdId),
-    name: input.name.trim(),
+    name: sanitizeString(input.name, MAX_ITEM_NAME_LENGTH, 'Item name'),
     quantity: input.quantity ?? 1,
     unit: input.unit || 'uds',
     category: input.category || 'other',
@@ -167,7 +170,9 @@ export async function updateItem(
     throw new AppError('Shopping item not found', 404);
   }
 
-  if (input.name !== undefined) item.name = input.name.trim();
+  if (input.name !== undefined) {
+    item.name = sanitizeString(input.name, MAX_ITEM_NAME_LENGTH, 'Item name');
+  }
   if (input.quantity !== undefined) item.quantity = input.quantity;
   if (input.unit !== undefined) item.unit = input.unit;
   if (input.category !== undefined) item.category = input.category;
