@@ -134,13 +134,18 @@ Document key architectural decisions here. Format: Context → Decision → Cons
 
 ### ADR-007: Idempotency-Key semantics (replay and concurrency)
 - **Context:** Dio 401-retries and socket reconnects can duplicate write POSTs; two identical requests can also race in parallel.
-- **Decision:** POSTs that create resources accept an `Idempotency-Key` header. Backend acquires the key in Redis with `SET <key> <placeholder> NX EX <ttl>` BEFORE creating the resource. If SET NX fails: stored value is a completed result → return the original resource with HTTP 200 and do NOT re-emit socket events; stored value is in-progress → poll up to 2s for completion, then return the original with 200; timeout → 409 Conflict. Frontend generates one stable UUID per logical operation (surviving 401 retries) and NEVER auto-retries a 409. The header is optional during the migration window; the Flutter client starts sending it in Prompt 1.5; making it mandatory on household-scoped POSTs is a candidate hard rule once the client ships.
+- **Decision:** POSTs that create resources accept an `Idempotency-Key` header. Backend acquires the key in Redis with `SET <key> <placeholder> NX EX <ttl>` BEFORE creating the resource. If SET NX fails: stored value is a completed result → return the original resource with HTTP 200 and do NOT re-emit socket events; stored value is in-progress → poll up to 2s for completion, then return the original with 200; timeout → 409 Conflict. Frontend generates one stable UUID per logical operation (surviving 401 retries) and NEVER auto-retries a 409. The header is optional during the migration window; the Flutter client starts sending it in Prompt 1.5; making it mandatory on household-scoped POSTs is a candidate hard rule once the client ships. Keys are scoped server-side per user and route before hashing (sha256(userId:route:key)) to prevent cross-user response poisoning; failed attempts call release() so a validation error never traps the client in 409 for the key TTL.
 - **Consequences:** prevents duplicates on retry and on race; requires storing the serialized result in Redis with TTL; 409 is a safe terminal response for clients.
 
 ### ADR-008: Forward-only cursor pagination with full sort-position encoding
 - **Context:** List endpoints must paginate without skipping/duplicating rows under a compound sort (status, dueDate, _id).
 - **Decision:** Cursor is an opaque base64 token encoding the full sort position (status, dueDate, _id), not just _id. Only forward direction is implemented (YAGNI): the mobile UX is infinite scroll down + pull-to-refresh that resets pagination; backward mode will be added only if a real use case appears.
 - **Consequences:** Correct paging under compound sort; simpler client; total requires a separate countDocuments query. total is returned only on the first page (no cursor); paged requests return total: null to avoid a redundant countDocuments per page.
+
+### ADR-009: Edge validation, raw storage, escape at render
+- **Context:** The first sanitization batch HTML-escaped text at storage time; Flutter renders user text with Text(), which does not interpret markup, so storage escaping degraded UX (users saw "Tom &amp; Jerry") without adding mobile security.
+- **Decision:** Store user text raw after trim + length limits; NoSQL injection is blocked by express-mongo-sanitize at the edge; HTML escaping is a presentation concern to be applied at render time, only if a web client ever ships.
+- **Consequences:** Correct UX on mobile today; a future web frontend MUST escape at render; Zod edge validation (TD-028) will centralize and strengthen edge validation and replace the global mongo-sanitize middleware for Express 5 compatibility.
 
 ---
 
@@ -455,7 +460,7 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 | TD-001 | Members embedded in Household document | High | Migrate to separate HouseholdMember collection | Planned (Phase 2) | TBD | 2026-08-08 |
 | TD-002 | No pagination on list endpoints | High | Implement cursor-based pagination | Planned (Phase 1) | TBD | 2026-08-08 |
 | TD-003 | No offline support in frontend | High | Implement Hive caching + sync queue | Planned (Phase 1) | TBD | 2026-08-08 |
-| TD-004 | No input sanitization | High | Add express-mongo-sanitize + XSS escaping | Resolved (commit 3) | TBD | 2026-08-08 |
+| TD-004 | No input sanitization | High | mongo-sanitize at edge + length limits; raw storage per ADR-009 (escape at render if a web client ships) | Resolved (commit 3) | TBD | 2026-08-08 |
 | TD-005 | No test coverage (stack not installed) | High | Add Jest + Supertest + mongodb-memory-server + bloc_test | Planned (Phase 1) | TBD | 2026-08-08 |
 | TD-006 | Rate limiting only on auth endpoints | Medium | Add global + per-endpoint rate limiting | Planned (Phase 2) | TBD | 2026-08-08 |
 | TD-007 | No optimistic updates in frontend | Medium | Implement optimistic UI updates | Planned (Phase 2) | TBD | 2026-08-08 |
@@ -475,10 +480,11 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 | TD-021 | Mongoose test connection without bufferCommands:false (slow opaque failures) | Low | bufferCommands:false + serverSelectionTimeoutMS 5000 in test harness | Resolved (2026-08-10, commit B) | TBD | 2026-08-10 |
 | TD-022 | Refresh token replay did not revoke the token family (stolen-token session survived) | High | Detect rotated-token replay via valid signature + missing row, revoke all user refresh tokens | Resolved (2026-08-10, commit B) | TBD | 2026-08-10 |
 | TD-023 | Refresh tokens stored as raw JWTs, not hashed (this file previously claimed otherwise) | High | Store SHA-256 of the token and look up by hash; a DB leak must not yield usable tokens | Resolved (2026-08-10, commit B) | TBD | 2026-08-10 |
-| TD-024 | SHA-256 migration: raw refresh tokens already persisted in Atlas will not match sha256 lookups after deploy | High | One-time action: clear refreshtokens collection when deploying b2c481e (safe now: pre-production, no real users; post-user-acquisition this would require a grace-period lookup) | Pending deploy action | TBD | 2026-08-10 |
+| TD-024 | SHA-256 migration: raw refresh tokens already persisted in Atlas will not match sha256 lookups after deploy | High | One-time action: clear refreshtokens collection when deploying b2c481e (safe now: pre-production, no real users; post-user-acquisition this would require a grace-period lookup) | Script ready (scripts/migrate-refresh-tokens.ts); run with --yes during the deploy window of b2c481e | TBD | 2026-08-10 |
 | TD-025 | Monthly recurrence anchor bug: dayOfMonth 31 clamps to Feb 28 and never recovers because the next occurrence is computed from the clamped date instead of the rule anchor | High | Anchor monthly computation to rule.dayOfMonth; add weekly/monthly/clamp unit tests | Resolved (commit 1) | TBD | 2026-08-10 |
 | TD-026 | List sort not backed by a matching compound index (in-memory sort per page) | High | Add sort-exact compound indexes on Task and ShoppingItem | Resolved (commit 3) | TBD | 2026-08-10 |
 | TD-027 | Frontend repositories broken against paginated backend (data array → object) | Medium | Adapt Flutter repositories/cubits to the paginated envelope | Planned (Prompt 1.5) | TBD | 2026-08-10 |
+| TD-028 | Validation scattered across controllers/services; express-mongo-sanitize incompatible with Express 5 | Medium | Zod schemas per endpoint as middleware; explicit body sanitization replaces global middleware | Planned (Phase 2) | TBD | 2026-08-10 |
 
 ---
 
@@ -574,6 +580,8 @@ Swagger UI available at: `http://localhost:3000/api/docs`
 
 ### One-time deploy action (TD-024)
 When deploying commit b2c481e (SHA-256 refresh tokens) to any environment with persisted refreshtokens: clear the refreshtokens collection during the deploy window. All active sessions will require a clean re-login. This is safe today (pre-production). After real user acquisition, equivalent migrations MUST use a grace-period dual lookup instead.
+
+Execute during the deploy window: `npx ts-node src/scripts/migrate-refresh-tokens.ts --yes` (or the compiled dist equivalent).
 
 ### Frontend
 - Android: applicationId `com.homesync.app`, minSdkVersion 21
