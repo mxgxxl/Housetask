@@ -120,7 +120,7 @@ Document key architectural decisions here. Format: Context → Decision → Cons
 ### ADR-004: JWT with refresh token rotation
 - **Context:** Need secure auth for mobile app with long-lived sessions.
 - **Decision:** Short-lived access tokens (15m) + long-lived refresh tokens (7d) with rotation on use.
-- **Consequences:** More complex auth flow, but better security. Refresh tokens stored in DB and invalidated on use.
+- **Consequences:** More complex auth flow, but better security. Refresh tokens stored in DB and invalidated on use. Refresh tokens are stored SHA-256 hashed (not raw) so a database leak does not yield usable sessions; SHA-256 chosen over bcrypt because JWTs are already high-entropy and bcrypt would add latency to every refresh.
 
 ### ADR-005: Embedded members in Household (TO BE MIGRATED)
 - **Context:** Initial MVP embedded members array in Household document for simplicity.
@@ -181,7 +181,7 @@ Document key architectural decisions here. Format: Context → Decision → Cons
 
 1. **Register/Login** → returns `accessToken` (15 min) + `refreshToken` (7 days)
 2. **Access token** sent as `Authorization: Bearer <token>` header
-3. **Refresh token** stored in `refreshtokens` MongoDB collection (rotated on use, deleted on logout)
+3. **Refresh token** stored SHA-256 hashed in the refreshtokens collection (rotated on use, deleted on logout); a DB leak never yields usable sessions
 4. **Frontend** auto-refreshes on 401 with single-flight pattern (deduplicates concurrent refresh calls)
 5. **If refresh fails** → force logout via `onSessionExpired` callback
 
@@ -190,6 +190,7 @@ Document key architectural decisions here. Format: Context → Decision → Cons
 - Failed login/register return generic message (never reveal if email exists)
 - Credential endpoints rate-limited: 5 requests / 15 min / IP
 - Password field has `select: false` in Mongoose schema
+- Replay detection revokes the full token family on two triggers: valid signature + missing row, OR stored userId mismatch with the JWT payload; every family revocation emits a security log (`logger.warn` with userId) as the audit hook for Sentry (TD-009)
 
 ---
 
@@ -348,7 +349,7 @@ single-field indexes on `householdId` and `isPurchased`.
 ### RefreshToken (`refreshtokens`)
 | Field | Type | Notes |
 |-------|------|-------|
-| token | String | required, unique, indexed — stores the **raw JWT, not a hash** (see TD-023) |
+| token | String | required, unique, indexed — stores `sha256(jwt)` as 64-char hex, never the raw JWT (TD-023) |
 | userId | ObjectId | ref User, required, indexed |
 | expiresAt | Date | required; TTL index (`expireAfterSeconds: 0`) purges expired rows |
 | createdAt | Date | `timestamps: { createdAt: true, updatedAt: false }` — no `updatedAt` |
@@ -467,7 +468,7 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 | TD-020 | Auth rate limiter had no test (skipped under NODE_ENV=test) | Medium | createApp({ authRateLimit }) opt-in + dedicated 429 test | Resolved (2026-08-10, commit B) | TBD | 2026-08-10 |
 | TD-021 | Mongoose test connection without bufferCommands:false (slow opaque failures) | Low | bufferCommands:false + serverSelectionTimeoutMS 5000 in test harness | Resolved (2026-08-10, commit B) | TBD | 2026-08-10 |
 | TD-022 | Refresh token replay did not revoke the token family (stolen-token session survived) | High | Detect rotated-token replay via valid signature + missing row, revoke all user refresh tokens | Resolved (2026-08-10, commit B) | TBD | 2026-08-10 |
-| TD-023 | Refresh tokens stored as raw JWTs, not hashed (this file previously claimed otherwise) | High | Store SHA-256 of the token and look up by hash; a DB leak must not yield usable tokens | Planned (Phase 1) | TBD | 2026-08-10 |
+| TD-023 | Refresh tokens stored as raw JWTs, not hashed (this file previously claimed otherwise) | High | Store SHA-256 of the token and look up by hash; a DB leak must not yield usable tokens | Resolved (2026-08-10, commit B) | TBD | 2026-08-10 |
 
 ---
 
