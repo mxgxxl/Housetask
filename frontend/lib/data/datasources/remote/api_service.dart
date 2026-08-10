@@ -21,9 +21,13 @@ class ApiService {
   // De-duplicates concurrent refresh attempts.
   Completer<String?>? _refreshCompleter;
 
-  /// [dio] is injectable so tests can swap the HTTP adapter; production always
-  /// uses the configured instance built below.
-  ApiService(this._local, {Dio? dio}) {
+  /// Interceptor-free client used only for the refresh call, so a 401 on the
+  /// refresh cannot recurse. Injectable for the same reason as [_dio].
+  final Dio? _refreshDio;
+
+  /// [dio] and [refreshDio] are injectable so tests can swap the HTTP adapter;
+  /// production always uses the configured instances built here.
+  ApiService(this._local, {Dio? dio, Dio? refreshDio}) : _refreshDio = refreshDio {
     _dio = dio ??
         Dio(
           BaseOptions(
@@ -88,7 +92,7 @@ class ApiService {
       }
 
       // Bare Dio (no interceptors) to avoid recursion.
-      final bare = Dio(BaseOptions(baseUrl: AppConfig.baseUrl));
+      final bare = _refreshDio ?? Dio(BaseOptions(baseUrl: AppConfig.baseUrl));
       final res = await bare.post<Map<String, dynamic>>(
         '/auth/refresh',
         data: {'refreshToken': refreshToken},
