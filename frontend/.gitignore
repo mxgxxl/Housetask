@@ -6,7 +6,7 @@
 build/
 .flutter-plugins
 .flutter-plugins-dependencies
-pubspec.lock
+# NOTE: pubspec.lock IS tracked — this is an app, not a package (reproducible builds, TD-019)
 
 # IDE
 .idea/
