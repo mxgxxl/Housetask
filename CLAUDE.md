@@ -132,6 +132,11 @@ Document key architectural decisions here. Format: Context → Decision → Cons
 - **Decision:** Store ALL timestamps in UTC (MongoDB Date). Compute recurrence and the ±1-day guard in UTC for now. Frontend displays dates in the device's local timezone. Households will gain a `timeZone` field (IANA string, default = creator's TZ at creation) and recurrence computation will migrate to household TZ in Phase 2.
 - **Consequences:** Consistent behavior across devices and DST changes today; known UX edge case (a "daily at 9am" task drifts on DST change) until TD-013 is implemented.
 
+### ADR-007: Idempotency-Key semantics (replay and concurrency)
+- **Context:** Dio 401-retries and socket reconnects can duplicate write POSTs; two identical requests can also race in parallel.
+- **Decision:** POSTs that create resources accept an `Idempotency-Key` header. Backend acquires the key in Redis with `SET <key> <placeholder> NX EX <ttl>` BEFORE creating the resource. If SET NX fails: stored value is a completed result → return the original resource with HTTP 200 and do NOT re-emit socket events; stored value is in-progress → poll up to 2s for completion, then return the original with 200; timeout → 409 Conflict. Frontend generates one stable UUID per logical operation (surviving 401 retries) and NEVER auto-retries a 409.
+- **Consequences:** prevents duplicates on retry and on race; requires storing the serialized result in Redis with TTL; 409 is a safe terminal response for clients.
+
 ---
 
 ## 🛠️ Tech Stack
@@ -356,6 +361,7 @@ Error:    { "success": false, "error": "Human-readable message" }
 2. Recurrence anti-duplicate guard (±1 day window)
 3. Never delete the household's last admin
 4. Idempotency of write operations under retry (401 refresh retry, socket reconnect)
+5. Member-leave lifecycle (unassign pending tasks on leave/removal, preserve created tasks, last-admin protection). Last-admin protection is testable today; the full lifecycle MUST be covered when TD-018 is implemented.
 
 ---
 
@@ -419,7 +425,8 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 | TD-015 | No express.json payload size limit | Medium | Add limit option | Planned (Phase 1) | TBD | 2026-08-10 |
 | TD-016 | CORS_ORIGINS empty = * allowed in production | High | Fail-fast at startup in production | Planned (Phase 1) | TBD | 2026-08-10 |
 | TD-017 | constants.dart with hardcoded local backend URL | Low | Migrate to --dart-define / env-based config | Planned (Phase 2) | TBD | 2026-08-10 |
-| TD-018 | Member-leave lifecycle not handled (orphaned assignedTo refs, no "Former member" UI) | High | Unassign pending tasks on leave/removal + Former member fallback in UI | Planned (Phase 2) | TBD | 2026-08-10 |
+| TD-018 | Member-leave lifecycle not handled (orphaned assignedTo refs, no "Former member" UI) | High | Unassign pending tasks on leave/removal + Former member fallback in UI | Planned (Phase 2 — High severity deliberately deferred from Phase 1: low-frequency edge case; Phase 1 scope is stabilization-critical) | TBD | 2026-08-10 |
+| TD-019 | pubspec.lock ignored in frontend/.gitignore (non-reproducible builds) | High | Remove from .gitignore and commit the lockfile | Resolved (2026-08-10, Parte 0 chore) | TBD | 2026-08-10 |
 
 ---
 
