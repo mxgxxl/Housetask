@@ -137,6 +137,11 @@ Document key architectural decisions here. Format: Context → Decision → Cons
 - **Decision:** POSTs that create resources accept an `Idempotency-Key` header. Backend acquires the key in Redis with `SET <key> <placeholder> NX EX <ttl>` BEFORE creating the resource. If SET NX fails: stored value is a completed result → return the original resource with HTTP 200 and do NOT re-emit socket events; stored value is in-progress → poll up to 2s for completion, then return the original with 200; timeout → 409 Conflict. Frontend generates one stable UUID per logical operation (surviving 401 retries) and NEVER auto-retries a 409.
 - **Consequences:** prevents duplicates on retry and on race; requires storing the serialized result in Redis with TTL; 409 is a safe terminal response for clients.
 
+### ADR-008: Forward-only cursor pagination with full sort-position encoding
+- **Context:** List endpoints must paginate without skipping/duplicating rows under a compound sort (status, dueDate, _id).
+- **Decision:** Cursor is an opaque base64 token encoding the full sort position (status, dueDate, _id), not just _id. Only forward direction is implemented (YAGNI): the mobile UX is infinite scroll down + pull-to-refresh that resets pagination; backward mode will be added only if a real use case appears.
+- **Consequences:** Correct paging under compound sort; simpler client; total requires a separate countDocuments query.
+
 ---
 
 ## 🛠️ Tech Stack
@@ -377,6 +382,7 @@ to clients.
 - **Populate strategy:** prefer a single `.populate()` call with an array of paths over multiple sequential populate calls.
 - **List endpoints:** always paginated (cursor-based). Never return unbounded collections.
 - **Cache bypass for destructive ops:** the membership cache (TTL 60s) MUST NOT be used for destructive or authorization-critical operations (delete household, remove member, change role, last-admin checks). Those MUST query MongoDB directly so a removed member never retains authorization for up to 60s.
+- **Single membership checkpoint:** the requireMembership middleware on nested household routers is the only membership verification for HTTP operations, and the designated point where the Redis membership cache (TTL 60s) and the destructive-op bypass will be plugged in Phase 2.
 
 ---
 
@@ -469,6 +475,8 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 | TD-021 | Mongoose test connection without bufferCommands:false (slow opaque failures) | Low | bufferCommands:false + serverSelectionTimeoutMS 5000 in test harness | Resolved (2026-08-10, commit B) | TBD | 2026-08-10 |
 | TD-022 | Refresh token replay did not revoke the token family (stolen-token session survived) | High | Detect rotated-token replay via valid signature + missing row, revoke all user refresh tokens | Resolved (2026-08-10, commit B) | TBD | 2026-08-10 |
 | TD-023 | Refresh tokens stored as raw JWTs, not hashed (this file previously claimed otherwise) | High | Store SHA-256 of the token and look up by hash; a DB leak must not yield usable tokens | Resolved (2026-08-10, commit B) | TBD | 2026-08-10 |
+| TD-024 | SHA-256 migration: raw refresh tokens already persisted in Atlas will not match sha256 lookups after deploy | High | One-time action: clear refreshtokens collection when deploying b2c481e (safe now: pre-production, no real users; post-user-acquisition this would require a grace-period lookup) | Pending deploy action | TBD | 2026-08-10 |
+| TD-025 | Monthly recurrence anchor bug: dayOfMonth 31 clamps to Feb 28 and never recovers because the next occurrence is computed from the clamped date instead of the rule anchor | High | Anchor monthly computation to rule.dayOfMonth; add weekly/monthly/clamp unit tests | Planned (Prompt 1.4) | TBD | 2026-08-10 |
 
 ---
 
@@ -561,6 +569,9 @@ Swagger UI available at: `http://localhost:3000/api/docs`
 - `railway.toml` configured for Docker builder
 - Start command: `node backend/dist/app.js`
 - Set all environment variables in Railway dashboard
+
+### One-time deploy action (TD-024)
+When deploying commit b2c481e (SHA-256 refresh tokens) to any environment with persisted refreshtokens: clear the refreshtokens collection during the deploy window. All active sessions will require a clean re-login. This is safe today (pre-production). After real user acquisition, equivalent migrations MUST use a grace-period dual lookup instead.
 
 ### Frontend
 - Android: applicationId `com.homesync.app`, minSdkVersion 21
