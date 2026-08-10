@@ -41,7 +41,7 @@ This is a **monorepo** with two main components:
 ├── backend/          → Node.js REST + realtime API
 ├── frontend/         → Flutter mobile app (iOS/Android)
 ├── railway.toml      → Deployment config
-├── claude.md         → This file — AI assistant guide
+├── CLAUDE.md         → This file — AI assistant guide
 └── README.md         → Project overview
 ```
 
