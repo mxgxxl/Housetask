@@ -12,6 +12,27 @@ import { RedisIdempotencyStore } from './services/idempotency.store';
 const PORT = Number(process.env.PORT) || 3000;
 
 /**
+ * Log an unhandled promise rejection without terminating.
+ *
+ * Node 24 kills the process when no handler is registered, and
+ * `@socket.io/redis-adapter` does not catch the rejections of its own Redis
+ * commands — so an ordinary Redis blip would take the API down (TD-032).
+ * Deliberately does NOT call process.exit: the process stays up and the
+ * incident becomes observable instead of fatal.
+ *
+ * `uncaughtException` is intentionally NOT handled: a thrown-and-unwound error
+ * leaves the process in an unknown state, and terminating is the correct
+ * behaviour there.
+ */
+export function handleUnhandledRejection(reason: unknown): void {
+  const error = reason instanceof Error ? reason.stack : reason;
+  logger.error('unhandledRejection', { error });
+}
+
+// Registered at module load — before anything can reject — and exactly once.
+process.on('unhandledRejection', handleUnhandledRejection);
+
+/**
  * Boot the server: connect to MongoDB, build the Express app, start HTTP +
  * Socket.io (with the Redis adapter), and register graceful shutdown handlers.
  *

@@ -12,6 +12,8 @@ let pubClient: Redis | null = null;
 let subClient: Redis | null = null;
 let commandClient: Redis | null = null;
 
+const DEFAULT_COMMAND_TIMEOUT_MS = 2500;
+
 /**
  * Deadline for application-level Redis commands. Without it ioredis queues
  * commands indefinitely while disconnected and an Idempotency-Key POST never
@@ -21,8 +23,28 @@ let commandClient: Redis | null = null;
  * holds long-lived subscriptions and does not catch command rejections, so a
  * timeout there surfaces as an unhandled rejection that kills the process —
  * turning a Redis blip into a crash loop.
+ *
+ * Tunable because the right value depends on the network: ~1s is generous for
+ * a local Redis but would fail-open on ordinary latency spikes between Railway
+ * and Redis Cloud, losing duplicate protection exactly when clients retry most.
+ *
+ * @throws Error when the variable is set to something that is not a positive
+ *   integer — a silent fallback would hide a config typo until an outage.
  */
-const COMMAND_TIMEOUT_MS = 1000;
+export function resolveCommandTimeoutMs(): number {
+  const raw = process.env.REDIS_COMMAND_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === '') {
+    return DEFAULT_COMMAND_TIMEOUT_MS;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  if (Number.isNaN(parsed) || parsed <= 0) {
+    throw new Error(
+      `REDIS_COMMAND_TIMEOUT_MS must be a positive integer in milliseconds, got "${raw}"`
+    );
+  }
+  return parsed;
+}
 
 function createClient(label: string, extra: Partial<RedisOptions> = {}): Redis {
   const client = new Redis(REDIS_URL, {
@@ -50,7 +72,7 @@ export async function initRedis(): Promise<{ pubClient: Redis; subClient: Redis 
 
   // Separate connection for application commands, bounded so a Redis outage
   // rejects fast instead of queueing forever.
-  commandClient = createClient('commands', { commandTimeout: COMMAND_TIMEOUT_MS });
+  commandClient = createClient('commands', { commandTimeout: resolveCommandTimeoutMs() });
 
   return { pubClient, subClient };
 }

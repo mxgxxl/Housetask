@@ -75,11 +75,15 @@ function parseResult(raw: string | null): IdempotencyResult | null {
 }
 
 /**
- * Log a store failure once per occurrence. Security-grade: losing idempotency
- * silently is how duplicate writes reach production unnoticed.
+ * Trace a store failure.
+ *
+ * Debug level on purpose: the warn-level signal (with a running count, rate
+ * limited to one line per minute) is emitted by the middleware, which knows
+ * whether the failure actually degraded a request. Logging at warn here too
+ * would put one line per Redis call back into an outage.
  */
 function reportUnavailable(operation: string, error: unknown): void {
-  logger.warn('idempotency-store unavailable, fail-open', {
+  logger.debug('idempotency-store operation failed', {
     operation,
     error: (error as Error)?.message ?? String(error),
   });

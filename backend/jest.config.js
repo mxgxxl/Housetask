@@ -7,6 +7,9 @@ process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test_access_secret_at_least_32_characters';
 process.env.JWT_REFRESH_SECRET =
   process.env.JWT_REFRESH_SECRET || 'test_refresh_secret_at_least_32_characters';
+// Keeps any accidental real Redis command from stretching the suite; the tests
+// never reach a live Redis, but an explicit small value documents the intent.
+process.env.REDIS_COMMAND_TIMEOUT_MS = process.env.REDIS_COMMAND_TIMEOUT_MS || '100';
 
 /** @type {import('ts-jest').JestConfigWithTsJest} */
 module.exports = {

@@ -5,8 +5,10 @@ import swaggerUi from 'swagger-ui-express';
 
 import { swaggerSpec } from './config/swagger';
 import { notFoundHandler, errorHandler } from './middleware/error.middleware';
-import { IDEMPOTENCY_STORE_KEY } from './middleware/idempotency.middleware';
+import { IDEMPOTENCY_STORE_KEY, idempotencyMetrics } from './middleware/idempotency.middleware';
 import { requireJsonContentType } from './middleware/contentType.middleware';
+import { authMiddleware } from './middleware/auth.middleware';
+import { sendSuccess } from './utils/response';
 import { IdempotencyStore, InMemoryIdempotencyStore } from './services/idempotency.store';
 
 import { createAuthRouter } from './routes/auth.routes';
@@ -81,6 +83,14 @@ export function createApp(options: CreateAppOptions = {}): Application {
   // Health check.
   app.get('/health', (_req: Request, res: Response) => {
     res.json({ success: true, data: { status: 'ok', uptime: process.uptime() } });
+  });
+
+  // Fail-open counters for the idempotency store (TD-033). Authenticated
+  // because it reveals operational state; a Prometheus exporter can scrape it
+  // once APM lands, but the numbers are useful today for postmortems asking
+  // "how many writes ran without duplicate protection during the outage?".
+  app.get('/metrics/idempotency', authMiddleware, (_req: Request, res: Response) => {
+    sendSuccess(res, idempotencyMetrics());
   });
 
   // API documentation (Swagger UI).

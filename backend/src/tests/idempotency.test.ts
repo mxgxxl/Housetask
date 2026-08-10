@@ -1,12 +1,19 @@
 import { Server } from 'http';
 import request from 'supertest';
 
+import { logger } from '../utils/logger';
+
 import {
   AcquireOutcome,
   IdempotencyResult,
   IdempotencyStore,
   RedisIdempotencyStore,
 } from '../services/idempotency.store';
+import {
+  idempotencyMetrics,
+  resetIdempotencyMetrics,
+} from '../middleware/idempotency.middleware';
+import { resolveCommandTimeoutMs } from '../config/redis';
 import { buildTestApp } from './setup';
 import {
   TestHousehold,
@@ -362,5 +369,101 @@ describe('RedisIdempotencyStore with an unavailable Redis', () => {
     const started = Date.now();
     await expect(store.waitForResult('k', 100)).resolves.toBeNull();
     expect(Date.now() - started).toBeLessThan(2000);
+  });
+});
+
+
+describe('REDIS_COMMAND_TIMEOUT_MS', () => {
+  const original = process.env.REDIS_COMMAND_TIMEOUT_MS;
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.REDIS_COMMAND_TIMEOUT_MS;
+    else process.env.REDIS_COMMAND_TIMEOUT_MS = original;
+  });
+
+  it('should default to 2500ms when unset', () => {
+    delete process.env.REDIS_COMMAND_TIMEOUT_MS;
+    expect(resolveCommandTimeoutMs()).toBe(2500);
+  });
+
+  it('should honour a valid override', () => {
+    process.env.REDIS_COMMAND_TIMEOUT_MS = '4000';
+    expect(resolveCommandTimeoutMs()).toBe(4000);
+  });
+
+  it('should throw at startup for a non-numeric or non-positive value', () => {
+    // Failing loudly beats a silent fallback: a typo would otherwise only
+    // surface as unexpected fail-opens during an incident.
+    process.env.REDIS_COMMAND_TIMEOUT_MS = 'abc';
+    expect(() => resolveCommandTimeoutMs()).toThrow(/REDIS_COMMAND_TIMEOUT_MS/);
+    process.env.REDIS_COMMAND_TIMEOUT_MS = '0';
+    expect(() => resolveCommandTimeoutMs()).toThrow(/positive integer/);
+    process.env.REDIS_COMMAND_TIMEOUT_MS = '-5';
+    expect(() => resolveCommandTimeoutMs()).toThrow(/positive integer/);
+  });
+});
+
+describe('fail-open observability (TD-033)', () => {
+  let faultyApp: Server;
+
+  beforeAll(async () => {
+    faultyApp = await buildTestApp({ idempotencyStore: new FaultyStore() });
+  });
+
+  beforeEach(() => resetIdempotencyMetrics());
+  afterAll(() => resetIdempotencyMetrics());
+
+  it('should count every degraded request but log only once per window', async () => {
+    const user = await createTestUser(faultyApp);
+    const household = await createTestHousehold(faultyApp, user);
+    const url = `/api/households/${household.id}/tasks`;
+    const warn = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+
+    for (let i = 0; i < 5; i++) {
+      const res = await request(faultyApp)
+        .post(url)
+        .set(authHeader(user.accessToken))
+        .set('Idempotency-Key', `burst-${i}`)
+        .send({ title: `Ráfaga ${i}` });
+      expect(res.status).toBe(201);
+    }
+
+    // Snapshot before restoring: mockRestore clears the recorded calls.
+    const calls = [...warn.mock.calls];
+    warn.mockRestore();
+
+    // Five degraded writes, one line: the count carries the volume so an
+    // outage cannot bury the signal under identical warnings.
+    expect(idempotencyMetrics().failOpenCount).toBe(5);
+    const failOpenLogs = calls.filter(
+      ([message]) => message === 'idempotency-store unavailable, fail-open'
+    );
+    expect(failOpenLogs).toHaveLength(1);
+    expect(failOpenLogs[0][1]).toMatchObject({ failOpenCount: 1 });
+  });
+
+  it('should expose the counters to an authenticated caller', async () => {
+    const user = await createTestUser(faultyApp);
+    const household = await createTestHousehold(faultyApp, user);
+
+    await request(faultyApp)
+      .post(`/api/households/${household.id}/tasks`)
+      .set(authHeader(user.accessToken))
+      .set('Idempotency-Key', 'metrics-key')
+      .send({ title: 'Contada' });
+
+    const res = await request(faultyApp)
+      .get('/metrics/idempotency')
+      .set(authHeader(user.accessToken));
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.failOpenCount).toBe(1);
+    expect(typeof res.body.data.lastFailOpenAt).toBe('string');
+  });
+
+  it('should require authentication', async () => {
+    const res = await request(faultyApp).get('/metrics/idempotency');
+
+    expect(res.status).toBe(401);
   });
 });
