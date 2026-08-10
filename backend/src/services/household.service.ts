@@ -61,24 +61,6 @@ export function serializeHousehold(household: IHousehold): Record<string, unknow
 }
 
 /**
- * Assert the given user is a member of the household; returns the household.
- */
-export async function assertMembership(
-  householdId: string,
-  userId: string
-): Promise<IHousehold> {
-  const household = await HouseholdModel.findById(householdId);
-  if (!household) {
-    throw new AppError('Household not found', 404);
-  }
-  const isMember = household.members.some((m) => m.user.toString() === userId);
-  if (!isMember) {
-    throw new AppError('You are not a member of this household', 403);
-  }
-  return household;
-}
-
-/**
  * Create a household. The creator becomes its first admin and the household
  * is added to their `households` list.
  */
@@ -98,10 +80,13 @@ export async function createHousehold(userId: string, name: string): Promise<IHo
 }
 
 /**
- * Fetch a household by id with members populated (membership enforced).
+ * Fetch a household by id with members populated.
+ *
+ * Membership is NOT checked here: requireMembership guards every route that
+ * reaches this function, and duplicating the check would mean two queries and
+ * two places to keep in sync.
  */
-export async function getHousehold(householdId: string, userId: string): Promise<IHousehold> {
-  await assertMembership(householdId, userId);
+export async function getHousehold(householdId: string): Promise<IHousehold> {
   const household = await HouseholdModel.findById(householdId).populate(
     'members.user',
     'name email avatarUrl'
@@ -142,13 +127,10 @@ export async function joinHousehold(userId: string, inviteCode: string): Promise
 }
 
 /**
- * List members of a household (membership enforced).
+ * List members of a household (guarded by requireMembership).
  */
-export async function getMembers(
-  householdId: string,
-  userId: string
-): Promise<IHousehold['members']> {
-  const household = await getHousehold(householdId, userId);
+export async function getMembers(householdId: string): Promise<IHousehold['members']> {
+  const household = await getHousehold(householdId);
   return household.members;
 }
 

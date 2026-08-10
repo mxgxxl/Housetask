@@ -17,10 +17,22 @@ export interface JwtRefreshPayload {
 }
 
 /**
- * Express request enriched by auth.middleware with the authenticated user.
+ * The caller's membership in the household addressed by `:householdId`,
+ * attached by membership.middleware so controllers can branch on role without
+ * re-querying.
+ */
+export interface RequesterMembership {
+  role: Role;
+  joinedAt: Date;
+}
+
+/**
+ * Express request enriched by auth.middleware with the authenticated user and,
+ * on household-scoped routes, by membership.middleware with `member`.
  */
 export interface AuthenticatedRequest extends Request {
   user?: JwtAccessPayload;
+  member?: RequesterMembership;
 }
 
 /**

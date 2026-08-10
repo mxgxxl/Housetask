@@ -1,7 +1,6 @@
 import { Types } from 'mongoose';
 import { ShoppingItemModel, IShoppingItem } from '../models/ShoppingItem';
 import { AppError } from '../middleware/error.middleware';
-import { assertMembership } from './household.service';
 import { emitToHousehold } from '../config/socket';
 import { ShoppingCategory } from '../types';
 
@@ -39,8 +38,6 @@ async function populated(item: IShoppingItem): Promise<IShoppingItem> {
  * List a household's shopping items, not-purchased first, newest first.
  */
 export async function listItems(householdId: string, userId: string): Promise<IShoppingItem[]> {
-  await assertMembership(householdId, userId);
-
   // isPurchased:1 puts false (not purchased) before true.
   return ShoppingItemModel.find({ householdId: new Types.ObjectId(householdId) })
     .sort({ isPurchased: 1, createdAt: -1 })
@@ -56,8 +53,6 @@ export async function createItem(
   userId: string,
   input: CreateShoppingInput
 ): Promise<IShoppingItem> {
-  await assertMembership(householdId, userId);
-
   if (!input.name || input.name.trim() === '') {
     throw new AppError('Item name is required', 400);
   }
@@ -90,8 +85,6 @@ export async function updateItem(
   itemId: string,
   input: UpdateShoppingInput
 ): Promise<IShoppingItem> {
-  await assertMembership(householdId, userId);
-
   const item = await ShoppingItemModel.findOne({ _id: itemId, householdId });
   if (!item) {
     throw new AppError('Shopping item not found', 404);
@@ -133,8 +126,6 @@ export async function purchaseItem(
   userId: string,
   itemId: string
 ): Promise<IShoppingItem> {
-  await assertMembership(householdId, userId);
-
   const item = await ShoppingItemModel.findOne({ _id: itemId, householdId });
   if (!item) {
     throw new AppError('Shopping item not found', 404);
@@ -158,8 +149,6 @@ export async function deleteItem(
   userId: string,
   itemId: string
 ): Promise<void> {
-  await assertMembership(householdId, userId);
-
   const item = await ShoppingItemModel.findOneAndDelete({ _id: itemId, householdId });
   if (!item) {
     throw new AppError('Shopping item not found', 404);

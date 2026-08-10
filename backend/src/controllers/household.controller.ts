@@ -20,11 +20,11 @@ export async function create(req: AuthenticatedRequest, res: Response): Promise<
 }
 
 /**
- * GET /api/households/:id
+ * GET /api/households/:householdId
  * Returns the household with members populated (members only).
  */
 export async function getById(req: AuthenticatedRequest, res: Response): Promise<void> {
-  const household = await householdService.getHousehold(req.params.id, req.user!.userId);
+  const household = await householdService.getHousehold(req.params.householdId);
   sendSuccess(res, householdService.serializeHousehold(household));
 }
 
@@ -44,21 +44,21 @@ export async function join(req: AuthenticatedRequest, res: Response): Promise<vo
 }
 
 /**
- * GET /api/households/:id/members
+ * GET /api/households/:householdId/members
  * Lists the household's members (members only).
  */
 export async function listMembers(req: AuthenticatedRequest, res: Response): Promise<void> {
-  const household = await householdService.getHousehold(req.params.id, req.user!.userId);
+  const household = await householdService.getHousehold(req.params.householdId);
   sendSuccess(res, householdService.serializeHousehold(household).members);
 }
 
 /**
- * DELETE /api/households/:id/members/:userId
+ * DELETE /api/households/:householdId/members/:userId
  * Removes a member (admin only; cannot remove the last admin).
  */
 export async function removeMember(req: AuthenticatedRequest, res: Response): Promise<void> {
   const household = await householdService.removeMember(
-    req.params.id,
+    req.params.householdId,
     req.user!.userId,
     req.params.userId
   );

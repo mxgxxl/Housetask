@@ -1,7 +1,6 @@
 import { Types } from 'mongoose';
 import { TaskModel, ITask, IRecurrenceRule } from '../models/Task';
 import { AppError } from '../middleware/error.middleware';
-import { assertMembership } from './household.service';
 import { emitToHousehold } from '../config/socket';
 import { calculateNextDueDate } from '../utils/recurrence';
 import { logger } from '../utils/logger';
@@ -113,8 +112,6 @@ export async function listTasks(
   userId: string,
   status?: TaskStatus
 ): Promise<ITask[]> {
-  await assertMembership(householdId, userId);
-
   const filter: Record<string, unknown> = { householdId: new Types.ObjectId(householdId) };
   if (status) filter.status = status;
 
@@ -134,8 +131,6 @@ export async function createTask(
   userId: string,
   input: CreateTaskInput
 ): Promise<ITask> {
-  await assertMembership(householdId, userId);
-
   if (!input.title || input.title.trim() === '') {
     throw new AppError('Task title is required', 400);
   }
@@ -167,8 +162,6 @@ export async function updateTask(
   taskId: string,
   input: UpdateTaskInput
 ): Promise<ITask> {
-  await assertMembership(householdId, userId);
-
   const task = await TaskModel.findOne({ _id: taskId, householdId });
   if (!task) {
     throw new AppError('Task not found', 404);
@@ -214,8 +207,6 @@ export async function completeTask(
   userId: string,
   taskId: string
 ): Promise<ITask> {
-  await assertMembership(householdId, userId);
-
   const task = await TaskModel.findOne({ _id: taskId, householdId });
   if (!task) {
     throw new AppError('Task not found', 404);
@@ -247,8 +238,6 @@ export async function deleteTask(
   userId: string,
   taskId: string
 ): Promise<void> {
-  await assertMembership(householdId, userId);
-
   const task = await TaskModel.findOneAndDelete({ _id: taskId, householdId });
   if (!task) {
     throw new AppError('Task not found', 404);
@@ -270,8 +259,6 @@ export async function catchUpRecurring(
   userId: string,
   upTo: Date
 ): Promise<{ generated: number; tasks: ITask[] }> {
-  await assertMembership(householdId, userId);
-
   const completedRecurring = await TaskModel.find({
     householdId: new Types.ObjectId(householdId),
     isRecurring: true,
