@@ -99,13 +99,36 @@ export function getIO(): SocketIOServer {
   return io;
 }
 
+// Emitting before initSocket() is legitimate in tests but a bug in production,
+// so it is logged once per process rather than on every emit (avoids flooding).
+let warnedUninitialized = false;
+
 /**
  * Emit an event to every member of a household currently connected.
- * Safe no-op if Socket.io has not been initialized (e.g. during tests).
+ *
+ * Safe no-op when Socket.io has not been initialized — services can therefore
+ * be exercised in tests without a running HTTP server or Redis. The first
+ * skipped emit logs a warning so a missing `initSocket()` in production is
+ * visible instead of silent.
  */
 export function emitToHousehold(householdId: string, event: string, payload: unknown): void {
-  if (!io) return;
+  if (!io) {
+    if (!warnedUninitialized) {
+      warnedUninitialized = true;
+      logger.warn(
+        `Socket.io not initialized — skipping realtime emits (first skipped: ${event})`
+      );
+    }
+    return;
+  }
   io.to(householdRoom(householdId)).emit(event, payload);
+}
+
+/**
+ * Whether Socket.io has been initialized. Useful for health checks and tests.
+ */
+export function isSocketInitialized(): boolean {
+  return io !== null;
 }
 
 function resolveCorsOrigins(): string | string[] {

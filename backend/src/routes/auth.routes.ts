@@ -15,6 +15,10 @@ const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, error: 'Too many attempts, please try again later' },
+  // Integration tests drive many logins/registrations from a single IP; the
+  // limiter would exhaust after 5 requests and mask real assertions. Disabled
+  // only under NODE_ENV=test, never in development or production.
+  skip: () => process.env.NODE_ENV === 'test',
 });
 
 router.post('/register', authLimiter, asyncHandler(authController.register));

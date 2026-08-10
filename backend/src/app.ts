@@ -1,14 +1,8 @@
-import 'dotenv/config';
 import express, { Application, Request, Response } from 'express';
 import cors from 'cors';
-import { createServer } from 'http';
 import swaggerUi from 'swagger-ui-express';
 
 import { swaggerSpec } from './config/swagger';
-import { connectDatabase, disconnectDatabase } from './config/database';
-import { initSocket } from './config/socket';
-import { disconnectRedis } from './config/redis';
-import { logger } from './utils/logger';
 import { notFoundHandler, errorHandler } from './middleware/error.middleware';
 
 import authRoutes from './routes/auth.routes';
@@ -17,10 +11,13 @@ import taskRoutes from './routes/task.routes';
 import shoppingRoutes from './routes/shopping.routes';
 import userRoutes from './routes/user.routes';
 
-const PORT = Number(process.env.PORT) || 3000;
-
 /**
- * Build and configure the Express application (without starting it).
+ * Build and configure the Express application.
+ *
+ * Pure by design: no database/Redis/Socket.io connection and no `listen()`.
+ * The bootstrap that wires those side effects lives in `server.ts`, which
+ * lets tests mount the app against an in-memory MongoDB with no other
+ * infrastructure running.
  */
 export function createApp(): Application {
   const app = express();
@@ -61,42 +58,4 @@ export function createApp(): Application {
   app.use(errorHandler);
 
   return app;
-}
-
-/**
- * Boot the server: connect to MongoDB, start HTTP + Socket.io (with the
- * Redis adapter), and register graceful shutdown handlers.
- */
-async function start(): Promise<void> {
-  try {
-    await connectDatabase();
-
-    const app = createApp();
-    const httpServer = createServer(app);
-
-    // Attach Socket.io (initializes Redis + adapter internally).
-    await initSocket(httpServer);
-
-    httpServer.listen(PORT, () => {
-      logger.info(`HomeSync API listening on port ${PORT}`);
-    });
-
-    const shutdown = async (signal: string): Promise<void> => {
-      logger.info(`Received ${signal}, shutting down gracefully...`);
-      httpServer.close();
-      await Promise.allSettled([disconnectDatabase(), disconnectRedis()]);
-      process.exit(0);
-    };
-
-    process.on('SIGINT', () => void shutdown('SIGINT'));
-    process.on('SIGTERM', () => void shutdown('SIGTERM'));
-  } catch (err) {
-    logger.error('Failed to start server', (err as Error).message);
-    process.exit(1);
-  }
-}
-
-// Only auto-start when run directly (not when imported for tests).
-if (require.main === module) {
-  void start();
 }

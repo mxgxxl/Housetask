@@ -2,11 +2,11 @@
   "name": "homesync-backend",
   "version": "1.0.0",
   "description": "HomeSync backend - household organization API (Express + TypeScript + MongoDB + Redis + Socket.io)",
-  "main": "dist/app.js",
+  "main": "dist/server.js",
   "scripts": {
-    "dev": "nodemon src/app.ts",
+    "dev": "nodemon src/server.ts",
     "build": "tsc",
-    "start": "node dist/app.js",
+    "start": "node dist/server.js",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
