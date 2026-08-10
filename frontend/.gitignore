@@ -31,3 +31,13 @@ ios/Runner/GoogleService-Info.plist
 
 # macOS
 .DS_Store
+
+# iOS generated (do not track)
+/ios/Flutter/Generated.xcconfig
+/ios/Flutter/ephemeral/
+/ios/Flutter/flutter_export_environment.sh
+# NOTE: /ios/Pods/ already covered by the "ios/Pods/" rule above
+# NOTE: ios/Runner/GeneratedPluginRegistrant.{h,m} are intentionally NOT ignored — Flutter convention is to track them
+
+# Android generated (do not track)
+/android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
