@@ -254,8 +254,10 @@ void main() {
       await cubit.setFilter(null);
 
       // The server does the filtering; a local `where` is what made
-      // "Completadas" look empty behind a page of pending tasks.
-      expect(repo.receivedStatuses, [null, 'pending', 'completed', null]);
+      // "Completadas" look empty behind a page of pending tasks. The final
+      // switch back to "all" issues no request: load('h1') already fetched
+      // that bucket, and revisiting a loaded bucket must not refetch it.
+      expect(repo.receivedStatuses, [null, 'pending', 'completed']);
       expect(cubit.state.activeFilter, TaskFilter.all);
     });
 
@@ -378,6 +380,113 @@ void main() {
 
       expect(cubit.state.bucket(TaskFilter.all).items, isEmpty);
       expect(cubit.state.bucket(TaskFilter.pending).items, isEmpty);
+    });
+
+    test('createTask bumps the header total for every bucket it now belongs to, without a refetch', () async {
+      final repo = FakeTaskRepository(
+        pagesByStatus: {
+          null: [page([buildTask('a')], total: 5)],
+          'pending': [page([buildTask('a')], total: 3)],
+        },
+      );
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+      await cubit.setFilter(TaskFilter.pending);
+      final callsBeforeCreate = repo.listCalls;
+
+      await cubit.createTask({'title': 'Nueva'});
+
+      // A new task is always pending, so both buckets it belongs to gain +1;
+      // "completed" was never visited and stays unknown (null), not 0+1.
+      expect(cubit.state.bucket(TaskFilter.all).total, 6);
+      expect(cubit.state.bucket(TaskFilter.pending).total, 4);
+      expect(cubit.state.bucket(TaskFilter.completed).total, isNull);
+      // The header updated from create()'s own response, not a second round
+      // trip: createTask never calls list().
+      expect(repo.listCalls, callsBeforeCreate);
+    });
+
+    test('deleteTask decrements the total only in buckets the task belonged to', () async {
+      final repo = FakeTaskRepository(
+        pagesByStatus: {
+          null: [page([buildTask('t1')], total: 4)],
+          'pending': [page([buildTask('t1')], total: 2)],
+          'completed': [page(const [], total: 0)],
+        },
+      );
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+      await cubit.setFilter(TaskFilter.pending);
+      await cubit.setFilter(TaskFilter.completed);
+
+      await cubit.deleteTask('t1');
+
+      expect(cubit.state.bucket(TaskFilter.all).total, 3);
+      expect(cubit.state.bucket(TaskFilter.pending).total, 1);
+      // t1 was never in "completed", so its total (0) is untouched, not -1.
+      expect(cubit.state.bucket(TaskFilter.completed).total, 0);
+    });
+
+    test('completeTask moves the total from pending to completed and leaves "all" unchanged', () async {
+      final repo = FakeTaskRepository(
+        pagesByStatus: {
+          null: [page([buildTask('t1')], total: 1)],
+          'pending': [page([buildTask('t1')], total: 1)],
+          'completed': [page(const [], total: 0)],
+        },
+      );
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+      await cubit.setFilter(TaskFilter.pending);
+      await cubit.setFilter(TaskFilter.completed);
+
+      await cubit.completeTask('t1');
+
+      expect(cubit.state.bucket(TaskFilter.all).total, 1);
+      expect(cubit.state.bucket(TaskFilter.pending).total, 0);
+      expect(cubit.state.bucket(TaskFilter.completed).total, 1);
+    });
+
+    test('setFilter does not refetch a bucket that is loaded and legitimately empty', () async {
+      final repo = FakeTaskRepository(
+        pagesByStatus: {
+          null: [page([buildTask('a')], total: 1)],
+          // A real, empty first page — not "never visited".
+          'completed': [page(const [], total: 0)],
+        },
+      );
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+
+      await cubit.setFilter(TaskFilter.completed);
+      final callsAfterFirstVisit = repo.listCalls;
+      expect(cubit.state.bucket(TaskFilter.completed).loaded, isTrue);
+      expect(cubit.state.bucket(TaskFilter.completed).items, isEmpty);
+
+      await cubit.setFilter(TaskFilter.pending);
+      await cubit.setFilter(TaskFilter.completed);
+
+      // Only the detour through "pending" (never loaded) issued a request;
+      // returning to the already-empty "completed" bucket issued none.
+      expect(repo.listCalls, callsAfterFirstVisit + 1);
+    });
+
+    test('setFilter fetches a bucket that has never been loaded', () async {
+      final repo = FakeTaskRepository(
+        pagesByStatus: {
+          null: [page([buildTask('a')], total: 1)],
+          'pending': [page([buildTask('a')], total: 1)],
+        },
+      );
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+      final callsAfterLoad = repo.listCalls;
+
+      expect(cubit.state.bucket(TaskFilter.pending).loaded, isFalse);
+      await cubit.setFilter(TaskFilter.pending);
+
+      expect(repo.listCalls, callsAfterLoad + 1);
+      expect(cubit.state.bucket(TaskFilter.pending).loaded, isTrue);
     });
   });
 }

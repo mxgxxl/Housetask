@@ -34,7 +34,8 @@ class ShoppingState extends Equatable {
   });
 
   List<ShoppingItem> get pending => items.where((i) => !i.isPurchased).toList();
-  List<ShoppingItem> get purchased => items.where((i) => i.isPurchased).toList();
+  List<ShoppingItem> get purchased =>
+      items.where((i) => i.isPurchased).toList();
 
   /// Group items by category for the grouped list UI.
   Map<String, List<ShoppingItem>> get byCategory {
@@ -104,7 +105,8 @@ class ShoppingCubit extends Cubit<ShoppingState> {
     if (_householdId == null) return;
     if (!state.hasMore || state.isLoadingMore || state.nextCursor == null) return;
 
-    emit(state.copyWith(nextCursor: state.nextCursor, isLoadingMore: true, error: null));
+    emit(state.copyWith(
+        nextCursor: state.nextCursor, isLoadingMore: true, error: null));
     try {
       final page = await _repo.list(_householdId!, cursor: state.nextCursor);
       emit(state.copyWith(
@@ -186,10 +188,18 @@ class ShoppingCubit extends Cubit<ShoppingState> {
     }
   }
 
+  /// A total of null means "never fetched"; unknown ± 1 is still unknown, not
+  /// 1, so it is left untouched until a real page arrives.
+  int? _adjustedTotal({required int delta}) {
+    if (state.total == null || delta == 0) return state.total;
+    return state.total! + delta;
+  }
+
   void _upsert(ShoppingItem item) {
     final list = List<ShoppingItem>.from(state.items);
     final idx = list.indexWhere((i) => i.id == item.id);
-    if (idx >= 0) {
+    final existed = idx >= 0;
+    if (existed) {
       list[idx] = item;
     } else {
       list.add(item);
@@ -198,13 +208,19 @@ class ShoppingCubit extends Cubit<ShoppingState> {
       status: ShoppingStatusUi.loaded,
       items: _sorted(list),
       nextCursor: state.nextCursor,
+      // Every item belongs to this single, unfiltered list, so a net-new
+      // item is always +1; an in-place update (e.g. purchased toggling) never
+      // changes membership, so the total is untouched.
+      total: _adjustedTotal(delta: existed ? 0 : 1),
     ));
   }
 
   void _remove(String id) {
+    final existed = state.items.any((i) => i.id == id);
     emit(state.copyWith(
       items: state.items.where((i) => i.id != id).toList(),
       nextCursor: state.nextCursor,
+      total: _adjustedTotal(delta: existed ? -1 : 0),
     ));
   }
 

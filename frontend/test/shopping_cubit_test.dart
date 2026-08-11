@@ -190,5 +190,41 @@ void main() {
       expect(cubit.state.error, 'Operation already in progress');
       expect(cubit.state.items.map((i) => i.id), ['1']);
     });
+
+    test('bumps the total without a refetch', () async {
+      final repo = FakeShoppingRepository(pages: [page([buildItem('1')], total: 5)]);
+      final cubit = ShoppingCubit(repo);
+      await cubit.load('h1');
+      final callsBeforeCreate = repo.listCalls;
+
+      await cubit.createItem({'name': 'Arroz'});
+
+      expect(cubit.state.total, 6);
+      // The header updated from create()'s own response, not a second
+      // round trip: createItem never calls list().
+      expect(repo.listCalls, callsBeforeCreate);
+    });
+
+    test('togglePurchased leaves the total untouched (no membership change)', () async {
+      final repo = FakeShoppingRepository(pages: [page([buildItem('1')], total: 3)]);
+      final cubit = ShoppingCubit(repo);
+      await cubit.load('h1');
+
+      await cubit.togglePurchased(cubit.state.items.single);
+
+      expect(cubit.state.total, 3);
+    });
+  });
+
+  group('ShoppingCubit.deleteItem', () {
+    test('decrements the total', () async {
+      final repo = FakeShoppingRepository(pages: [page([buildItem('1')], total: 4)]);
+      final cubit = ShoppingCubit(repo);
+      await cubit.load('h1');
+
+      await cubit.deleteItem('1');
+
+      expect(cubit.state.total, 3);
+    });
   });
 }

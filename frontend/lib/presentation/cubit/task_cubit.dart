@@ -53,8 +53,15 @@ class TaskBucket extends Equatable {
   final bool isLoadingMore;
 
   /// Server-side total for this filter, from its first page (later pages send
-  /// null). Kept so the header can show "12 de 61".
+  /// null). Kept so the header can show "12 de 61", and nudged optimistically
+  /// by local mutations so it does not go stale the instant the user acts.
   final int? total;
+
+  /// Whether this bucket has ever completed a real fetch — including one that
+  /// legitimately came back empty. Without this, "empty because never
+  /// visited" and "empty because there is nothing completed" are
+  /// indistinguishable, and setFilter cannot tell whether to refetch.
+  final bool loaded;
 
   const TaskBucket({
     this.items = const [],
@@ -62,6 +69,7 @@ class TaskBucket extends Equatable {
     this.hasMore = false,
     this.isLoadingMore = false,
     this.total,
+    this.loaded = false,
   });
 
   TaskBucket copyWith({
@@ -70,6 +78,7 @@ class TaskBucket extends Equatable {
     bool? hasMore,
     bool? isLoadingMore,
     int? total,
+    bool? loaded,
   }) {
     return TaskBucket(
       items: items ?? this.items,
@@ -78,11 +87,13 @@ class TaskBucket extends Equatable {
       hasMore: hasMore ?? this.hasMore,
       isLoadingMore: isLoadingMore ?? this.isLoadingMore,
       total: total ?? this.total,
+      loaded: loaded ?? this.loaded,
     );
   }
 
   @override
-  List<Object?> get props => [items, nextCursor, hasMore, isLoadingMore, total];
+  List<Object?> get props =>
+      [items, nextCursor, hasMore, isLoadingMore, total, loaded];
 }
 
 class TaskState extends Equatable {
@@ -150,7 +161,8 @@ class TaskCubit extends Cubit<TaskState> {
 
   String? get householdId => _householdId;
 
-  Map<TaskFilter, TaskBucket> _withBucket(TaskFilter filter, TaskBucket bucket) {
+  Map<TaskFilter, TaskBucket> _withBucket(
+      TaskFilter filter, TaskBucket bucket) {
     return {...state.buckets, filter: bucket};
   }
 
@@ -180,6 +192,7 @@ class TaskCubit extends Cubit<TaskState> {
             hasMore: page.hasMore,
             isLoadingMore: false,
             total: page.total,
+            loaded: true,
           ),
         ),
       ));
@@ -188,13 +201,20 @@ class TaskCubit extends Cubit<TaskState> {
     }
   }
 
-  /// Switch tabs. Reloads only when the filter actually changes, so tapping the
-  /// current tab does not refetch.
+  /// Switch tabs. Fetches only when [filter]'s bucket has never completed a
+  /// real load — a tab that is already loaded, including one that is
+  /// legitimately empty (e.g. no completed tasks yet), just becomes visible.
   Future<void> setFilter(TaskFilter? filter) async {
     final target = filter ?? TaskFilter.all;
-    if (target == state.activeFilter && state.bucket(target).items.isNotEmpty) {
+    final alreadyLoaded = state.bucket(target).loaded;
+
+    if (target == state.activeFilter) {
+      if (alreadyLoaded) return;
+    } else if (alreadyLoaded) {
+      emit(state.copyWith(activeFilter: target));
       return;
     }
+
     if (_householdId == null) {
       emit(state.copyWith(activeFilter: target));
       return;
@@ -215,7 +235,9 @@ class TaskCubit extends Cubit<TaskState> {
 
     final filter = state.activeFilter;
     final current = state.bucket(filter);
-    if (!current.hasMore || current.isLoadingMore || current.nextCursor == null) {
+    if (!current.hasMore ||
+        current.isLoadingMore ||
+        current.nextCursor == null) {
       return;
     }
 
@@ -250,7 +272,8 @@ class TaskCubit extends Cubit<TaskState> {
         error: f.message,
         buckets: _withBucket(
           filter,
-          current.copyWith(nextCursor: current.nextCursor, isLoadingMore: false),
+          current.copyWith(
+              nextCursor: current.nextCursor, isLoadingMore: false),
         ),
       ));
     }
@@ -338,7 +361,13 @@ class TaskCubit extends Cubit<TaskState> {
 
   /// Place [task] in every bucket whose filter it matches and drop it from the
   /// rest, so completing a task moves it from "Pendientes" to "Completadas"
-  /// without a refetch.
+  /// without a refetch. Each affected bucket's total is nudged by exactly the
+  /// same net change — created moves 0→1 (+1 wherever it now belongs),
+  /// completed moves pending→completed (−1/+1, "all" stays put since the task
+  /// never left it), a plain edit that changes nothing about membership
+  /// leaves every total untouched. The same math applies whether the call
+  /// came from a local mutation or a realtime event from another device, so
+  /// header counts stay correct either way.
   void _upsert(Task task) {
     final updated = <TaskFilter, TaskBucket>{};
 
@@ -347,14 +376,15 @@ class TaskCubit extends Cubit<TaskState> {
       final items = List<Task>.from(bucket.items);
       final index = items.indexWhere((t) => t.id == task.id);
       final belongs = filter.matches(task);
+      final existed = index >= 0;
 
       if (belongs) {
-        if (index >= 0) {
+        if (existed) {
           items[index] = task;
         } else {
           items.add(task);
         }
-      } else if (index >= 0) {
+      } else if (existed) {
         items.removeAt(index);
       } else {
         // Nothing to do for this bucket; keep it as-is to avoid needless rebuilds.
@@ -365,6 +395,8 @@ class TaskCubit extends Cubit<TaskState> {
       updated[filter] = bucket.copyWith(
         items: _sorted(items),
         nextCursor: bucket.nextCursor,
+        total: _adjustedTotal(bucket,
+            delta: belongs && !existed ? 1 : (!belongs && existed ? -1 : 0)),
       );
     }
 
@@ -375,12 +407,25 @@ class TaskCubit extends Cubit<TaskState> {
     final updated = <TaskFilter, TaskBucket>{};
     for (final filter in TaskFilter.values) {
       final bucket = state.bucket(filter);
+      final existed = bucket.items.any((t) => t.id == id);
       updated[filter] = bucket.copyWith(
         items: bucket.items.where((t) => t.id != id).toList(),
         nextCursor: bucket.nextCursor,
+        total: _adjustedTotal(bucket, delta: existed ? -1 : 0),
       );
     }
     emit(state.copyWith(buckets: updated));
+  }
+
+  /// [bucket.total] shifted by [delta], but only once the bucket has actually
+  /// been fetched: a total of null means "unknown", and unknown ± 1 is still
+  /// unknown, not 1. That bucket gets an accurate total the moment it is
+  /// visited for real.
+  int? _adjustedTotal(TaskBucket bucket, {required int delta}) {
+    if (!bucket.loaded || bucket.total == null || delta == 0) {
+      return bucket.total;
+    }
+    return bucket.total! + delta;
   }
 
   /// Pending first, then by due date ascending (nulls last).
