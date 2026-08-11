@@ -20,6 +20,9 @@ dependencies:
   dio: ^5.4.3+1
   socket_io_client: ^2.0.3+1
 
+  # Error tracking (TD-009) — no-op unless SENTRY_DSN is passed via --dart-define
+  sentry_flutter: ^8.14.2
+
   # Local storage
   shared_preferences: ^2.2.3
 

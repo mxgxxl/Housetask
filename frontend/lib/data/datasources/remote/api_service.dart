@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 import '../../../config/constants.dart';
 import '../../../core/errors/failures.dart';
+import '../../../services/sentry_service.dart';
 import '../local/auth_local_datasource.dart';
 
 /// Thin HTTP client over Dio.
@@ -175,6 +176,18 @@ class ApiService {
         'Operation already in progress, please try again in a moment',
       );
     }
+
+    // 5xx only: a 4xx is an expected client outcome (bad input, not found,
+    // conflict) and reporting every one would bury genuine server failures
+    // under client noise — the same rule the backend applies in reverse.
+    if (status != null && status >= 500) {
+      SentryService.captureException(
+        e,
+        stackTrace: e.stackTrace,
+        context: {'status': status, 'path': e.requestOptions.path},
+      );
+    }
+
     return ServerFailure(message, statusCode: status);
   }
 }
