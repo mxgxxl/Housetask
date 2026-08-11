@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'app.dart';
+import 'services/cache_service.dart';
 import 'services/notification_service.dart';
 import 'services/sentry_service.dart';
 
@@ -29,6 +30,9 @@ Future<void> main() async {
 
       // Initialize local notifications (permissions + timezone db).
       await NotificationService().init();
+
+      // Open the Hive boxes offline-first repositories read/write (TD-003).
+      await CacheService().init();
 
       runApp(const HomeSyncApp());
     },
