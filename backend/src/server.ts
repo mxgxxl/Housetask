@@ -8,6 +8,7 @@ import { disconnectRedis } from './config/redis';
 import { logger } from './utils/logger';
 import { validateProductionEnv } from './utils/env';
 import { RedisIdempotencyStore } from './services/idempotency.store';
+import { initSentry } from './utils/sentry';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -41,6 +42,10 @@ process.on('unhandledRejection', handleUnhandledRejection);
  */
 export async function start(): Promise<void> {
   try {
+    // Before anything else, so every later failure — including one thrown by
+    // the env validation right below — has somewhere to report to.
+    initSentry();
+
     // Refuse to boot a misconfigured production process before anything binds.
     validateProductionEnv();
 

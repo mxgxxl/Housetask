@@ -1,7 +1,8 @@
-import express, { Application, Request, Response } from 'express';
+import express, { Application, NextFunction, Request, Response } from 'express';
 import cors from 'cors';
 import mongoSanitize from 'express-mongo-sanitize';
 import swaggerUi from 'swagger-ui-express';
+import * as Sentry from '@sentry/node';
 
 import { swaggerSpec } from './config/swagger';
 import { notFoundHandler, errorHandler } from './middleware/error.middleware';
@@ -43,6 +44,23 @@ export interface CreateAppOptions {
  */
 export function createApp(options: CreateAppOptions = {}): Application {
   const app = express();
+
+  // First middleware, only when Sentry is initialized (no-op otherwise).
+  //
+  // Deviation from the literal spec: @sentry/node v8+ removed
+  // `Sentry.Handlers.requestHandler()` — calling it would throw, since
+  // `Sentry.Handlers` no longer exists. HTTP instrumentation (spans, breadcrumbs)
+  // is automatic once `initSentry()` runs, via the SDK's default httpIntegration
+  // and its per-request isolation scope. What a request handler still usefully
+  // adds is tagging that isolation scope with the request's method/path, so any
+  // later capture during this request — even deep in a service with no access
+  // to `req` — carries it without every call site passing context explicitly.
+  app.use((req: Request, _res: Response, next: NextFunction) => {
+    if (Sentry.isInitialized()) {
+      Sentry.setContext('request', { method: req.method, path: req.path });
+    }
+    next();
+  });
 
   const authRateLimit = options.authRateLimit ?? process.env.NODE_ENV !== 'test';
 

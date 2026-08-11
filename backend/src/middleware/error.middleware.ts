@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { logger } from '../utils/logger';
 import { sendError } from '../utils/response';
+import { captureServerError } from '../utils/sentry';
 
 /**
  * A typed application error carrying an HTTP status code. Controllers and
@@ -26,16 +27,29 @@ export function notFoundHandler(req: Request, res: Response): void {
 /**
  * Centralized error handler. Normalizes known error shapes (AppError,
  * Mongoose validation/cast/duplicate-key) into the standard envelope.
+ *
+ * Only 5xx responses reach Sentry: a 4xx is an expected client outcome (bad
+ * input, missing resource, duplicate key) and reporting every one would bury
+ * genuine server failures in client noise. The one exception — a 401 from
+ * detected refresh-token replay — is security-relevant despite being a 4xx,
+ * so auth.service reports it itself via captureSecurityWarning, not here.
  */
 export function errorHandler(
   err: unknown,
-  _req: Request,
+  req: Request,
   res: Response,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   _next: NextFunction
 ): void {
+  const respond = (message: string, status: number): void => {
+    if (status >= 500) {
+      captureServerError(err, { path: req.path, method: req.method });
+    }
+    sendError(res, message, status);
+  };
+
   if (err instanceof AppError) {
-    sendError(res, err.message, err.status);
+    respond(err.message, err.status);
     return;
   }
 
@@ -45,7 +59,7 @@ export function errorHandler(
   // this branch it would fall through to the catch-all and surface as a 500,
   // hiding a client mistake behind a server error.
   if (error.type === 'entity.too.large') {
-    sendError(res, 'Payload too large', 413);
+    respond('Payload too large', 413);
     return;
   }
 
@@ -53,28 +67,28 @@ export function errorHandler(
   // catch-all it would answer 500, breaking the envelope's meaning and burying
   // real server errors in client noise once error tracking is wired up.
   if (error.type === 'entity.parse.failed') {
-    sendError(res, 'Invalid JSON payload', 400);
+    respond('Invalid JSON payload', 400);
     return;
   }
 
   // Mongoose validation error.
   if (error.name === 'ValidationError') {
-    sendError(res, error.message || 'Validation error', 400);
+    respond(error.message || 'Validation error', 400);
     return;
   }
 
   // Mongoose bad ObjectId.
   if (error.name === 'CastError') {
-    sendError(res, 'Invalid identifier', 400);
+    respond('Invalid identifier', 400);
     return;
   }
 
   // MongoDB duplicate key.
   if (error.code === 11000) {
-    sendError(res, 'Duplicate value violates a unique constraint', 409);
+    respond('Duplicate value violates a unique constraint', 409);
     return;
   }
 
   logger.error('Unhandled error', error.message || err);
-  sendError(res, 'Internal server error', 500);
+  respond('Internal server error', 500);
 }

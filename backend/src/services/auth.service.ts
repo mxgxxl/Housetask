@@ -6,6 +6,7 @@ import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../utils/
 import { sha256 } from '../utils/hash';
 import { sanitizeString } from '../utils/sanitize';
 import { logger } from '../utils/logger';
+import { captureSecurityWarning } from '../utils/sentry';
 import { AppError } from '../middleware/error.middleware';
 
 const BCRYPT_ROUNDS = 10;
@@ -150,7 +151,14 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
   // re-authenticate; otherwise a stolen token's session would outlive the
   // rotation that was supposed to invalidate it.
   if (!stored) {
+    // logger.warn is the source of truth (always recorded, no DSN required);
+    // Sentry is the alert channel on top of it — the two are not redundant,
+    // one is searchable history and the other pages someone.
     logger.warn('refresh-token replay detected', {
+      userId: payload.userId,
+      trigger: 'missing_row',
+    });
+    captureSecurityWarning('refresh-token replay detected', {
       userId: payload.userId,
       trigger: 'missing_row',
     });
@@ -162,6 +170,10 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
   // race. Same response, same revocation.
   if (stored.userId.toString() !== payload.userId) {
     logger.warn('refresh-token replay detected', {
+      userId: payload.userId,
+      trigger: 'user_mismatch',
+    });
+    captureSecurityWarning('refresh-token replay detected', {
       userId: payload.userId,
       trigger: 'user_mismatch',
     });
