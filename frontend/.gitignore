@@ -14,14 +14,28 @@ build/
 *.iml
 
 # Android
+# NOTE (TD-036): native scaffolding IS versioned — gradlew, gradle/wrapper/,
+# build.gradle, settings.gradle, AndroidManifest.xml, MainActivity, res/ — so
+# the repo builds without running `flutter create` by hand. Only per-machine
+# / generated-per-build artifacts are ignored below.
 android/.gradle/
+android/app/build/
+android/.cxx/
 android/local.properties
 android/key.properties
 android/app/google-services.json
 *.keystore
 *.jks
+# flutter create (and future `flutter pub get`) writes a per-platform
+# .gitignore under android/ and ios/ that re-ignores the very files this
+# project deliberately tracks (gradlew, GeneratedPluginRegistrant.*). This
+# repo's ignore rules live ONLY here; delete those nested files if they
+# reappear rather than letting them silently fight this one.
 
 # iOS
+# NOTE (TD-036): native scaffolding IS versioned — Runner.xcodeproj/,
+# Runner.xcworkspace/, AppDelegate*, Info.plist, Assets.xcassets, Base.lproj/,
+# Podfile — so the repo builds without running `flutter create` by hand.
 ios/Pods/
 ios/.symlinks/
 ios/Flutter/Flutter.framework
