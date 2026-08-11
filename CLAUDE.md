@@ -466,7 +466,7 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 | TD-006 | Rate limiting only on auth endpoints | Medium | Add global + per-endpoint rate limiting | Planned (Phase 2) | TBD | 2026-08-08 |
 | TD-007 | No optimistic updates in frontend | Medium | Implement optimistic UI updates | Planned (Phase 2) | TBD | 2026-08-08 |
 | TD-008 | No CI/CD pipeline | Medium | Configure GitHub Actions | Planned (Phase 2) | TBD | 2026-08-08 |
-| TD-009 | No error tracking (Sentry not installed) | Medium | Integrate Sentry backend + frontend | Planned (Phase 1) | TBD | 2026-08-08 |
+| TD-009 | No error tracking (Sentry not installed) | Medium | Integrate Sentry backend + frontend; backend + frontend with no-op fallback; security warnings (refresh replay) routed to Sentry as alert channel | Resolved (commits 1-2) | TBD | 2026-08-08 |
 | TD-010 | No database backups | Medium | Configure MongoDB Atlas backups | Planned (Phase 3) | TBD | 2026-08-08 |
 | TD-011 | No resource-level authorization on tasks (any member can delete) | High | Creator-or-admin rule for edit/delete; any member can complete | Planned (Phase 2) | TBD | 2026-08-10 |
 | TD-012 | No ESLint/Prettier with no-console rule | Medium | Add lint config + pre-commit hook | Planned (Phase 2) | TBD | 2026-08-10 |
@@ -561,9 +561,9 @@ Swagger UI available at: `http://localhost:3000/api/docs`
 | JWT_REFRESH_EXPIRES | Refresh token lifetime (default 7d) | No |
 | REDIS_URL | Redis connection URL | Yes |
 | REDIS_COMMAND_TIMEOUT_MS | Timeout in ms for application Redis commands (default 2500; pub/sub connections are not affected) | No |
+| SENTRY_DSN | Sentry error tracking DSN; empty or absent disables Sentry (no-op) | No |
 | CORS_ORIGINS | Comma-separated allowed origins (empty = allow *) | No |
 | NODE_ENV | development / production | No |
-| SENTRY_DSN | Sentry error tracking DSN | No |
 
 ---
 
