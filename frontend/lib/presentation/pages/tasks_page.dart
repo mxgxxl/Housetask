@@ -8,124 +8,78 @@ import '../widgets/common.dart';
 import '../widgets/task_tile.dart';
 import 'task_form_page.dart';
 
-/// Tasks tab: Pending / Completed / Recurring, with swipe-to-edit/delete.
-class TasksPage extends StatelessWidget {
+/// The tabs, in display order. Each one is a server-side filter, not a local
+/// `where` over a shared list.
+const _tabs = <({TaskFilter filter, String label, String emptyLabel})>[
+  (filter: TaskFilter.all, label: 'Todas', emptyLabel: 'No hay tareas todavía'),
+  (
+    filter: TaskFilter.pending,
+    label: 'Pendientes',
+    emptyLabel: 'No hay tareas pendientes'
+  ),
+  (
+    filter: TaskFilter.completed,
+    label: 'Completadas',
+    emptyLabel: 'Aún no has completado tareas'
+  ),
+];
+
+/// Tasks tab: Todas / Pendientes / Completadas, with swipe-to-edit/delete.
+///
+/// Every tab paginates independently against `?status=`, so opening
+/// "Completadas" fetches completed tasks instead of waiting for the user to
+/// scroll past every pending one.
+class TasksPage extends StatefulWidget {
   const TasksPage({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 3,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Tareas',
-              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 22)),
-          bottom: const TabBar(
-            labelColor: AppColors.primary,
-            unselectedLabelColor: AppColors.textSecondary,
-            indicatorColor: AppColors.primary,
-            tabs: [
-              Tab(text: 'Pendientes'),
-              Tab(text: 'Completadas'),
-              Tab(text: 'Recurrentes'),
-            ],
-          ),
-        ),
-        body: BlocBuilder<TaskCubit, TaskState>(
-          builder: (context, state) {
-            if (state.status == TaskStatusUi.loading && state.tasks.isEmpty) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            if (state.status == TaskStatusUi.error && state.tasks.isEmpty) {
-              return _ErrorRetry(
-                message: state.error ?? 'No se pudieron cargar las tareas',
-                onRetry: () => context.read<TaskCubit>().refresh(),
-              );
-            }
-            return TabBarView(
-              children: [
-                _TaskList(
-                  tasks: state.pending,
-                  emptyLabel: 'No hay tareas pendientes',
-                  isLoadingMore: state.isLoadingMore,
-                  hasMore: state.hasMore,
-                ),
-                _TaskList(
-                  tasks: state.completed,
-                  emptyLabel: 'Aún no has completado tareas',
-                  isLoadingMore: state.isLoadingMore,
-                  hasMore: state.hasMore,
-                ),
-                _TaskList(
-                  tasks: state.recurring,
-                  emptyLabel: 'No hay tareas recurrentes',
-                  isLoadingMore: state.isLoadingMore,
-                  hasMore: state.hasMore,
-                ),
-              ],
-            );
-          },
-        ),
-        floatingActionButton: FloatingActionButton.extended(
-          onPressed: () => _openForm(context),
-          icon: const Icon(Icons.add),
-          label: const Text('Tarea'),
-        ),
-      ),
-    );
-  }
-
-  void _openForm(BuildContext context, {Task? task}) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => TaskFormPage(task: task)),
-    );
-  }
+  State<TasksPage> createState() => _TasksPageState();
 }
 
-/// A tab's list.
-///
-/// Stateful because infinite scroll needs a ScrollController. The three tabs
-/// filter one paginated list client-side, so scrolling any of them pulls the
-/// next page of the shared list rather than of that tab's subset.
-class _TaskList extends StatefulWidget {
-  final List<Task> tasks;
-  final String emptyLabel;
-  final bool isLoadingMore;
-  final bool hasMore;
+class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMixin {
+  late final TabController _tabController;
 
-  const _TaskList({
-    required this.tasks,
-    required this.emptyLabel,
-    required this.isLoadingMore,
-    required this.hasMore,
-  });
-
-  @override
-  State<_TaskList> createState() => _TaskListState();
-}
-
-class _TaskListState extends State<_TaskList> {
-  final ScrollController _controller = ScrollController();
+  /// One controller per tab: a shared one would scroll all three together and
+  /// show a single tab's spinner in every tab.
+  late final List<ScrollController> _scrollControllers;
 
   @override
   void initState() {
     super.initState();
-    _controller.addListener(_onScroll);
+    _tabController = TabController(length: _tabs.length, vsync: this);
+    _tabController.addListener(_onTabChanged);
+
+    _scrollControllers = List.generate(_tabs.length, (index) {
+      final controller = ScrollController();
+      controller.addListener(() => _onScroll(index, controller));
+      return controller;
+    });
   }
 
   @override
   void dispose() {
-    _controller.removeListener(_onScroll);
-    _controller.dispose();
+    _tabController.removeListener(_onTabChanged);
+    _tabController.dispose();
+    for (final controller in _scrollControllers) {
+      controller.dispose();
+    }
     super.dispose();
   }
 
-  /// Fetch the next page before the user reaches the bottom, so the list keeps
-  /// moving. The cubit's isLoadingMore guard absorbs the repeated calls this
-  /// fires while scrolling through the trigger zone.
-  void _onScroll() {
-    if (!_controller.hasClients) return;
-    final position = _controller.position;
+  void _onTabChanged() {
+    // Fires twice per swipe (start and end of the animation); acting only on
+    // the settled index avoids firing a request for a tab being passed over.
+    if (_tabController.indexIsChanging) return;
+    context.read<TaskCubit>().setFilter(_tabs[_tabController.index].filter);
+  }
+
+  /// Fetch the next page shortly before the bottom, but only for the tab the
+  /// user is actually looking at — off-screen tabs must not paginate.
+  void _onScroll(int index, ScrollController controller) {
+    if (index != _tabController.index) return;
+    if (!controller.hasClients) return;
+
+    final position = controller.position;
     if (position.pixels > position.maxScrollExtent * 0.8) {
       context.read<TaskCubit>().loadMore();
     }
@@ -133,41 +87,112 @@ class _TaskListState extends State<_TaskList> {
 
   @override
   Widget build(BuildContext context) {
-    final tasks = widget.tasks;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Tareas',
+            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 22)),
+        bottom: TabBar(
+          controller: _tabController,
+          labelColor: AppColors.primary,
+          unselectedLabelColor: AppColors.textSecondary,
+          indicatorColor: AppColors.primary,
+          tabs: [for (final tab in _tabs) Tab(text: tab.label)],
+        ),
+      ),
+      body: BlocBuilder<TaskCubit, TaskState>(
+        builder: (context, state) {
+          if (state.status == TaskStatusUi.loading && state.tasks.isEmpty) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (state.status == TaskStatusUi.error && state.tasks.isEmpty) {
+            return _ErrorRetry(
+              message: state.error ?? 'No se pudieron cargar las tareas',
+              onRetry: () => context.read<TaskCubit>().refresh(),
+            );
+          }
+
+          return TabBarView(
+            controller: _tabController,
+            children: [
+              for (var i = 0; i < _tabs.length; i++)
+                _TaskList(
+                  bucket: state.bucket(_tabs[i].filter),
+                  emptyLabel: _tabs[i].emptyLabel,
+                  controller: _scrollControllers[i],
+                  // Only the visible tab may show a footer spinner.
+                  isActive: state.activeFilter == _tabs[i].filter,
+                ),
+            ],
+          );
+        },
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const TaskFormPage()),
+        ),
+        icon: const Icon(Icons.add),
+        label: const Text('Tarea'),
+      ),
+    );
+  }
+}
+
+class _TaskList extends StatelessWidget {
+  final TaskBucket bucket;
+  final String emptyLabel;
+  final ScrollController controller;
+  final bool isActive;
+
+  const _TaskList({
+    required this.bucket,
+    required this.emptyLabel,
+    required this.controller,
+    required this.isActive,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final tasks = bucket.items;
 
     if (tasks.isEmpty) {
       return RefreshIndicator(
         onRefresh: () => context.read<TaskCubit>().refresh(),
         // AlwaysScrollable keeps pull-to-refresh reachable on an empty list.
         child: ListView(
+          controller: controller,
           physics: const AlwaysScrollableScrollPhysics(),
           children: [
             SizedBox(
               height: MediaQuery.of(context).size.height * 0.6,
-              child: EmptyState(icon: Icons.checklist_rtl, title: widget.emptyLabel),
+              child: EmptyState(icon: Icons.checklist_rtl, title: emptyLabel),
             ),
           ],
         ),
       );
     }
 
+    final showSpinner = isActive && bucket.isLoadingMore;
+
     return RefreshIndicator(
       onRefresh: () => context.read<TaskCubit>().refresh(),
       child: ListView.separated(
-        controller: _controller,
+        controller: controller,
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
-        itemCount: tasks.length + (widget.isLoadingMore ? 1 : 0),
+        // +1 for the count header, +1 for the footer spinner when fetching.
+        itemCount: tasks.length + 1 + (showSpinner ? 1 : 0),
         separatorBuilder: (_, __) => const SizedBox(height: 10),
         itemBuilder: (context, i) {
-          // Footer spinner while the next page is in flight; nothing at all
-          // once the list is exhausted.
-          if (i >= tasks.length) {
+          if (i == 0) {
+            return _CountHeader(loaded: tasks.length, total: bucket.total);
+          }
+          if (i > tasks.length) {
             return const Padding(
               padding: EdgeInsets.symmetric(vertical: 24),
               child: Center(child: CircularProgressIndicator()),
             );
           }
-          final task = tasks[i];
+
+          final task = tasks[i - 1];
           return Slidable(
             key: ValueKey(task.id),
             endActionPane: ActionPane(
@@ -236,6 +261,33 @@ class _TaskListState extends State<_TaskList> {
   }
 }
 
+/// "12 de 61" — without it a paginated list gives no way to tell "that's
+/// everything" from "there is more below".
+class _CountHeader extends StatelessWidget {
+  final int loaded;
+  final int? total;
+
+  const _CountHeader({required this.loaded, required this.total});
+
+  @override
+  Widget build(BuildContext context) {
+    // `total` only arrives with the first page; keep showing just the count
+    // rather than a stale or missing denominator.
+    final label = total == null ? '$loaded tareas' : '$loaded de $total';
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: AppColors.textSecondary,
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
 
 /// Error state with a retry action, shown when the first page fails.
 class _ErrorRetry extends StatelessWidget {

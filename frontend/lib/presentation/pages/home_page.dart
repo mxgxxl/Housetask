@@ -31,10 +31,15 @@ class HomePage extends StatelessWidget {
           },
           child: BlocBuilder<TaskCubit, TaskState>(
             builder: (context, taskState) {
-              final today = _todayTasks(taskState.pending);
-              final upcoming = _upcomingTasks(taskState.pending);
-              final completedThisWeek = _completedThisWeek(taskState.completed);
-              final streak = _streak(taskState.completed);
+              // Reads the unfiltered bucket on purpose: the dashboard must not
+              // change because the tasks tab is showing "Completadas".
+              final all = taskState.allTasks;
+              final pending = all.where((t) => !t.isCompleted).toList();
+              final completed = all.where((t) => t.isCompleted).toList();
+              final today = _todayTasks(pending);
+              final upcoming = _upcomingTasks(pending);
+              final completedThisWeek = _completedThisWeek(completed);
+              final streak = _streak(completed);
 
               return ListView(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),

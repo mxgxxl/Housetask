@@ -7,51 +7,72 @@ import '../../services/notification_service.dart';
 
 enum TaskStatusUi { initial, loading, loaded, error }
 
-class TaskState extends Equatable {
-  final TaskStatusUi status;
-  final List<Task> tasks;
-  final String? error;
+/// Which slice of the household's tasks a tab is showing.
+///
+/// Each value maps to a server-side query, not to a local `where`: filtering a
+/// paginated list on the client shows only what happens to be loaded, which is
+/// how "Completadas" used to look empty until the user had scrolled past every
+/// pending task.
+enum TaskFilter { all, pending, completed }
 
-  /// Cursor for the next page, or null when the list is fully loaded.
+extension TaskFilterQuery on TaskFilter {
+  /// The `?status=` value, or null for the unfiltered list.
+  String? get statusParam {
+    switch (this) {
+      case TaskFilter.pending:
+        return 'pending';
+      case TaskFilter.completed:
+        return 'completed';
+      case TaskFilter.all:
+        return null;
+    }
+  }
+
+  /// Whether a task belongs in this slice — used to keep buckets consistent
+  /// when a realtime event or a local mutation changes a task's status.
+  bool matches(Task task) {
+    switch (this) {
+      case TaskFilter.all:
+        return true;
+      case TaskFilter.pending:
+        return !task.isCompleted;
+      case TaskFilter.completed:
+        return task.isCompleted;
+    }
+  }
+}
+
+/// Independent pagination state for one filter.
+///
+/// Tabs must not share a cursor: advancing "Pendientes" would otherwise skip
+/// rows in "Completadas", and one tab's spinner would appear in all three.
+class TaskBucket extends Equatable {
+  final List<Task> items;
   final String? nextCursor;
-
-  /// Whether the server reported more rows after the last page.
   final bool hasMore;
-
-  /// A page fetch is in flight; guards against the scroll listener firing
-  /// repeatedly while one request is already running.
   final bool isLoadingMore;
 
-  /// Server-side total, captured from the first page (later pages send null).
+  /// Server-side total for this filter, from its first page (later pages send
+  /// null). Kept so the header can show "12 de 61".
   final int? total;
 
-  const TaskState({
-    this.status = TaskStatusUi.initial,
-    this.tasks = const [],
-    this.error,
+  const TaskBucket({
+    this.items = const [],
     this.nextCursor,
     this.hasMore = false,
     this.isLoadingMore = false,
     this.total,
   });
 
-  List<Task> get pending => tasks.where((t) => !t.isCompleted).toList();
-  List<Task> get completed => tasks.where((t) => t.isCompleted).toList();
-  List<Task> get recurring => tasks.where((t) => t.isRecurring).toList();
-
-  TaskState copyWith({
-    TaskStatusUi? status,
-    List<Task>? tasks,
-    String? error,
+  TaskBucket copyWith({
+    List<Task>? items,
     String? nextCursor,
     bool? hasMore,
     bool? isLoadingMore,
     int? total,
   }) {
-    return TaskState(
-      status: status ?? this.status,
-      tasks: tasks ?? this.tasks,
-      error: error,
+    return TaskBucket(
+      items: items ?? this.items,
       // Explicitly nullable: reaching the last page must be able to clear it.
       nextCursor: nextCursor,
       hasMore: hasMore ?? this.hasMore,
@@ -61,8 +82,61 @@ class TaskState extends Equatable {
   }
 
   @override
-  List<Object?> get props =>
-      [status, tasks, error, nextCursor, hasMore, isLoadingMore, total];
+  List<Object?> get props => [items, nextCursor, hasMore, isLoadingMore, total];
+}
+
+class TaskState extends Equatable {
+  final TaskStatusUi status;
+  final String? error;
+
+  /// The filter the visible tab is showing.
+  final TaskFilter activeFilter;
+
+  /// One independent pagination bucket per filter.
+  final Map<TaskFilter, TaskBucket> buckets;
+
+  const TaskState({
+    this.status = TaskStatusUi.initial,
+    this.error,
+    this.activeFilter = TaskFilter.all,
+    this.buckets = const {},
+  });
+
+  /// Pagination state for [filter], empty if it has never been loaded.
+  TaskBucket bucket(TaskFilter filter) => buckets[filter] ?? const TaskBucket();
+
+  /// The active tab's bucket — what the tasks page renders.
+  TaskBucket get active => bucket(activeFilter);
+
+  List<Task> get tasks => active.items;
+  String? get nextCursor => active.nextCursor;
+  bool get hasMore => active.hasMore;
+  bool get isLoadingMore => active.isLoadingMore;
+  int? get total => active.total;
+
+  /// Every task loaded under the unfiltered slice.
+  ///
+  /// Dashboard-style consumers (home, calendar) must read this rather than
+  /// [tasks]: otherwise switching the tasks tab to "Completadas" would empty
+  /// their views too.
+  List<Task> get allTasks => bucket(TaskFilter.all).items;
+
+  TaskState copyWith({
+    TaskStatusUi? status,
+    String? error,
+    TaskFilter? activeFilter,
+    Map<TaskFilter, TaskBucket>? buckets,
+  }) {
+    return TaskState(
+      status: status ?? this.status,
+      error: error,
+      activeFilter: activeFilter ?? this.activeFilter,
+      buckets: buckets ?? this.buckets,
+    );
+  }
+
+  @override
+  List<Object?> get props => [status, error, activeFilter, buckets];
 }
 
 /// Manages the task list for the active household, including realtime sync.
@@ -76,54 +150,110 @@ class TaskCubit extends Cubit<TaskState> {
 
   String? get householdId => _householdId;
 
-  /// Load the FIRST page, replacing whatever was loaded before and resetting
-  /// the cursor. Used by initial load and pull-to-refresh.
-  Future<void> load(String householdId) async {
+  Map<TaskFilter, TaskBucket> _withBucket(TaskFilter filter, TaskBucket bucket) {
+    return {...state.buckets, filter: bucket};
+  }
+
+  /// Load the FIRST page of [filter], replacing that bucket and resetting its
+  /// cursor. Other buckets are untouched.
+  ///
+  /// A null [filter] means the unfiltered list and sends no query param.
+  Future<void> load(String householdId, {TaskFilter? filter}) async {
     _householdId = householdId;
-    emit(state.copyWith(status: TaskStatusUi.loading, error: null));
+    final target = filter ?? TaskFilter.all;
+
+    emit(state.copyWith(
+      status: TaskStatusUi.loading,
+      activeFilter: target,
+      error: null,
+    ));
+
     try {
-      final page = await _repo.list(householdId);
+      final page = await _repo.list(householdId, status: target.statusParam);
       emit(state.copyWith(
         status: TaskStatusUi.loaded,
-        tasks: _sorted(page.items),
-        nextCursor: page.nextCursor,
-        hasMore: page.hasMore,
-        isLoadingMore: false,
-        total: page.total,
+        buckets: _withBucket(
+          target,
+          TaskBucket(
+            items: _sorted(page.items),
+            nextCursor: page.nextCursor,
+            hasMore: page.hasMore,
+            isLoadingMore: false,
+            total: page.total,
+          ),
+        ),
       ));
     } on Failure catch (f) {
       emit(state.copyWith(status: TaskStatusUi.error, error: f.message));
     }
   }
 
-  /// Append the next page. No-op when the list is exhausted or a fetch is
-  /// already running — the scroll listener fires on every pixel of movement.
+  /// Switch tabs. Reloads only when the filter actually changes, so tapping the
+  /// current tab does not refetch.
+  Future<void> setFilter(TaskFilter? filter) async {
+    final target = filter ?? TaskFilter.all;
+    if (target == state.activeFilter && state.bucket(target).items.isNotEmpty) {
+      return;
+    }
+    if (_householdId == null) {
+      emit(state.copyWith(activeFilter: target));
+      return;
+    }
+    await load(_householdId!, filter: target);
+  }
+
+  Future<void> refresh() async {
+    if (_householdId != null) {
+      await load(_householdId!, filter: state.activeFilter);
+    }
+  }
+
+  /// Append the next page of the ACTIVE filter. No-op when that bucket is
+  /// exhausted or already fetching — the scroll listener fires on every pixel.
   Future<void> loadMore() async {
     if (_householdId == null) return;
-    if (!state.hasMore || state.isLoadingMore || state.nextCursor == null) return;
 
-    emit(state.copyWith(nextCursor: state.nextCursor, isLoadingMore: true, error: null));
+    final filter = state.activeFilter;
+    final current = state.bucket(filter);
+    if (!current.hasMore || current.isLoadingMore || current.nextCursor == null) {
+      return;
+    }
+
+    emit(state.copyWith(
+      buckets: _withBucket(
+        filter,
+        current.copyWith(nextCursor: current.nextCursor, isLoadingMore: true),
+      ),
+    ));
+
     try {
-      final page = await _repo.list(_householdId!, cursor: state.nextCursor);
+      final page = await _repo.list(
+        _householdId!,
+        status: filter.statusParam,
+        cursor: current.nextCursor,
+      );
       emit(state.copyWith(
         status: TaskStatusUi.loaded,
-        tasks: _sorted([...state.tasks, ...page.items]),
-        nextCursor: page.nextCursor,
-        hasMore: page.hasMore,
-        isLoadingMore: false,
+        buckets: _withBucket(
+          filter,
+          current.copyWith(
+            items: _sorted([...current.items, ...page.items]),
+            nextCursor: page.nextCursor,
+            hasMore: page.hasMore,
+            isLoadingMore: false,
+          ),
+        ),
       ));
     } on Failure catch (f) {
       // Keep the pages already loaded; only surface the error.
       emit(state.copyWith(
-        nextCursor: state.nextCursor,
-        isLoadingMore: false,
         error: f.message,
+        buckets: _withBucket(
+          filter,
+          current.copyWith(nextCursor: current.nextCursor, isLoadingMore: false),
+        ),
       ));
     }
-  }
-
-  Future<void> refresh() async {
-    if (_householdId != null) await load(_householdId!);
   }
 
   /// Ask the backend to generate any missed recurring occurrences, then reload
@@ -133,7 +263,7 @@ class TaskCubit extends Cubit<TaskState> {
       final data = await _repo.generateRecurringInstances(householdId);
       final generated = (data['generated'] as num?)?.toInt() ?? 0;
       if (generated > 0) {
-        await load(householdId);
+        await load(householdId, filter: state.activeFilter);
       }
     } catch (_) {
       // Non-critical background task; ignore failures.
@@ -206,24 +336,51 @@ class TaskCubit extends Cubit<TaskState> {
     }
   }
 
+  /// Place [task] in every bucket whose filter it matches and drop it from the
+  /// rest, so completing a task moves it from "Pendientes" to "Completadas"
+  /// without a refetch.
   void _upsert(Task task) {
-    final list = List<Task>.from(state.tasks);
-    final idx = list.indexWhere((t) => t.id == task.id);
-    if (idx >= 0) {
-      list[idx] = task;
-    } else {
-      list.add(task);
+    final updated = <TaskFilter, TaskBucket>{};
+
+    for (final filter in TaskFilter.values) {
+      final bucket = state.bucket(filter);
+      final items = List<Task>.from(bucket.items);
+      final index = items.indexWhere((t) => t.id == task.id);
+      final belongs = filter.matches(task);
+
+      if (belongs) {
+        if (index >= 0) {
+          items[index] = task;
+        } else {
+          items.add(task);
+        }
+      } else if (index >= 0) {
+        items.removeAt(index);
+      } else {
+        // Nothing to do for this bucket; keep it as-is to avoid needless rebuilds.
+        updated[filter] = bucket;
+        continue;
+      }
+
+      updated[filter] = bucket.copyWith(
+        items: _sorted(items),
+        nextCursor: bucket.nextCursor,
+      );
     }
-    emit(state.copyWith(
-      status: TaskStatusUi.loaded,
-      tasks: _sorted(list),
-      nextCursor: state.nextCursor,
-    ));
+
+    emit(state.copyWith(status: TaskStatusUi.loaded, buckets: updated));
   }
 
   void _remove(String id) {
-    final list = state.tasks.where((t) => t.id != id).toList();
-    emit(state.copyWith(tasks: list, nextCursor: state.nextCursor));
+    final updated = <TaskFilter, TaskBucket>{};
+    for (final filter in TaskFilter.values) {
+      final bucket = state.bucket(filter);
+      updated[filter] = bucket.copyWith(
+        items: bucket.items.where((t) => t.id != id).toList(),
+        nextCursor: bucket.nextCursor,
+      );
+    }
+    emit(state.copyWith(buckets: updated));
   }
 
   /// Pending first, then by due date ascending (nulls last).

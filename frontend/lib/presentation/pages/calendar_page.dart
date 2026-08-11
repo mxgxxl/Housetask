@@ -47,7 +47,9 @@ class _CalendarPageState extends State<CalendarPage> {
       ),
       body: BlocBuilder<TaskCubit, TaskState>(
         builder: (context, state) {
-          final events = _eventsFrom(state.tasks);
+          // Unfiltered bucket: the calendar shows the whole month regardless
+          // of which tab the tasks page is on.
+          final events = _eventsFrom(state.allTasks);
           final dayTasks = _eventsForDay(events, _selectedDay);
 
           return Column(

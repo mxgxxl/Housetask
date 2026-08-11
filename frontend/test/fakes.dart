@@ -50,6 +50,17 @@ class FakeTaskRepository implements TaskRepository {
 
   /// Cursors received by [list], in order — lets a test assert paging.
   final List<String?> receivedCursors = [];
+
+  /// `status` query params received by [list], in order — lets a test assert
+  /// that each tab queries the server instead of filtering locally.
+  final List<String?> receivedStatuses = [];
+
+  /// Pages keyed by status param, for tests that drive several tabs. Falls
+  /// back to [pages] when a status has no scripted queue.
+  final Map<String?, List<PaginatedResponse<Task>>> pagesByStatus;
+
+  final Map<String?, int> _callsByStatus = {};
+
   int listCalls = 0;
 
   /// Completed manually when non-null, so a test can hold a request open and
@@ -58,6 +69,7 @@ class FakeTaskRepository implements TaskRepository {
 
   FakeTaskRepository({
     this.pages = const [],
+    this.pagesByStatus = const {},
     this.failListWith,
     this.failCreateWith,
     this.gate,
@@ -71,8 +83,19 @@ class FakeTaskRepository implements TaskRepository {
     String? cursor,
   }) async {
     receivedCursors.add(cursor);
+    receivedStatuses.add(status);
     final index = listCalls;
     listCalls++;
+
+    final scripted = pagesByStatus[status];
+    if (scripted != null) {
+      final n = _callsByStatus[status] ?? 0;
+      _callsByStatus[status] = n + 1;
+      if (gate != null) await gate;
+      if (failListWith != null) throw failListWith!;
+      return n < scripted.length ? scripted[n] : const PaginatedResponse.empty();
+    }
+
     if (gate != null) await gate;
     if (failListWith != null) throw failListWith!;
     return index < pages.length ? pages[index] : const PaginatedResponse.empty();

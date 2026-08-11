@@ -236,6 +236,150 @@ void main() {
       expect(cubit.state.tasks.map((t) => t.id), ['1']);
     });
   });
+
+  group('TaskCubit per-tab filtering', () {
+    test('sends the right status param for each filter and none for all', () async {
+      final repo = FakeTaskRepository(
+        pagesByStatus: {
+          null: [page([buildTask('a')], total: 3)],
+          'pending': [page([buildTask('p')], total: 2)],
+          'completed': [page([buildTask('c', completed: true)], total: 1)],
+        },
+      );
+      final cubit = TaskCubit(repo, FakeNotificationService());
+
+      await cubit.load('h1');
+      await cubit.setFilter(TaskFilter.pending);
+      await cubit.setFilter(TaskFilter.completed);
+      await cubit.setFilter(null);
+
+      // The server does the filtering; a local `where` is what made
+      // "Completadas" look empty behind a page of pending tasks.
+      expect(repo.receivedStatuses, [null, 'pending', 'completed', null]);
+      expect(cubit.state.activeFilter, TaskFilter.all);
+    });
+
+    test('keeps one bucket per filter, each with its own items and total', () async {
+      final repo = FakeTaskRepository(
+        pagesByStatus: {
+          null: [page([buildTask('a'), buildTask('b', completed: true)], total: 2)],
+          'pending': [page([buildTask('a')], total: 1)],
+          'completed': [page([buildTask('b', completed: true)], total: 1)],
+        },
+      );
+      final cubit = TaskCubit(repo, FakeNotificationService());
+
+      await cubit.load('h1');
+      await cubit.setFilter(TaskFilter.pending);
+      await cubit.setFilter(TaskFilter.completed);
+
+      expect(cubit.state.bucket(TaskFilter.all).items.map((t) => t.id), ['a', 'b']);
+      expect(cubit.state.bucket(TaskFilter.all).total, 2);
+      expect(cubit.state.bucket(TaskFilter.pending).items.map((t) => t.id), ['a']);
+      expect(cubit.state.bucket(TaskFilter.pending).total, 1);
+      expect(cubit.state.bucket(TaskFilter.completed).items.map((t) => t.id), ['b']);
+      // The active getters follow the visible tab.
+      expect(cubit.state.tasks.map((t) => t.id), ['b']);
+      expect(cubit.state.total, 1);
+    });
+
+    test('loadMore advances only the active filter cursor', () async {
+      final repo = FakeTaskRepository(
+        pagesByStatus: {
+          'pending': [
+            page([buildTask('p1')], nextCursor: 'p-c1', hasMore: true, total: 2),
+            page([buildTask('p2')], nextCursor: null, hasMore: false),
+          ],
+          'completed': [
+            page([buildTask('c1', completed: true)],
+                nextCursor: 'c-c1', hasMore: true, total: 5),
+          ],
+        },
+      );
+      final cubit = TaskCubit(repo, FakeNotificationService());
+
+      // main_scaffold always loads before the user can reach the tabs, so the
+      // cubit knows its household by the time setFilter runs.
+      await cubit.load('h1');
+      await cubit.setFilter(TaskFilter.completed);
+      await cubit.setFilter(TaskFilter.pending);
+      await cubit.loadMore();
+
+      // Pending advanced and exhausted...
+      expect(cubit.state.bucket(TaskFilter.pending).items.map((t) => t.id), ['p1', 'p2']);
+      expect(cubit.state.bucket(TaskFilter.pending).nextCursor, isNull);
+      expect(cubit.state.bucket(TaskFilter.pending).hasMore, isFalse);
+      // ...while completed kept its own untouched cursor.
+      expect(cubit.state.bucket(TaskFilter.completed).nextCursor, 'c-c1');
+      expect(cubit.state.bucket(TaskFilter.completed).hasMore, isTrue);
+      expect(cubit.state.bucket(TaskFilter.completed).items.map((t) => t.id), ['c1']);
+      // The pending cursor, never the completed one, was sent.
+      expect(repo.receivedCursors, [null, null, null, 'p-c1']);
+    });
+
+    test('setFilter does not refetch a tab that is already loaded', () async {
+      final repo = FakeTaskRepository(
+        pagesByStatus: {
+          'pending': [page([buildTask('p1')], total: 1)],
+        },
+      );
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+      final callsAfterLoad = repo.listCalls;
+
+      await cubit.setFilter(TaskFilter.pending);
+      await cubit.setFilter(TaskFilter.pending);
+
+      // Only the first switch fetches; re-tapping the current tab must not.
+      expect(repo.listCalls, callsAfterLoad + 1);
+    });
+
+    test('completing a task moves it between buckets without a refetch', () async {
+      final repo = FakeTaskRepository(
+        pagesByStatus: {
+          null: [page([buildTask('t1')], total: 1)],
+          'pending': [page([buildTask('t1')], total: 1)],
+          'completed': [page(const [], total: 0)],
+        },
+      );
+      final cubit = TaskCubit(repo, FakeNotificationService());
+
+      await cubit.load('h1');
+      await cubit.setFilter(TaskFilter.completed);
+      await cubit.setFilter(TaskFilter.pending);
+
+      cubit.applyRealtime('task:completed', {
+        'id': 't1',
+        'householdId': 'h1',
+        'title': 'Tarea',
+        'status': 'completed',
+        'isRecurring': false,
+      });
+
+      // Leaves "Pendientes", appears in "Completadas", stays in "Todas".
+      expect(cubit.state.bucket(TaskFilter.pending).items, isEmpty);
+      expect(cubit.state.bucket(TaskFilter.completed).items.map((t) => t.id), ['t1']);
+      expect(cubit.state.bucket(TaskFilter.all).items.map((t) => t.id), ['t1']);
+    });
+
+    test('deleting removes the task from every bucket', () async {
+      final repo = FakeTaskRepository(
+        pagesByStatus: {
+          null: [page([buildTask('t1')], total: 1)],
+          'pending': [page([buildTask('t1')], total: 1)],
+        },
+      );
+      final cubit = TaskCubit(repo, FakeNotificationService());
+
+      await cubit.load('h1');
+      await cubit.setFilter(TaskFilter.pending);
+
+      cubit.applyRealtime('task:deleted', {'id': 't1', 'householdId': 'h1'});
+
+      expect(cubit.state.bucket(TaskFilter.all).items, isEmpty);
+      expect(cubit.state.bucket(TaskFilter.pending).items, isEmpty);
+    });
+  });
 }
 
 /// First page succeeds, second fails — models a mid-scroll network drop.
