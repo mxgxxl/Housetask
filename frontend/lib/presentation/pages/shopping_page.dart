@@ -17,7 +17,13 @@ class ShoppingPage extends StatefulWidget {
 }
 
 class _ShoppingPageState extends State<ShoppingPage> {
-  static const _categoryOrder = ['fridge', 'pantry', 'cleaning', 'personal', 'other'];
+  static const _categoryOrder = [
+    'fridge',
+    'pantry',
+    'cleaning',
+    'personal',
+    'other'
+  ];
 
   final ScrollController _controller = ScrollController();
 
@@ -107,7 +113,8 @@ class _ShoppingPageState extends State<ShoppingPage> {
                         ),
                         const SizedBox(width: 6),
                         Text('(${grouped[category]!.length})',
-                            style: const TextStyle(color: AppColors.textSecondary)),
+                            style: const TextStyle(
+                                color: AppColors.textSecondary)),
                       ],
                     ),
                   ),
@@ -153,7 +160,8 @@ class _ErrorRetry extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.cloud_off, size: 48, color: AppColors.textSecondary),
+            const Icon(Icons.cloud_off,
+                size: 48, color: AppColors.textSecondary),
             const SizedBox(height: 12),
             Text(message, textAlign: TextAlign.center),
             const SizedBox(height: 16),
@@ -176,54 +184,112 @@ class _ShoppingTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Slidable(
-      key: ValueKey(item.id),
-      endActionPane: ActionPane(
-        motion: const DrawerMotion(),
-        extentRatio: 0.5,
-        children: [
-          SlidableAction(
-            onPressed: (_) => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => ShoppingFormPage(item: item)),
+    // isDeleted implies isSynced == false (ShoppingRepository sets both
+    // together for an offline delete): the strike-through and the
+    // pending-sync cloud below combine into "queued to be removed once back
+    // online" without needing a third state.
+    final struckThrough = item.isPurchased || item.isDeleted;
+
+    return Opacity(
+      opacity: item.isDeleted ? 0.5 : 1,
+      child: Slidable(
+        key: ValueKey(item.id),
+        endActionPane: ActionPane(
+          motion: const DrawerMotion(),
+          extentRatio: 0.5,
+          children: [
+            SlidableAction(
+              onPressed: (_) => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => ShoppingFormPage(item: item)),
+              ),
+              backgroundColor: AppColors.secondary,
+              foregroundColor: Colors.white,
+              icon: Icons.edit_outlined,
+              label: 'Editar',
+              borderRadius: BorderRadius.circular(16),
             ),
-            backgroundColor: AppColors.secondary,
-            foregroundColor: Colors.white,
-            icon: Icons.edit_outlined,
-            label: 'Editar',
-            borderRadius: BorderRadius.circular(16),
+            SlidableAction(
+              onPressed: (_) =>
+                  context.read<ShoppingCubit>().deleteItem(item.id),
+              backgroundColor: AppColors.error,
+              foregroundColor: Colors.white,
+              icon: Icons.delete_outline,
+              label: 'Eliminar',
+              borderRadius: BorderRadius.circular(16),
+            ),
+          ],
+        ),
+        child: Card(
+          child: ListTile(
+            onTap: () => context.read<ShoppingCubit>().togglePurchased(item),
+            leading: Icon(
+              item.isPurchased
+                  ? Icons.check_box
+                  : Icons.check_box_outline_blank,
+              color: item.isPurchased
+                  ? AppColors.priorityLow
+                  : AppColors.textSecondary,
+            ),
+            title: Text(
+              item.name,
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                decoration: struckThrough ? TextDecoration.lineThrough : null,
+                color: struckThrough
+                    ? AppColors.textSecondary
+                    : AppColors.textPrimary,
+              ),
+            ),
+            subtitle: Text('${item.quantity} ${item.unit}'),
+            trailing: (item.isRecurring || !item.isSynced)
+                ? Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (item.isRecurring) ...[
+                        const Icon(Icons.repeat,
+                            size: 18, color: AppColors.secondary),
+                        const SizedBox(width: 6),
+                      ],
+                      if (!item.isSynced) const _ShoppingPendingSyncIndicator(),
+                    ],
+                  )
+                : null,
           ),
-          SlidableAction(
-            onPressed: (_) => context.read<ShoppingCubit>().deleteItem(item.id),
-            backgroundColor: AppColors.error,
-            foregroundColor: Colors.white,
-            icon: Icons.delete_outline,
-            label: 'Eliminar',
-            borderRadius: BorderRadius.circular(16),
-          ),
-        ],
+        ),
       ),
-      child: Card(
-        child: ListTile(
-          onTap: () => context.read<ShoppingCubit>().togglePurchased(item),
-          leading: Icon(
-            item.isPurchased
-                ? Icons.check_box
-                : Icons.check_box_outline_blank,
-            color: item.isPurchased ? AppColors.priorityLow : AppColors.textSecondary,
-          ),
-          title: Text(
-            item.name,
-            style: TextStyle(
-              fontWeight: FontWeight.w600,
-              decoration: item.isPurchased ? TextDecoration.lineThrough : null,
-              color:
-                  item.isPurchased ? AppColors.textSecondary : AppColors.textPrimary,
+    );
+  }
+}
+
+/// Mirrors task_tile.dart's _PendingSyncIndicator: a shopping item created,
+/// edited, or deleted offline (TD-003) still waiting on
+/// ShoppingCubit.syncPending to replay it against the server.
+class _ShoppingPendingSyncIndicator extends StatelessWidget {
+  const _ShoppingPendingSyncIndicator();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Tooltip(
+      message: 'Pendiente de sincronizar',
+      child: SizedBox(
+        width: 26,
+        height: 18,
+        child: Stack(
+          alignment: Alignment.centerLeft,
+          children: [
+            Icon(Icons.cloud_queue, size: 16, color: AppColors.secondary),
+            Positioned(
+              right: 0,
+              child: SizedBox(
+                width: 10,
+                height: 10,
+                child: CircularProgressIndicator(
+                  strokeWidth: 1.5,
+                  color: AppColors.secondary,
+                ),
+              ),
             ),
-          ),
-          subtitle: Text('${item.quantity} ${item.unit}'),
-          trailing: item.isRecurring
-              ? const Icon(Icons.repeat, size: 18, color: AppColors.secondary)
-              : null,
+          ],
         ),
       ),
     );

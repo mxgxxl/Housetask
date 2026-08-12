@@ -40,6 +40,9 @@ class ShoppingState extends Equatable {
   /// One-shot "saved offline" notice, mirroring [TaskState.offlineNotice].
   final String? offlineNotice;
 
+  /// True while [ShoppingCubit.syncPending] is replaying the offline queue.
+  final bool isSyncing;
+
   const ShoppingState({
     this.status = ShoppingStatusUi.initial,
     this.items = const [],
@@ -50,6 +53,7 @@ class ShoppingState extends Equatable {
     this.total,
     this.isOffline = false,
     this.offlineNotice,
+    this.isSyncing = false,
   });
 
   List<ShoppingItem> get pending => items.where((i) => !i.isPurchased).toList();
@@ -75,6 +79,7 @@ class ShoppingState extends Equatable {
     int? total,
     bool? isOffline,
     String? offlineNotice,
+    bool? isSyncing,
   }) {
     return ShoppingState(
       status: status ?? this.status,
@@ -87,6 +92,7 @@ class ShoppingState extends Equatable {
       total: total ?? this.total,
       isOffline: isOffline ?? this.isOffline,
       offlineNotice: offlineNotice,
+      isSyncing: isSyncing ?? this.isSyncing,
     );
   }
 
@@ -101,6 +107,7 @@ class ShoppingState extends Equatable {
         total,
         isOffline,
         offlineNotice,
+        isSyncing,
       ];
 }
 
@@ -137,9 +144,14 @@ class ShoppingCubit extends Cubit<ShoppingState> {
   /// Replay the queued offline operations, then refresh from the server if
   /// anything was actually applied — called automatically on reconnection.
   Future<void> syncPending() async {
-    final processed = await _repo.syncPendingOperations();
-    if (processed > 0 && _householdId != null) {
-      await load(_householdId!);
+    emit(state.copyWith(isSyncing: true));
+    try {
+      final processed = await _repo.syncPendingOperations();
+      if (processed > 0 && _householdId != null) {
+        await load(_householdId!);
+      }
+    } finally {
+      emit(state.copyWith(isSyncing: false));
     }
   }
 

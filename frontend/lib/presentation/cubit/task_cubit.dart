@@ -126,6 +126,10 @@ class TaskState extends Equatable {
   /// exactly once, then calls [TaskCubit.clearOfflineNotice].
   final String? offlineNotice;
 
+  /// True while [TaskCubit.syncPending] is replaying the offline queue —
+  /// drives the spinner in the offline banner (TD-003).
+  final bool isSyncing;
+
   const TaskState({
     this.status = TaskStatusUi.initial,
     this.error,
@@ -133,6 +137,7 @@ class TaskState extends Equatable {
     this.buckets = const {},
     this.isOffline = false,
     this.offlineNotice,
+    this.isSyncing = false,
   });
 
   /// Pagination state for [filter], empty if it has never been loaded.
@@ -161,6 +166,7 @@ class TaskState extends Equatable {
     Map<TaskFilter, TaskBucket>? buckets,
     bool? isOffline,
     String? offlineNotice,
+    bool? isSyncing,
   }) {
     return TaskState(
       status: status ?? this.status,
@@ -169,12 +175,13 @@ class TaskState extends Equatable {
       buckets: buckets ?? this.buckets,
       isOffline: isOffline ?? this.isOffline,
       offlineNotice: offlineNotice,
+      isSyncing: isSyncing ?? this.isSyncing,
     );
   }
 
   @override
   List<Object?> get props =>
-      [status, error, activeFilter, buckets, isOffline, offlineNotice];
+      [status, error, activeFilter, buckets, isOffline, offlineNotice, isSyncing];
 }
 
 /// Manages the task list for the active household, including realtime sync.
@@ -214,9 +221,14 @@ class TaskCubit extends Cubit<TaskState> {
   /// anything was actually applied — called automatically on reconnection,
   /// and available for a manual "retry sync" action in the UI.
   Future<void> syncPending() async {
-    final processed = await _repo.syncPendingOperations();
-    if (processed > 0 && _householdId != null) {
-      await load(_householdId!, filter: state.activeFilter);
+    emit(state.copyWith(isSyncing: true));
+    try {
+      final processed = await _repo.syncPendingOperations();
+      if (processed > 0 && _householdId != null) {
+        await load(_householdId!, filter: state.activeFilter);
+      }
+    } finally {
+      emit(state.copyWith(isSyncing: false));
     }
   }
 

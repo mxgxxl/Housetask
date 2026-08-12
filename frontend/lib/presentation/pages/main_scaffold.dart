@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../config/theme.dart';
+import '../../services/cache_service.dart';
 import '../cubit/household_cubit.dart';
 import '../cubit/shopping_cubit.dart';
 import '../cubit/socket_cubit.dart';
@@ -75,7 +76,12 @@ class _MainScaffoldState extends State<MainScaffold> {
         }
 
         return Scaffold(
-          body: IndexedStack(index: _index, children: _pages),
+          body: Column(
+            children: [
+              const _OfflineBanner(),
+              Expanded(child: IndexedStack(index: _index, children: _pages)),
+            ],
+          ),
           bottomNavigationBar: NavigationBar(
             selectedIndex: _index,
             onDestinationSelected: (i) => setState(() => _index = i),
@@ -111,6 +117,74 @@ class _MainScaffoldState extends State<MainScaffold> {
           ),
         );
       },
+    );
+  }
+}
+
+/// Yellow bar shown above the tab content whenever the task or shopping list
+/// most recently fell back to the offline cache (TD-003). Combines both
+/// cubits — either one being offline means the household's data may be
+/// stale — and shows the queued-writes count and a spinner while
+/// [TaskCubit.syncPending]/[ShoppingCubit.syncPending] is replaying them.
+class _OfflineBanner extends StatelessWidget {
+  const _OfflineBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    final taskState = context.watch<TaskCubit>().state;
+    final shoppingState = context.watch<ShoppingCubit>().state;
+
+    final isOffline = taskState.isOffline || shoppingState.isOffline;
+    if (!isOffline) return const SizedBox.shrink();
+
+    final isSyncing = taskState.isSyncing || shoppingState.isSyncing;
+    final pendingCount = CacheService().pendingOperationsCount;
+
+    return Container(
+      width: double.infinity,
+      color: AppColors.priorityMedium,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        children: [
+          const Icon(Icons.cloud_off, size: 16, color: Colors.black87),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text(
+              'Sin conexión — cambios guardados localmente',
+              style: TextStyle(
+                color: Colors.black87,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          if (pendingCount > 0) ...[
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.black87,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                '$pendingCount',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
+          if (isSyncing)
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: Colors.black87),
+            ),
+        ],
+      ),
     );
   }
 }
