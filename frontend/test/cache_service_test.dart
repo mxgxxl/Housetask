@@ -173,7 +173,7 @@ void main() {
       CacheService().removePendingOperation('a');
 
       expect(CacheService().getPendingOperations().map((o) => o.id), ['b']);
-      expect(CacheService().pendingOperationsCount, 1);
+      expect(CacheService().pendingOperationsCountSync, 1);
     });
   });
 

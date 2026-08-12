@@ -78,7 +78,7 @@ class _MainScaffoldState extends State<MainScaffold> {
         return Scaffold(
           body: Column(
             children: [
-              const _OfflineBanner(),
+              const OfflineBanner(),
               Expanded(child: IndexedStack(index: _index, children: _pages)),
             ],
           ),
@@ -126,8 +126,12 @@ class _MainScaffoldState extends State<MainScaffold> {
 /// cubits — either one being offline means the household's data may be
 /// stale — and shows the queued-writes count and a spinner while
 /// [TaskCubit.syncPending]/[ShoppingCubit.syncPending] is replaying them.
-class _OfflineBanner extends StatelessWidget {
-  const _OfflineBanner();
+///
+/// Public (not `_OfflineBanner`) so widget tests can pump it directly with
+/// just the two cubits it needs, instead of standing up all of
+/// [MainScaffold]'s other page dependencies to reach it.
+class OfflineBanner extends StatelessWidget {
+  const OfflineBanner({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -138,7 +142,6 @@ class _OfflineBanner extends StatelessWidget {
     if (!isOffline) return const SizedBox.shrink();
 
     final isSyncing = taskState.isSyncing || shoppingState.isSyncing;
-    final pendingCount = CacheService().pendingOperationsCount;
 
     return Container(
       width: double.infinity,
@@ -158,24 +161,35 @@ class _OfflineBanner extends StatelessWidget {
               ),
             ),
           ),
-          if (pendingCount > 0) ...[
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-              decoration: BoxDecoration(
-                color: Colors.black87,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Text(
-                '$pendingCount',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
+          // A dedicated stream, not a synchronous read in this build method,
+          // so the badge updates the instant the queue drains or grows
+          // instead of only when TaskCubit/ShoppingCubit happens to re-emit.
+          StreamBuilder<int>(
+            stream: CacheService().pendingOperationsCount,
+            builder: (context, snapshot) {
+              final pendingCount = snapshot.data ?? 0;
+              if (pendingCount <= 0) return const SizedBox.shrink();
+              return Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.black87,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '$pendingCount',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                 ),
-              ),
-            ),
-            const SizedBox(width: 8),
-          ],
+              );
+            },
+          ),
           if (isSyncing)
             const SizedBox(
               width: 14,

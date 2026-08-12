@@ -52,9 +52,13 @@ class CacheService {
     }
 
     if (!Hive.isAdapterRegistered(0)) Hive.registerAdapter(TaskAdapter());
-    if (!Hive.isAdapterRegistered(1)) Hive.registerAdapter(ShoppingItemAdapter());
+    if (!Hive.isAdapterRegistered(1)) {
+      Hive.registerAdapter(ShoppingItemAdapter());
+    }
     if (!Hive.isAdapterRegistered(2)) Hive.registerAdapter(HouseholdAdapter());
-    if (!Hive.isAdapterRegistered(3)) Hive.registerAdapter(PendingOperationAdapter());
+    if (!Hive.isAdapterRegistered(3)) {
+      Hive.registerAdapter(PendingOperationAdapter());
+    }
 
     _tasksBox = await Hive.openBox<Task>(_tasksBoxName);
     _shoppingBox = await Hive.openBox<ShoppingItem>(_shoppingBoxName);
@@ -101,7 +105,9 @@ class CacheService {
   void saveTasks(String householdId, List<Task> tasks) {
     final staleKeys = _tasks.keys.where((k) {
       final cached = _tasks.get(k);
-      return cached != null && cached.householdId == householdId && cached.isSynced;
+      return cached != null &&
+          cached.householdId == householdId &&
+          cached.isSynced;
     }).toList();
     for (final key in staleKeys) {
       _tasks.delete(key);
@@ -125,7 +131,9 @@ class CacheService {
   void saveShopping(String householdId, List<ShoppingItem> items) {
     final staleKeys = _shopping.keys.where((k) {
       final cached = _shopping.get(k);
-      return cached != null && cached.householdId == householdId && cached.isSynced;
+      return cached != null &&
+          cached.householdId == householdId &&
+          cached.isSynced;
     }).toList();
     for (final key in staleKeys) {
       _shopping.delete(key);
@@ -144,7 +152,8 @@ class CacheService {
 
   // ---- Households ----
 
-  void saveHousehold(Household household) => _households.put(household.id, household);
+  void saveHousehold(Household household) =>
+      _households.put(household.id, household);
 
   List<Household> getHouseholds() => _households.values.toList();
 
@@ -167,7 +176,22 @@ class CacheService {
   void updatePendingOperation(PendingOperation operation) =>
       _pendingOperations.put(operation.id, operation);
 
-  int get pendingOperationsCount => _pendingOperations.length;
+  /// Synchronous snapshot of the queue size. Kept for callers that only need
+  /// a one-off read (e.g. a log line, a non-reactive check) — UI that must
+  /// stay live as the queue drains should use the [pendingOperationsCount]
+  /// stream instead, since this value goes stale the instant it's read.
+  int get pendingOperationsCountSync => _pendingOperations.length;
+
+  /// Live queue size: yields the current count immediately on listen, then
+  /// again every time the box changes (via Hive's own `watch()`), so a
+  /// `StreamBuilder` badge stays exact without polling or piggybacking on an
+  /// unrelated cubit rebuild. A getter rather than a stored field so every
+  /// subscriber gets its own generator instance and its own immediate
+  /// current-value emission.
+  Stream<int> get pendingOperationsCount async* {
+    yield _pendingOperations.length;
+    yield* _pendingOperations.watch().map((_) => _pendingOperations.length);
+  }
 
   // ---- Logout ----
 
