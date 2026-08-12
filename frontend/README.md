@@ -100,6 +100,36 @@ the Inter typeface via `google_fonts`.
   reminder **1 hour before** a task's `dueDate`. Remote push (FCM) is left as
   a future step — no Firebase Auth/Firestore is used.
 
+## Offline support (TD-003)
+
+Tasks and shopping items are cached in Hive and readable while offline.
+Creates/updates/deletes made offline (or during a network-shaped failure) are
+applied optimistically and queued; `TaskCubit`/`ShoppingCubit.syncPending()`
+replays the queue automatically as soon as `ConnectivityService` reports the
+device is back online. See ADR-010 in the root `CLAUDE.md` for the full design
+(cache-first reads, the pending-operations queue, and why conflict resolution
+is last-write-wins for now — TD-039).
+
+## Known Issues
+
+### sentry-cocoa version drift (TD-038)
+
+`sentry_flutter` 8.14.2 ships a `Package.swift` that allows any `sentry-cocoa`
+`8.x` (`from: "8.46.0"`), while its own `.podspec` pins exactly `8.46.0`. When
+Swift Package Manager resolves the newest matching version instead of the
+podspec's pin, it can land on a `sentry-cocoa` release (observed: 8.58.4)
+whose Swift API has moved on — in this case `SentryBinaryImageCache` — which
+breaks the plugin's iOS build.
+
+**Workaround applied:** both `Package.resolved` files are pinned to `8.46.0`,
+matching the podspec exactly. Re-pin on every `sentry_flutter` upgrade until
+upstream tightens the `Package.swift` constraint to match the podspec.
+
+**Not automated:** filing the upstream issue against `getsentry/sentry-cocoa`
+to ask for that constraint to be tightened is a human action (a GitHub
+account and maintainer engagement) and is intentionally left as a manual
+follow-up rather than something this codebase can do for you.
+
 ## Full end-to-end flow
 
 Register → Login → Create household → copy invite code → add task → complete
