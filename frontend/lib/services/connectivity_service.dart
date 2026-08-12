@@ -28,21 +28,47 @@ class ConnectivityService {
   Stream<bool> get isOnline {
     _controller ??= StreamController<bool>.broadcast(
       onListen: () {
-        _subscription = _connectivity.onConnectivityChanged.listen((results) {
-          _controller?.add(_isConnected(results));
-        });
+        // connectivity_plus's EventChannel sets up its platform subscription
+        // from an `async` callback of its own, so a missing/unmocked
+        // platform channel (no Flutter binding at all — a plain `flutter
+        // test`) surfaces as an *unhandled Future error* on this zone, not a
+        // synchronous throw a try/catch around .listen() could catch. A
+        // nested guarded zone is what actually intercepts it, so a cubit
+        // built without a fake ConnectivityService stays constructible in a
+        // headless test; production callers never see a difference.
+        runZonedGuarded(() {
+          _subscription = _connectivity.onConnectivityChanged.listen(
+            (results) => _controller?.add(_isConnected(results)),
+            onError: (_) {},
+          );
+        }, (_, __) {});
       },
       onCancel: () {
-        _subscription?.cancel();
+        // Same rationale as onListen above: cancelling can just as easily
+        // resolve to an unhandled Future error when there was never a real
+        // platform subscription to begin with.
+        runZonedGuarded(() {
+          _subscription?.cancel();
+        }, (_, __) {});
         _subscription = null;
       },
     );
     return _controller!.stream;
   }
 
+  /// Used on the hot path of every create/update/complete/delete to decide
+  /// online-first vs. queue-immediately. If the platform channel itself is
+  /// unavailable (plugin not registered, a plain `flutter test`), assume
+  /// online rather than throw: the mutation's own network attempt still has
+  /// a working isOfflineWorthy() fallback, whereas a thrown exception here
+  /// would crash the mutation outright instead of degrading gracefully.
   Future<bool> checkConnectivity() async {
-    final results = await _connectivity.checkConnectivity();
-    return _isConnected(results);
+    try {
+      final results = await _connectivity.checkConnectivity();
+      return _isConnected(results);
+    } catch (_) {
+      return true;
+    }
   }
 
   bool _isConnected(List<ConnectivityResult> results) =>

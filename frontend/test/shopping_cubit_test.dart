@@ -7,6 +7,14 @@ import 'package:homesync/presentation/cubit/shopping_cubit.dart';
 
 import 'fakes.dart';
 
+/// Flushes pending microtasks/timers — see task_cubit_test.dart's flushAsync
+/// for why this is needed instead of a single await.
+Future<void> flushAsync() async {
+  for (var i = 0; i < 5; i++) {
+    await Future<void>.delayed(Duration.zero);
+  }
+}
+
 PaginatedResponse<ShoppingItem> page(
   List<ShoppingItem> items, {
   String? nextCursor,
@@ -225,6 +233,126 @@ void main() {
       await cubit.deleteItem('1');
 
       expect(cubit.state.total, 3);
+    });
+  });
+
+  group('ShoppingCubit offline support (TD-003)', () {
+    test('load sets isOffline when the repository served the cache fallback', () async {
+      final repo = FakeShoppingRepository(pages: [page([buildItem('1')])]);
+      repo.lastListWasFromCache = true;
+      final cubit = ShoppingCubit(repo);
+
+      await cubit.load('h1');
+
+      expect(cubit.state.isOffline, isTrue);
+      expect(cubit.state.items.map((i) => i.id), ['1']);
+    });
+
+    test('load clears isOffline once a real page comes back', () async {
+      final repo = FakeShoppingRepository(pages: [page([buildItem('1')])]);
+      final cubit = ShoppingCubit(repo);
+
+      await cubit.load('h1');
+
+      expect(cubit.state.isOffline, isFalse);
+    });
+
+    test('createItem offline surfaces the unsynced item and an offline notice', () async {
+      final repo = FakeShoppingRepository(
+        pages: [page([buildItem('1')])],
+        returnsUnsynced: true,
+      );
+      final cubit = ShoppingCubit(repo);
+      await cubit.load('h1');
+
+      await cubit.createItem({'name': 'Sin red'});
+
+      expect(cubit.state.items.singleWhere((i) => i.id == 'created').isSynced, isFalse);
+      expect(cubit.state.offlineNotice, kShoppingOfflineNoticeMessage);
+    });
+
+    test('clearOfflineNotice consumes the notice without touching error', () async {
+      final repo = FakeShoppingRepository(
+        pages: [page([buildItem('1')])],
+        returnsUnsynced: true,
+      );
+      final cubit = ShoppingCubit(repo);
+      await cubit.load('h1');
+      await cubit.createItem({'name': 'Sin red'});
+      expect(cubit.state.offlineNotice, isNotNull);
+
+      cubit.clearOfflineNotice();
+
+      expect(cubit.state.offlineNotice, isNull);
+    });
+
+    test('deleteItem offline keeps the item visible, marked deleted and unsynced', () async {
+      final marked = buildItem('1').copyWith(isDeleted: true, isSynced: false);
+      final repo = FakeShoppingRepository(
+        pages: [page([buildItem('1')])],
+        offlineDeleteReturns: marked,
+      );
+      final cubit = ShoppingCubit(repo);
+      await cubit.load('h1');
+
+      await cubit.deleteItem('1');
+
+      final stored = cubit.state.items.singleWhere((i) => i.id == '1');
+      expect(stored.isDeleted, isTrue);
+      expect(stored.isSynced, isFalse);
+      expect(cubit.state.offlineNotice, kShoppingOfflineNoticeMessage);
+    });
+
+    test('deleteItem online removes the item outright', () async {
+      final repo = FakeShoppingRepository(pages: [page([buildItem('1')])]);
+      final cubit = ShoppingCubit(repo);
+      await cubit.load('h1');
+
+      await cubit.deleteItem('1');
+
+      expect(cubit.state.items, isEmpty);
+    });
+
+    test('syncPending reloads only when operations were actually processed', () async {
+      final repo = FakeShoppingRepository(pages: [page([buildItem('1')])]);
+      final cubit = ShoppingCubit(repo);
+      await cubit.load('h1');
+      final callsAfterLoad = repo.listCalls;
+
+      repo.syncPendingOperationsResult = 0;
+      await cubit.syncPending();
+      expect(repo.listCalls, callsAfterLoad);
+
+      repo.syncPendingOperationsResult = 2;
+      await cubit.syncPending();
+      expect(repo.listCalls, callsAfterLoad + 1);
+    });
+
+    test('reconnection (false→true) auto-triggers a sync', () async {
+      final fakeConnectivity = FakeConnectivityService();
+      final repo = FakeShoppingRepository(pages: [page([buildItem('1')])]);
+      final cubit = ShoppingCubit(repo, connectivity: fakeConnectivity);
+      await cubit.load('h1');
+      repo.syncPendingOperationsResult = 1;
+
+      fakeConnectivity.controller.add(false);
+      await flushAsync();
+      fakeConnectivity.controller.add(true);
+      await flushAsync();
+
+      expect(repo.syncCalls, 1);
+    });
+
+    test('staying online never triggers a sync (no false→true edge)', () async {
+      final fakeConnectivity = FakeConnectivityService();
+      final repo = FakeShoppingRepository(pages: [page([buildItem('1')])]);
+      final cubit = ShoppingCubit(repo, connectivity: fakeConnectivity);
+      await cubit.load('h1');
+
+      fakeConnectivity.controller.add(true);
+      await flushAsync();
+
+      expect(repo.syncCalls, 0);
     });
   });
 }

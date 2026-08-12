@@ -24,6 +24,8 @@ Map<String, dynamic> taskToCacheMap(Task task) {
     'isRecurring': task.isRecurring,
     'recurrenceRule': task.recurrenceRule?.toJson(),
     'parentTaskId': task.parentTaskId,
+    'isSynced': task.isSynced,
+    'isDeleted': task.isDeleted,
   };
 }
 

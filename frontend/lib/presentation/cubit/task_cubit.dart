@@ -1,9 +1,17 @@
+import 'dart:async';
+
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../core/errors/failures.dart';
 import '../../data/models/task.dart';
 import '../../data/repositories/task_repository.dart';
+import '../../services/connectivity_service.dart';
 import '../../services/notification_service.dart';
+
+/// Shown once (via BlocListener) after a mutation the repository could only
+/// perform optimistically, offline (TD-003).
+const kOfflineNoticeMessage =
+    'Guardado offline, se sincronizará cuando haya conexión';
 
 enum TaskStatusUi { initial, loading, loaded, error }
 
@@ -106,11 +114,25 @@ class TaskState extends Equatable {
   /// One independent pagination bucket per filter.
   final Map<TaskFilter, TaskBucket> buckets;
 
+  /// True when the most recent [TaskCubit.load] could not reach the server
+  /// and fell back to the Hive cache (TD-003). Persists across mutations —
+  /// unlike [error], it is not cleared by every emit — until the next load
+  /// either confirms connectivity or fails again offline.
+  final bool isOffline;
+
+  /// One-shot "saved offline" notice for a create/update/delete that could
+  /// only be applied optimistically. Cleared like [error]: every emit resets
+  /// it to null unless explicitly re-passed, so a BlocListener only sees it
+  /// exactly once, then calls [TaskCubit.clearOfflineNotice].
+  final String? offlineNotice;
+
   const TaskState({
     this.status = TaskStatusUi.initial,
     this.error,
     this.activeFilter = TaskFilter.all,
     this.buckets = const {},
+    this.isOffline = false,
+    this.offlineNotice,
   });
 
   /// Pagination state for [filter], empty if it has never been loaded.
@@ -137,29 +159,72 @@ class TaskState extends Equatable {
     String? error,
     TaskFilter? activeFilter,
     Map<TaskFilter, TaskBucket>? buckets,
+    bool? isOffline,
+    String? offlineNotice,
   }) {
     return TaskState(
       status: status ?? this.status,
       error: error,
       activeFilter: activeFilter ?? this.activeFilter,
       buckets: buckets ?? this.buckets,
+      isOffline: isOffline ?? this.isOffline,
+      offlineNotice: offlineNotice,
     );
   }
 
   @override
-  List<Object?> get props => [status, error, activeFilter, buckets];
+  List<Object?> get props =>
+      [status, error, activeFilter, buckets, isOffline, offlineNotice];
 }
 
 /// Manages the task list for the active household, including realtime sync.
 class TaskCubit extends Cubit<TaskState> {
   final TaskRepository _repo;
   final NotificationService _notifications;
+  final ConnectivityService _connectivity;
 
   String? _householdId;
+  StreamSubscription<bool>? _connectivitySub;
 
-  TaskCubit(this._repo, this._notifications) : super(const TaskState());
+  /// Last connectivity value seen, so the subscription can detect a
+  /// false→true edge rather than firing on every emission (the stream may
+  /// repeat `true` without ever having gone offline).
+  bool _wasOnline = true;
+
+  TaskCubit(this._repo, this._notifications, {ConnectivityService? connectivity})
+      : _connectivity = connectivity ?? ConnectivityService(),
+        super(const TaskState()) {
+    _connectivitySub = _connectivity.isOnline.listen((online) {
+      if (online && !_wasOnline) {
+        syncPending();
+      }
+      _wasOnline = online;
+    });
+  }
+
+  @override
+  Future<void> close() {
+    _connectivitySub?.cancel();
+    return super.close();
+  }
 
   String? get householdId => _householdId;
+
+  /// Replay the queued offline operations, then refresh from the server if
+  /// anything was actually applied — called automatically on reconnection,
+  /// and available for a manual "retry sync" action in the UI.
+  Future<void> syncPending() async {
+    final processed = await _repo.syncPendingOperations();
+    if (processed > 0 && _householdId != null) {
+      await load(_householdId!, filter: state.activeFilter);
+    }
+  }
+
+  /// Consume the one-shot [TaskState.offlineNotice] after the UI has shown
+  /// it, without disturbing [TaskState.error].
+  void clearOfflineNotice() {
+    emit(state.copyWith(error: state.error));
+  }
 
   Map<TaskFilter, TaskBucket> _withBucket(
       TaskFilter filter, TaskBucket bucket) {
@@ -184,6 +249,7 @@ class TaskCubit extends Cubit<TaskState> {
       final page = await _repo.list(householdId, status: target.statusParam);
       emit(state.copyWith(
         status: TaskStatusUi.loaded,
+        isOffline: _repo.lastListWasFromCache,
         buckets: _withBucket(
           target,
           TaskBucket(
@@ -297,7 +363,7 @@ class TaskCubit extends Cubit<TaskState> {
     if (_householdId == null) return null;
     try {
       final task = await _repo.create(_householdId!, payload);
-      _upsert(task);
+      _upsert(task, offlineNotice: task.isSynced ? null : kOfflineNoticeMessage);
       // Phase 3.3: schedule a local reminder if the task has a due date.
       await _notifications.scheduleTaskReminder(task);
       return task;
@@ -311,7 +377,7 @@ class TaskCubit extends Cubit<TaskState> {
     if (_householdId == null) return;
     try {
       final task = await _repo.update(_householdId!, taskId, payload);
-      _upsert(task);
+      _upsert(task, offlineNotice: task.isSynced ? null : kOfflineNoticeMessage);
       await _notifications.scheduleTaskReminder(task);
     } on Failure catch (f) {
       emit(state.copyWith(error: f.message));
@@ -322,18 +388,26 @@ class TaskCubit extends Cubit<TaskState> {
     if (_householdId == null) return;
     try {
       final task = await _repo.complete(_householdId!, taskId);
-      _upsert(task);
+      _upsert(task, offlineNotice: task.isSynced ? null : kOfflineNoticeMessage);
       await _notifications.cancelTaskReminder(taskId);
     } on Failure catch (f) {
       emit(state.copyWith(error: f.message));
     }
   }
 
+  /// Online, the repository deletes for real and returns null — remove the
+  /// row. Offline, it returns the task marked `isDeleted: true` — keep it
+  /// upserted (struck through by the tile) rather than removing it, so the
+  /// user can see the delete is queued, not lost.
   Future<void> deleteTask(String taskId) async {
     if (_householdId == null) return;
     try {
-      await _repo.delete(_householdId!, taskId);
-      _remove(taskId);
+      final marked = await _repo.delete(_householdId!, taskId);
+      if (marked != null) {
+        _upsert(marked, offlineNotice: kOfflineNoticeMessage);
+      } else {
+        _remove(taskId);
+      }
       await _notifications.cancelTaskReminder(taskId);
     } on Failure catch (f) {
       emit(state.copyWith(error: f.message));
@@ -368,7 +442,7 @@ class TaskCubit extends Cubit<TaskState> {
   /// leaves every total untouched. The same math applies whether the call
   /// came from a local mutation or a realtime event from another device, so
   /// header counts stay correct either way.
-  void _upsert(Task task) {
+  void _upsert(Task task, {String? offlineNotice}) {
     final updated = <TaskFilter, TaskBucket>{};
 
     for (final filter in TaskFilter.values) {
@@ -400,7 +474,11 @@ class TaskCubit extends Cubit<TaskState> {
       );
     }
 
-    emit(state.copyWith(status: TaskStatusUi.loaded, buckets: updated));
+    emit(state.copyWith(
+      status: TaskStatusUi.loaded,
+      buckets: updated,
+      offlineNotice: offlineNotice,
+    ));
   }
 
   void _remove(String id) {

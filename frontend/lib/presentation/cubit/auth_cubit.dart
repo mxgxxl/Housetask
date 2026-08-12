@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../core/errors/failures.dart';
 import '../../data/models/user.dart';
 import '../../data/repositories/auth_repository.dart';
+import '../../services/cache_service.dart';
 
 enum AuthStatus { unknown, authenticated, unauthenticated }
 
@@ -41,8 +42,11 @@ class AuthState extends Equatable {
 /// Manages authentication state: session check, login, register, logout.
 class AuthCubit extends Cubit<AuthState> {
   final AuthRepository _repo;
+  final CacheService _cache;
 
-  AuthCubit(this._repo) : super(const AuthState());
+  AuthCubit(this._repo, {CacheService? cache})
+      : _cache = cache ?? CacheService(),
+        super(const AuthState());
 
   /// Called on startup (SplashPage) to decide the initial route.
   Future<void> checkAuth() async {
@@ -95,6 +99,10 @@ class AuthCubit extends Cubit<AuthState> {
 
   Future<void> logout() async {
     await _repo.logout();
+    // Wipe every cached task/shopping/household/pending-op — the next login
+    // may be a different user, and offline writes queued under this session
+    // must not silently replay onto whatever account signs in next (TD-003).
+    await _cache.clearAll();
     emit(const AuthState(status: AuthStatus.unauthenticated));
   }
 

@@ -9,6 +9,15 @@ import 'package:homesync/presentation/cubit/task_cubit.dart';
 
 import 'fakes.dart';
 
+/// Flushes pending microtasks/timers — enough turns for a stream event to be
+/// delivered and for the async work its listener kicks off (syncPending's
+/// own awaits) to complete, without depending on real time passing.
+Future<void> flushAsync() async {
+  for (var i = 0; i < 5; i++) {
+    await Future<void>.delayed(Duration.zero);
+  }
+}
+
 PaginatedResponse<Task> page(
   List<Task> items, {
   String? nextCursor,
@@ -234,6 +243,133 @@ void main() {
       expect(created, isNull);
       expect(cubit.state.error, 'Operation already in progress');
       expect(cubit.state.tasks.map((t) => t.id), ['1']);
+    });
+  });
+
+  group('TaskCubit offline support (TD-003)', () {
+    test('load sets isOffline when the repository served the cache fallback', () async {
+      final repo = FakeTaskRepository(pages: [page([buildTask('1')])]);
+      // The real TaskRepository sets this itself inside list(); the fake
+      // leaves it alone, so setting it up front models "list() just fell
+      // back to cache" for the cubit to observe right after awaiting it.
+      repo.lastListWasFromCache = true;
+      final cubit = TaskCubit(repo, FakeNotificationService());
+
+      await cubit.load('h1');
+
+      expect(cubit.state.isOffline, isTrue);
+      expect(cubit.state.tasks.map((t) => t.id), ['1']);
+    });
+
+    test('load clears isOffline once a real page comes back', () async {
+      final repo = FakeTaskRepository(pages: [page([buildTask('1')])]);
+      final cubit = TaskCubit(repo, FakeNotificationService());
+
+      await cubit.load('h1');
+
+      expect(cubit.state.isOffline, isFalse);
+    });
+
+    test('createTask offline surfaces the unsynced task and an offline notice', () async {
+      final repo = FakeTaskRepository(
+        pages: [page([buildTask('1')])],
+        returnsUnsynced: true,
+      );
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+
+      final created = await cubit.createTask({'title': 'Sin red'});
+
+      expect(created?.isSynced, isFalse);
+      expect(cubit.state.offlineNotice, kOfflineNoticeMessage);
+      expect(cubit.state.tasks.map((t) => t.id), contains('created'));
+    });
+
+    test('clearOfflineNotice consumes the notice without touching error', () async {
+      final repo = FakeTaskRepository(
+        pages: [page([buildTask('1')])],
+        returnsUnsynced: true,
+      );
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+      await cubit.createTask({'title': 'Sin red'});
+      expect(cubit.state.offlineNotice, isNotNull);
+
+      cubit.clearOfflineNotice();
+
+      expect(cubit.state.offlineNotice, isNull);
+    });
+
+    test('deleteTask offline keeps the task visible, marked deleted and unsynced', () async {
+      final marked =
+          buildTask('1').copyWith(isDeleted: true, isSynced: false);
+      final repo = FakeTaskRepository(
+        pages: [page([buildTask('1')])],
+        offlineDeleteReturns: marked,
+      );
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+
+      await cubit.deleteTask('1');
+
+      final stored = cubit.state.tasks.singleWhere((t) => t.id == '1');
+      expect(stored.isDeleted, isTrue);
+      expect(stored.isSynced, isFalse);
+      expect(cubit.state.offlineNotice, kOfflineNoticeMessage);
+    });
+
+    test('deleteTask online removes the task outright', () async {
+      final repo = FakeTaskRepository(pages: [page([buildTask('1')])]);
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+
+      await cubit.deleteTask('1');
+
+      expect(cubit.state.tasks, isEmpty);
+    });
+
+    test('syncPending reloads only when operations were actually processed', () async {
+      final repo = FakeTaskRepository(pages: [page([buildTask('1')])]);
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+      final callsAfterLoad = repo.listCalls;
+
+      repo.syncPendingOperationsResult = 0;
+      await cubit.syncPending();
+      expect(repo.listCalls, callsAfterLoad, reason: 'nothing processed, no reason to reload');
+
+      repo.syncPendingOperationsResult = 2;
+      await cubit.syncPending();
+      expect(repo.listCalls, callsAfterLoad + 1);
+    });
+
+    test('reconnection (false→true) auto-triggers a sync', () async {
+      final fakeConnectivity = FakeConnectivityService();
+      final repo = FakeTaskRepository(pages: [page([buildTask('1')])]);
+      final cubit =
+          TaskCubit(repo, FakeNotificationService(), connectivity: fakeConnectivity);
+      await cubit.load('h1');
+      repo.syncPendingOperationsResult = 1;
+
+      fakeConnectivity.controller.add(false);
+      await flushAsync();
+      fakeConnectivity.controller.add(true);
+      await flushAsync();
+
+      expect(repo.syncCalls, 1);
+    });
+
+    test('staying online never triggers a sync (no false→true edge)', () async {
+      final fakeConnectivity = FakeConnectivityService();
+      final repo = FakeTaskRepository(pages: [page([buildTask('1')])]);
+      final cubit =
+          TaskCubit(repo, FakeNotificationService(), connectivity: fakeConnectivity);
+      await cubit.load('h1');
+
+      fakeConnectivity.controller.add(true);
+      await flushAsync();
+
+      expect(repo.syncCalls, 0);
     });
   });
 

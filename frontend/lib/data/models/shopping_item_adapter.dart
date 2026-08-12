@@ -18,6 +18,8 @@ Map<String, dynamic> shoppingItemToCacheMap(ShoppingItem item) {
     'isRecurring': item.isRecurring,
     'recurrenceIntervalDays': item.recurrenceIntervalDays,
     'estimatedPrice': item.estimatedPrice,
+    'isSynced': item.isSynced,
+    'isDeleted': item.isDeleted,
   };
 }
 

@@ -1,11 +1,14 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import 'package:homesync/config/constants.dart';
 import 'package:homesync/data/datasources/local/auth_local_datasource.dart';
 import 'package:homesync/data/datasources/remote/api_service.dart';
 import 'package:homesync/data/repositories/task_repository.dart';
+import 'package:homesync/services/cache_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Records every outgoing request and replies from a scripted queue, so the
@@ -46,6 +49,21 @@ ResponseBody _json(Map<String, dynamic> body, int status) {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  late Directory tempDir;
+
+  // TaskRepository.create() caches the created task (TD-003), so a real
+  // CacheService needs a live Hive instance — same temp-directory pattern as
+  // cache_service_test.dart.
+  setUpAll(() async {
+    tempDir = await Directory.systemTemp.createTemp('homesync_idempotency_test');
+    await CacheService().init(testDirectory: tempDir.path);
+  });
+
+  tearDownAll(() async {
+    await Hive.close();
+    if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+  });
 
   setUp(() {
     // Real storage keys: a mismatched key silently yields a null token, which

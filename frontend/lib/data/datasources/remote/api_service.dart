@@ -167,6 +167,14 @@ class ApiService {
       message = 'Cannot reach the server';
     }
 
+    // No response at all — offline, DNS failure, or a timeout before one
+    // arrived — is what makes a cache-first repository fall back / queue.
+    // Distinct from a genuine 4xx, which is the server's real answer and must
+    // reach the caller as an error, not be swallowed into an offline write.
+    if (e.response == null) {
+      return NetworkFailure(message);
+    }
+
     if (status == 401) return AuthFailure(message);
     if (status == 409) {
       // Idempotency-Key collision: the original request is still in flight.

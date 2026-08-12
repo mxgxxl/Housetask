@@ -17,6 +17,16 @@ class ShoppingItem extends Equatable {
   final int? recurrenceIntervalDays;
   final num? estimatedPrice;
 
+  /// Local-only: false while a create/update/delete made offline is still
+  /// waiting in the pending-operations queue. Never sent to the server —
+  /// see [toJson].
+  final bool isSynced;
+
+  /// Local-only: true when this item was deleted while offline. The row
+  /// stays in the cache (struck through in the UI) until the queued delete
+  /// actually reaches the server.
+  final bool isDeleted;
+
   const ShoppingItem({
     required this.id,
     required this.householdId,
@@ -31,6 +41,8 @@ class ShoppingItem extends Equatable {
     this.isRecurring = false,
     this.recurrenceIntervalDays,
     this.estimatedPrice,
+    this.isSynced = true,
+    this.isDeleted = false,
   });
 
   factory ShoppingItem.fromJson(Map<String, dynamic> json) {
@@ -51,10 +63,13 @@ class ShoppingItem extends Equatable {
       isRecurring: (json['isRecurring'] ?? false) as bool,
       recurrenceIntervalDays: json['recurrenceIntervalDays'] as int?,
       estimatedPrice: json['estimatedPrice'] as num?,
+      isSynced: (json['isSynced'] ?? true) as bool,
+      isDeleted: (json['isDeleted'] ?? false) as bool,
     );
   }
 
-  /// Payload for create/update requests (mutable fields only).
+  /// Payload for create/update requests (mutable fields only). Deliberately
+  /// excludes [isSynced]/[isDeleted]: local sync-queue bookkeeping only.
   Map<String, dynamic> toJson() => {
         'name': name,
         'quantity': quantity,
@@ -76,6 +91,8 @@ class ShoppingItem extends Equatable {
     bool? isRecurring,
     int? recurrenceIntervalDays,
     num? estimatedPrice,
+    bool? isSynced,
+    bool? isDeleted,
   }) {
     return ShoppingItem(
       id: id,
@@ -91,6 +108,8 @@ class ShoppingItem extends Equatable {
       isRecurring: isRecurring ?? this.isRecurring,
       recurrenceIntervalDays: recurrenceIntervalDays ?? this.recurrenceIntervalDays,
       estimatedPrice: estimatedPrice ?? this.estimatedPrice,
+      isSynced: isSynced ?? this.isSynced,
+      isDeleted: isDeleted ?? this.isDeleted,
     );
   }
 
@@ -104,5 +123,7 @@ class ShoppingItem extends Equatable {
         category,
         isPurchased,
         isRecurring,
+        isSynced,
+        isDeleted,
       ];
 }

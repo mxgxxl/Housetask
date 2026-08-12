@@ -92,10 +92,16 @@ class CacheService {
   // ---- Tasks ----
 
   /// Replace this household's cached tasks with [tasks], keyed by id.
+  ///
+  /// Only synced entries are cleared first: an unsynced task is a local
+  /// write the server does not know about yet, so a fresh server list — which
+  /// by definition cannot include it — must never be treated as authority to
+  /// delete it from the cache. It is superseded normally once its own
+  /// pending operation syncs and a later list refresh includes it for real.
   void saveTasks(String householdId, List<Task> tasks) {
     final staleKeys = _tasks.keys.where((k) {
       final cached = _tasks.get(k);
-      return cached != null && cached.householdId == householdId;
+      return cached != null && cached.householdId == householdId && cached.isSynced;
     }).toList();
     for (final key in staleKeys) {
       _tasks.delete(key);
@@ -115,10 +121,11 @@ class CacheService {
 
   // ---- Shopping ----
 
+  /// Same unsynced-preserving rule as [saveTasks].
   void saveShopping(String householdId, List<ShoppingItem> items) {
     final staleKeys = _shopping.keys.where((k) {
       final cached = _shopping.get(k);
-      return cached != null && cached.householdId == householdId;
+      return cached != null && cached.householdId == householdId && cached.isSynced;
     }).toList();
     for (final key in staleKeys) {
       _shopping.delete(key);

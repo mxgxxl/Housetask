@@ -20,6 +20,17 @@ class Task extends Equatable {
   final RecurrenceRule? recurrenceRule;
   final String? parentTaskId;
 
+  /// Local-only: false while a create/update/delete made offline is still
+  /// waiting in the pending-operations queue. Never sent to the server —
+  /// see [toJson] — and irrelevant once the write has synced.
+  final bool isSynced;
+
+  /// Local-only: true when this task was deleted while offline. The row
+  /// stays in the cache (struck through in the UI) until the queued delete
+  /// actually reaches the server, instead of disappearing on an
+  /// unconfirmed action the user cannot yet undo.
+  final bool isDeleted;
+
   const Task({
     required this.id,
     required this.householdId,
@@ -36,6 +47,8 @@ class Task extends Equatable {
     this.isRecurring = false,
     this.recurrenceRule,
     this.parentTaskId,
+    this.isSynced = true,
+    this.isDeleted = false,
   });
 
   bool get isCompleted => status == 'completed';
@@ -66,10 +79,14 @@ class Task extends Equatable {
           ? RecurrenceRule.fromJson(json['recurrenceRule'] as Map<String, dynamic>)
           : null,
       parentTaskId: json['parentTaskId']?.toString(),
+      isSynced: (json['isSynced'] ?? true) as bool,
+      isDeleted: (json['isDeleted'] ?? false) as bool,
     );
   }
 
-  /// Payload for create/update requests (only mutable fields).
+  /// Payload for create/update requests (only mutable fields). Deliberately
+  /// excludes [isSynced]/[isDeleted]: they are local sync-queue bookkeeping,
+  /// never something the server has an opinion on.
   Map<String, dynamic> toJson() => {
         'title': title,
         'description': description,
@@ -93,6 +110,8 @@ class Task extends Equatable {
     DateTime? dueDate,
     bool? isRecurring,
     RecurrenceRule? recurrenceRule,
+    bool? isSynced,
+    bool? isDeleted,
   }) {
     return Task(
       id: id,
@@ -110,6 +129,8 @@ class Task extends Equatable {
       isRecurring: isRecurring ?? this.isRecurring,
       recurrenceRule: recurrenceRule ?? this.recurrenceRule,
       parentTaskId: parentTaskId,
+      isSynced: isSynced ?? this.isSynced,
+      isDeleted: isDeleted ?? this.isDeleted,
     );
   }
 
@@ -127,5 +148,7 @@ class Task extends Equatable {
         completedAt,
         isRecurring,
         parentTaskId,
+        isSynced,
+        isDeleted,
       ];
 }

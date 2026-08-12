@@ -1,76 +1,360 @@
 import 'package:uuid/uuid.dart';
 
+import '../../core/errors/failures.dart';
+import '../../services/cache_service.dart';
+import '../../services/connectivity_service.dart';
+import '../../services/sentry_service.dart';
 import '../datasources/remote/api_service.dart';
 import '../models/paginated_response.dart';
+import '../models/pending_operation.dart';
 import '../models/task.dart';
+import '../models/task_adapter.dart';
 
-/// CRUD for household tasks.
+/// CRUD for household tasks — cache-first reads, offline-queued writes
+/// (TD-003).
+///
+/// [cache] and [connectivity] are injectable (defaulting to the app-wide
+/// singletons) so tests can drive offline/online transitions deterministically
+/// without touching Hive or a real platform connectivity channel.
 class TaskRepository {
   final ApiService _api;
   final Uuid _uuid;
+  final CacheService _cache;
+  final ConnectivityService _connectivity;
 
-  TaskRepository(this._api, {Uuid? uuid}) : _uuid = uuid ?? const Uuid();
+  TaskRepository(
+    this._api, {
+    Uuid? uuid,
+    CacheService? cache,
+    ConnectivityService? connectivity,
+  })  : _uuid = uuid ?? const Uuid(),
+        _cache = cache ?? CacheService(),
+        _connectivity = connectivity ?? ConnectivityService();
+
+  /// Whether the most recent [list] call served the cache fallback instead of
+  /// a live server response. `list()` absorbs the offline case itself (the
+  /// caller always gets a successful page, never a thrown error for it), so
+  /// this is how TaskCubit tells "we are offline" apart from "the household
+  /// legitimately has zero tasks" — set right before every return from
+  /// [list], safe to read immediately after awaiting it.
+  bool lastListWasFromCache = false;
 
   /// Fetch one page of tasks. Omit [cursor] for the first page.
+  ///
+  /// Falls back to the cache when the request cannot be answered at all
+  /// (offline, timeout, 5xx) — never on an ordinary 4xx, which is a real
+  /// answer from the server. A cache fallback always returns everything
+  /// cached for the household in one page (Hive has no server-side cursor to
+  /// resume from), so a subsequent loadMore() is a correct no-op rather than
+  /// re-appending the same rows.
   Future<PaginatedResponse<Task>> list(
     String householdId, {
     String? status,
     int limit = 50,
     String? cursor,
   }) async {
-    final data = await _api.get(
-      '/households/$householdId/tasks',
-      query: {
-        'limit': limit,
-        if (status != null) 'status': status,
-        if (cursor != null) 'cursor': cursor,
-      },
-    );
-    return PaginatedResponse<Task>.fromJson(
-      Map<String, dynamic>.from(data as Map),
-      Task.fromJson,
+    try {
+      final data = await _api.get(
+        '/households/$householdId/tasks',
+        query: {
+          'limit': limit,
+          if (status != null) 'status': status,
+          if (cursor != null) 'cursor': cursor,
+        },
+      );
+      final page = PaginatedResponse<Task>.fromJson(
+        Map<String, dynamic>.from(data as Map),
+        Task.fromJson,
+      );
+      if (cursor == null) {
+        // Only the first page is a full-enough snapshot to cache as "this
+        // household's tasks" — caching a middle page would make a later
+        // offline read show an arbitrary slice instead of the earliest rows.
+        _cache.saveTasks(householdId, page.items);
+      }
+      lastListWasFromCache = false;
+      return page;
+    } on Failure catch (f) {
+      if (!isOfflineWorthy(f)) rethrow;
+      lastListWasFromCache = true;
+      return _listFromCache(householdId, status: status);
+    }
+  }
+
+  PaginatedResponse<Task> _listFromCache(String householdId, {String? status}) {
+    var cached = _cache.getTasks(householdId).where((t) => !t.isDeleted).toList();
+    if (status != null) {
+      cached = cached.where((t) => t.status == status).toList();
+    }
+    return PaginatedResponse<Task>(
+      items: cached,
+      nextCursor: null,
+      hasMore: false,
+      total: cached.length,
     );
   }
 
   /// Create a task.
   ///
-  /// One `Idempotency-Key` is generated per call and travels in the request
-  /// options, so the 401-refresh retry inside [ApiService] replays the same key
-  /// and the server returns the original task instead of creating a second one
-  /// (backend ADR-007).
+  /// One `Idempotency-Key` is generated per call and reused on every retry —
+  /// including a later replay from the pending-operations queue — so the
+  /// server (or a 401-refresh retry inside [ApiService]) never creates the
+  /// same logical task twice (backend ADR-007).
+  ///
+  /// Offline (or a network-shaped failure from an online attempt): the task
+  /// is assigned a local id, cached with `isSynced: false`, and queued for
+  /// replay. The caller always gets a [Task] back — optimistic offline, real
+  /// once synced — never a thrown offline error.
   Future<Task> create(String householdId, Map<String, dynamic> payload) async {
-    final data = await _api.post(
-      '/households/$householdId/tasks',
-      body: payload,
-      headers: {'Idempotency-Key': _uuid.v4()},
-    );
-    return Task.fromJson(data as Map<String, dynamic>);
+    final idempotencyKey = _uuid.v4();
+
+    if (!await _connectivity.checkConnectivity()) {
+      return _createOffline(householdId, payload, idempotencyKey);
+    }
+    try {
+      final data = await _api.post(
+        '/households/$householdId/tasks',
+        body: payload,
+        headers: {'Idempotency-Key': idempotencyKey},
+      );
+      final task = Task.fromJson(data as Map<String, dynamic>);
+      _cache.saveTask(task);
+      return task;
+    } on Failure catch (f) {
+      if (!isOfflineWorthy(f)) rethrow;
+      return _createOffline(householdId, payload, idempotencyKey);
+    }
   }
 
+  Task _createOffline(
+    String householdId,
+    Map<String, dynamic> payload,
+    String idempotencyKey,
+  ) {
+    final localId = 'local-${_uuid.v4()}';
+    final task = Task.fromJson({
+      ...payload,
+      'id': localId,
+      'householdId': householdId,
+      'isSynced': false,
+    });
+    _cache.saveTask(task);
+    _cache.addPendingOperation(PendingOperation(
+      id: _uuid.v4(),
+      type: PendingOperationType.create,
+      entity: PendingOperationEntity.task,
+      householdId: householdId,
+      entityId: localId,
+      payload: payload,
+      timestamp: DateTime.now(),
+      idempotencyKey: idempotencyKey,
+    ));
+    return task;
+  }
+
+  /// Update a task. Same optimistic-offline pattern as [create]: merges
+  /// [payload] over the cached copy, marks it unsynced, and queues the write.
   Future<Task> update(
     String householdId,
     String taskId,
     Map<String, dynamic> payload,
   ) async {
-    final data =
-        await _api.patch('/households/$householdId/tasks/$taskId', body: payload);
-    return Task.fromJson(data as Map<String, dynamic>);
+    if (await _connectivity.checkConnectivity()) {
+      try {
+        final data = await _api.patch(
+          '/households/$householdId/tasks/$taskId',
+          body: payload,
+        );
+        final task = Task.fromJson(data as Map<String, dynamic>);
+        _cache.saveTask(task);
+        return task;
+      } on Failure catch (f) {
+        if (!isOfflineWorthy(f)) rethrow;
+      }
+    }
+    return _mutateOffline(householdId, taskId, payload);
   }
 
+  /// Mark a task complete. Offline, this is queued as an update whose payload
+  /// is exactly `{'status': 'completed'}` — [syncPendingOperations] recognizes
+  /// that shape and replays it through the dedicated /complete endpoint
+  /// rather than a generic PATCH, because only /complete triggers the next
+  /// occurrence of a recurring task server-side.
   Future<Task> complete(String householdId, String taskId) async {
-    final data =
-        await _api.patch('/households/$householdId/tasks/$taskId/complete');
+    if (await _connectivity.checkConnectivity()) {
+      try {
+        final task = await _completeRemote(householdId, taskId);
+        _cache.saveTask(task);
+        return task;
+      } on Failure catch (f) {
+        if (!isOfflineWorthy(f)) rethrow;
+      }
+    }
+    return _mutateOffline(householdId, taskId, const {'status': 'completed'});
+  }
+
+  Future<Task> _completeRemote(String householdId, String taskId) async {
+    final data = await _api.patch('/households/$householdId/tasks/$taskId/complete');
     return Task.fromJson(data as Map<String, dynamic>);
   }
 
-  Future<void> delete(String householdId, String taskId) async {
-    await _api.delete('/households/$householdId/tasks/$taskId');
+  Task _mutateOffline(String householdId, String taskId, Map<String, dynamic> payload) {
+    final cached = _cache.getTasks(householdId).where((t) => t.id == taskId).toList();
+    final base = cached.isEmpty ? null : cached.first;
+    final merged = Task.fromJson({
+      if (base != null) ...taskToCacheMap(base),
+      ...payload,
+      'id': taskId,
+      'householdId': householdId,
+      'isSynced': false,
+    });
+    _cache.saveTask(merged);
+    _cache.addPendingOperation(PendingOperation(
+      id: _uuid.v4(),
+      type: PendingOperationType.update,
+      entity: PendingOperationEntity.task,
+      householdId: householdId,
+      entityId: taskId,
+      payload: payload,
+      timestamp: DateTime.now(),
+      idempotencyKey: _uuid.v4(),
+    ));
+    return merged;
+  }
+
+  /// Delete a task.
+  ///
+  /// Online: deletes remotely and from the cache, returns null. Offline: the
+  /// row is kept in the cache with `isDeleted: true` (so it renders struck
+  /// through instead of vanishing on an action the user cannot yet confirm
+  /// happened) and the delete is queued; the caller gets that marked Task
+  /// back rather than null, so it knows to keep showing it.
+  Future<Task?> delete(String householdId, String taskId) async {
+    if (await _connectivity.checkConnectivity()) {
+      try {
+        await _api.delete('/households/$householdId/tasks/$taskId');
+        _cache.deleteTaskFromCache(taskId);
+        return null;
+      } on Failure catch (f) {
+        if (!isOfflineWorthy(f)) rethrow;
+      }
+    }
+    return _deleteOffline(householdId, taskId);
+  }
+
+  Task _deleteOffline(String householdId, String taskId) {
+    final cached = _cache.getTasks(householdId).where((t) => t.id == taskId).toList();
+    final marked = (cached.isEmpty ? null : cached.first)?.copyWith(
+          isDeleted: true,
+          isSynced: false,
+        ) ??
+        Task(id: taskId, householdId: householdId, title: '', isSynced: false, isDeleted: true);
+    _cache.saveTask(marked);
+    _cache.addPendingOperation(PendingOperation(
+      id: _uuid.v4(),
+      type: PendingOperationType.delete,
+      entity: PendingOperationEntity.task,
+      householdId: householdId,
+      entityId: taskId,
+      payload: const {},
+      timestamp: DateTime.now(),
+      idempotencyKey: _uuid.v4(),
+    ));
+    return marked;
   }
 
   /// Catch-up: ask the server to generate missed recurring occurrences.
-  /// Returns `{ generated, tasks }`.
+  /// Returns `{ generated, tasks }`. Online-only — nothing meaningful to do
+  /// offline, so a failure here is left to the caller (catchUpRecurringTasks
+  /// in TaskCubit already treats it as best-effort and swallows errors).
   Future<Map<String, dynamic>> generateRecurringInstances(String householdId) async {
     final data = await _api.post('/households/$householdId/tasks/generate-instances');
     return data as Map<String, dynamic>;
+  }
+
+  /// Replay every queued task operation against the server, in the order
+  /// they were made. Returns how many were successfully applied.
+  ///
+  /// Stops (without discarding anything) at the first operation that still
+  /// fails for a network-shaped reason — connectivity flickered back off
+  /// mid-sync, or the backend is still down — leaving the rest of the queue
+  /// untouched for the next reconnection. An operation the server genuinely
+  /// rejects (not a network problem) gets up to 3 retries on later sync
+  /// passes before being dropped and reported, so one permanently-invalid
+  /// write cannot block everything queued after it forever.
+  Future<int> syncPendingOperations() async {
+    final ops = _cache
+        .getPendingOperations()
+        .where((o) => o.entity == PendingOperationEntity.task)
+        .toList();
+
+    // Local ids assigned during this repository's lifetime, replaced by the
+    // server's real id once their create operation has synced — so a later
+    // queued update/delete against the same not-yet-synced task resolves to
+    // the id the server actually knows about.
+    final idRemap = <String, String>{};
+    var processed = 0;
+
+    for (final op in ops) {
+      final resolvedEntityId =
+          op.entityId == null ? null : (idRemap[op.entityId] ?? op.entityId);
+
+      try {
+        switch (op.type) {
+          case PendingOperationType.create:
+            final data = await _api.post(
+              '/households/${op.householdId}/tasks',
+              body: op.payload,
+              headers: {'Idempotency-Key': op.idempotencyKey},
+            );
+            final serverTask = Task.fromJson(data as Map<String, dynamic>);
+            if (op.entityId != null) {
+              idRemap[op.entityId!] = serverTask.id;
+              _cache.deleteTaskFromCache(op.entityId!);
+            }
+            _cache.saveTask(serverTask);
+            break;
+
+          case PendingOperationType.update:
+            final isCompletion =
+                op.payload.length == 1 && op.payload['status'] == 'completed';
+            final task = isCompletion
+                ? await _completeRemote(op.householdId, resolvedEntityId!)
+                : Task.fromJson(await _api.patch(
+                    '/households/${op.householdId}/tasks/$resolvedEntityId',
+                    body: op.payload,
+                  ) as Map<String, dynamic>);
+            _cache.saveTask(task);
+            break;
+
+          case PendingOperationType.delete:
+            await _api.delete('/households/${op.householdId}/tasks/$resolvedEntityId');
+            _cache.deleteTaskFromCache(resolvedEntityId!);
+            break;
+        }
+
+        _cache.removePendingOperation(op.id);
+        processed++;
+      } on Failure catch (f) {
+        if (isOfflineWorthy(f)) {
+          // Still unreachable — try the rest of this batch again next time.
+          break;
+        }
+        final retried = op.copyWith(retryCount: op.retryCount + 1);
+        if (retried.retryCount > 3) {
+          _cache.removePendingOperation(op.id);
+          SentryService.captureException(f, context: {
+            'pendingOperationId': op.id,
+            'type': op.type.name,
+            'entity': op.entity.name,
+            'retryCount': retried.retryCount,
+          });
+        } else {
+          _cache.updatePendingOperation(retried);
+        }
+      }
+    }
+
+    return processed;
   }
 }
