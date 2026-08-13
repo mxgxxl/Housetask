@@ -416,6 +416,7 @@ to clients.
 3. Never delete the household's last admin
 4. Idempotency of write operations under retry (401 refresh retry, socket reconnect)
 5. Member-leave lifecycle (unassign pending tasks on leave/removal, preserve created tasks, last-admin protection). Last-admin protection is testable today; the full lifecycle MUST be covered when TD-018 is implemented.
+6. Widget rendering of offline/sync states (TaskTile unsynced/deleted, offline banner with pending count)
 
 ---
 
@@ -658,6 +659,38 @@ When generating code for this project:
 10. **Test your changes** — verify existing tests still pass
 11. **Propose improvements** — always include "💡 Proposed Improvements" section
 12. **Think in production** — consider security, performance, scalability, observability
+
+---
+
+## ✅ Phase 1 Completion
+
+As of this commit, Phase 1 (Stabilization) is COMPLETE. All TD items in Phase 1 are resolved. The application is ready for beta release.
+
+> A commit cannot contain its own hash — the hash is derived from the commit's content (tree, parent, message, timestamp) only after `git commit` runs, so it can't be embedded inside that same content. Run `git log -1 --format=%H -- CLAUDE.md` (or `git log --oneline -5`) to find the actual commit that introduced this section.
+
+**Beta release checklist:**
+- [ ] Report sentry-cocoa Package.swift bug upstream (TD-038)
+- [ ] Install JDK + Android SDK (deferred, see TD-008 notes)
+- [ ] Configure TestFlight (iOS) and Google Play Internal Testing (Android)
+- [ ] Rotate any secrets that appeared in transcripts or logs
+- [ ] Smoke test on real devices (iOS + Android)
+- [ ] Announce beta to early users
+
+**Phase 2 roadmap (deferred items):**
+- TD-001: Migrate members to separate collection
+- TD-007: Optimistic updates
+- TD-008: CI/CD with GitHub Actions
+- TD-011: Granular task permissions
+- TD-012: ESLint + Prettier + no-floating-promises
+- TD-013: Household-timezone-aware recurrence
+- TD-017: Env-based frontend config via --dart-define
+- TD-018: Member-leave lifecycle
+- TD-028: Zod edge validation
+- TD-034: Deploy-order safety net
+- TD-035: Server-side isRecurring filter
+- TD-037: Sentry hardening bundle
+- TD-038: sentry-cocoa upstream fix
+- TD-039: Per-field conflict resolution
 
 ---
 
