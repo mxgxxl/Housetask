@@ -10,6 +10,7 @@ import {
   createTestHousehold,
   createTestUser,
   daysFromNow,
+  joinTestHousehold,
 } from './helpers';
 
 let app: Server;
@@ -567,5 +568,94 @@ describe('DELETE /api/households/:householdId/tasks/:taskId', () => {
       .get(await tasksUrl(household))
       .set(authHeader(user.accessToken));
     expect(list.body.data.items).toEqual([]);
+  });
+});
+
+describe('Task permissions — creator-or-admin for edit/delete (TD-011)', () => {
+  /**
+   * Three distinct roles in one household: the admin (household creator),
+   * a regular member who will create the task under test, and a second
+   * regular member who is neither its creator nor an admin.
+   */
+  async function setupThreeMemberHousehold(): Promise<{
+    admin: TestUser;
+    userA: TestUser;
+    userB: TestUser;
+    household: TestHousehold;
+  }> {
+    const admin = await createTestUser(app);
+    const userA = await createTestUser(app);
+    const userB = await createTestUser(app);
+    const household = await createTestHousehold(app, admin);
+    await joinTestHousehold(app, userA, household.inviteCode);
+    await joinTestHousehold(app, userB, household.inviteCode);
+    return { admin, userA, userB, household };
+  }
+
+  it('should return 403 when a non-creator, non-admin member tries to edit the task', async () => {
+    const { userA, userB, household } = await setupThreeMemberHousehold();
+    const task = await createTask(userA, household, { title: 'De A' });
+
+    const res = await request(app)
+      .patch(`${await tasksUrl(household)}/${task.id}`)
+      .set(authHeader(userB.accessToken))
+      .send({ title: 'Intento de B' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('You do not have permission to modify this task');
+  });
+
+  it('should let the creator edit their own task', async () => {
+    const { userA, household } = await setupThreeMemberHousehold();
+    const task = await createTask(userA, household, { title: 'De A' });
+
+    const res = await request(app)
+      .patch(`${await tasksUrl(household)}/${task.id}`)
+      .set(authHeader(userA.accessToken))
+      .send({ title: 'Editada por A' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.title).toBe('Editada por A');
+  });
+
+  it('should let an admin edit a task created by someone else', async () => {
+    const { admin, userA, household } = await setupThreeMemberHousehold();
+    const task = await createTask(userA, household, { title: 'De A' });
+
+    const res = await request(app)
+      .patch(`${await tasksUrl(household)}/${task.id}`)
+      .set(authHeader(admin.accessToken))
+      .send({ title: 'Editada por admin' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.title).toBe('Editada por admin');
+  });
+
+  it('should let any member complete a task they did not create', async () => {
+    const { userA, userB, household } = await setupThreeMemberHousehold();
+    const task = await createTask(userA, household, { title: 'De A' });
+
+    const res = await request(app)
+      .patch(`${await tasksUrl(household)}/${task.id}/complete`)
+      .set(authHeader(userB.accessToken));
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('completed');
+  });
+
+  it('should return 403 when a non-creator, non-admin member tries to delete the task, and let an admin delete it', async () => {
+    const { admin, userA, userB, household } = await setupThreeMemberHousehold();
+    const task = await createTask(userA, household, { title: 'De A' });
+
+    const forbidden = await request(app)
+      .delete(`${await tasksUrl(household)}/${task.id}`)
+      .set(authHeader(userB.accessToken));
+    expect(forbidden.status).toBe(403);
+    expect(forbidden.body.error).toBe('You do not have permission to modify this task');
+
+    const allowed = await request(app)
+      .delete(`${await tasksUrl(household)}/${task.id}`)
+      .set(authHeader(admin.accessToken));
+    expect(allowed.status).toBe(200);
   });
 });

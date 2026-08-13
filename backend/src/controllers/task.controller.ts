@@ -54,7 +54,8 @@ export async function update(req: AuthenticatedRequest, res: Response): Promise<
     req.user!.userId,
     req.params.taskId,
     req.body ?? {},
-    req.member!.memberIds
+    req.member!.memberIds,
+    req.member!.role
   );
   sendSuccess(res, task);
 }
@@ -77,7 +78,12 @@ export async function complete(req: AuthenticatedRequest, res: Response): Promis
  * Hard-deletes the task; broadcasts task:deleted.
  */
 export async function remove(req: AuthenticatedRequest, res: Response): Promise<void> {
-  await taskService.deleteTask(req.params.householdId, req.user!.userId, req.params.taskId);
+  await taskService.deleteTask(
+    req.params.householdId,
+    req.user!.userId,
+    req.params.taskId,
+    req.member!.role
+  );
   sendSuccess(res, { message: 'Task deleted' });
 }
 

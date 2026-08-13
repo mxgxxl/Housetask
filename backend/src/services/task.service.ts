@@ -6,7 +6,7 @@ import { calculateNextDueDate } from '../utils/recurrence';
 import { logger } from '../utils/logger';
 import { sanitizeDate, sanitizeString } from '../utils/sanitize';
 import { Page, decodeCursor, encodeCursor } from '../utils/pagination';
-import { TaskStatus, TaskPriority, TaskCategory } from '../types';
+import { TaskStatus, TaskPriority, TaskCategory, Role } from '../types';
 
 const POPULATE_FIELDS = 'name email avatarUrl';
 
@@ -33,6 +33,17 @@ function assertAssigneesAreMembers(assignedTo: string[], memberIds: string[]): v
       throw new AppError('Invalid assigned member', 400);
     }
   }
+}
+
+/**
+ * Resource-level authorization for edit/delete (TD-011, Hard Rule 17).
+ *
+ * Admins may modify any task in the household; a regular member may only
+ * modify a task they created. Completing a task and creating a task are
+ * deliberately NOT gated by this check — any member may do either.
+ */
+export function canModifyTask(task: ITask, userId: string, memberRole: Role): boolean {
+  return memberRole === 'admin' || task.createdBy.toString() === userId;
 }
 
 export interface CreateTaskInput {
@@ -277,17 +288,25 @@ export async function createTask(
 
 /**
  * Apply a partial update to a task and broadcast `task:updated`.
+ *
+ * Restricted to the task's creator or a household admin (TD-011, Hard Rule
+ * 17) — checked before any field is applied, so a forbidden request never
+ * partially mutates the document.
  */
 export async function updateTask(
   householdId: string,
   userId: string,
   taskId: string,
   input: UpdateTaskInput,
-  memberIds: string[]
+  memberIds: string[],
+  memberRole: Role
 ): Promise<ITask> {
   const task = await TaskModel.findOne({ _id: taskId, householdId });
   if (!task) {
     throw new AppError('Task not found', 404);
+  }
+  if (!canModifyTask(task, userId, memberRole)) {
+    throw new AppError('You do not have permission to modify this task', 403);
   }
 
   if (input.title !== undefined) {
@@ -360,17 +379,26 @@ export async function completeTask(
 
 /**
  * Hard-delete a task and broadcast `task:deleted`.
+ *
+ * Restricted to the task's creator or a household admin (TD-011, Hard Rule
+ * 17) — fetches the task first (rather than delete-by-filter) so the
+ * permission check runs before anything is removed.
  */
 export async function deleteTask(
   householdId: string,
   userId: string,
-  taskId: string
+  taskId: string,
+  memberRole: Role
 ): Promise<void> {
-  const task = await TaskModel.findOneAndDelete({ _id: taskId, householdId });
+  const task = await TaskModel.findOne({ _id: taskId, householdId });
   if (!task) {
     throw new AppError('Task not found', 404);
   }
+  if (!canModifyTask(task, userId, memberRole)) {
+    throw new AppError('You do not have permission to modify this task', 403);
+  }
 
+  await task.deleteOne();
   emitToHousehold(householdId, 'task:deleted', { id: taskId, householdId });
 }
 
