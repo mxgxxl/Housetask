@@ -19,3 +19,27 @@ Los PDRs registran decisiones de producto con Context / Decision / Consequences,
   - Requiere arte animado (Rive/Lottie) para 2 mascotas en Fase A.
   - Fase C requiere cuentas de developer (Apple $99/año, Google $25 único), necesarias de todos modos para publicar.
   - La mascota amplifica un hábito existente, no lo crea: si la retención del core es baja, reevaluar antes de invertir en Fase A.
+
+## PDR-002: Visibilidad cooperativa en flujos core
+
+**Status:** In progress (commits 1-2 de este round)
+
+- **Context:** El selector de asignación mostraba usuarios en blanco y los tiles completados no indican quién los completó; ambos degradan el ángulo cooperativo del producto.
+- **Decision:** Asignación siempre con nombre+avatar del miembro; tile completado muestra quién la completó (fallback "Ex-miembro").
+- **Consequences:** Refuerza percepción de colaboración sin cambiar permisos (TD-011 ya resuelto).
+
+## PDR-003: Timeline por días en pestaña Todas
+
+**Status:** Planned
+
+- **Context:** La lista plana no responde "qué hice / qué hago / qué viene".
+- **Decision:** Vista agrupada por día (ayer arriba, hoy, mañana, sucesivos), 3 tareas visibles por día + "mostrar más", más días al hacer scroll; endpoint de rango por fechas apoyado en paginación por cursor existente; agrupación por día en el cliente (timezone local del dispositivo) para no depender de TD-013.
+- **Consequences:** Rediseña la pestaña Todas de TD-027; Pendientes/Completadas permanecen como listas.
+
+## PDR-004: Tareas con duración y bloques en calendario
+
+**Status:** Planned
+
+- **Context:** Tareas no instantáneas ("pintar el salón de 13 a 20") no tienen representación hoy.
+- **Decision:** startsAt/endsAt opcionales en Task (sin ellos = instantánea, retrocompatible); calendario pinta rangos como bloques con hora y el resto como all-day; notificación "empieza en 30 min" con el sistema existente.
+- **Consequences:** Extiende modelo y calendario sin romper recurrencia existente.
