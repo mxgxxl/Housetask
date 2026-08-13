@@ -42,6 +42,12 @@ Task buildTask(
   });
 }
 
+/// Parses an ISO string payload value, or null if absent — used by
+/// [FakeTaskRepository.create]/[update] to echo startsAt/endsAt back in the
+/// returned Task, so a test can assert on what the cubit does with it (e.g.
+/// scheduling a start reminder, PDR-004).
+DateTime? _parseDate(dynamic value) => value == null ? null : DateTime.parse(value as String);
+
 ShoppingItem buildItem(String id, {String name = 'Producto', bool purchased = false}) {
   return ShoppingItem.fromJson({
     'id': id,
@@ -164,14 +170,22 @@ class FakeTaskRepository implements TaskRepository {
   Future<Task> create(String householdId, Map<String, dynamic> payload) async {
     receivedCreatePayloads.add(payload);
     if (failCreateWith != null) throw failCreateWith!;
-    return buildTask('created', title: payload['title'] as String? ?? 'Tarea')
-        .copyWith(isSynced: !returnsUnsynced);
+    return buildTask(
+      'created',
+      title: payload['title'] as String? ?? 'Tarea',
+      startsAt: _parseDate(payload['startsAt']),
+      endsAt: _parseDate(payload['endsAt']),
+    ).copyWith(isSynced: !returnsUnsynced);
   }
 
   @override
   Future<Task> update(String householdId, String taskId, Map<String, dynamic> payload) async {
     receivedUpdatePayloads.add(payload);
-    return buildTask(taskId).copyWith(isSynced: !returnsUnsynced);
+    return buildTask(
+      taskId,
+      startsAt: _parseDate(payload['startsAt']),
+      endsAt: _parseDate(payload['endsAt']),
+    ).copyWith(isSynced: !returnsUnsynced);
   }
 
   @override
@@ -327,6 +341,27 @@ class FakeConnectivityService implements ConnectivityService {
 
 /// Notifications are a side effect the cubit tests do not care about.
 class FakeNotificationService implements NotificationService {
+  @override
+  dynamic noSuchMethod(Invocation invocation) => Future<void>.value();
+}
+
+/// Records start-reminder scheduling/cancellation (PDR-004) so a test can
+/// assert exactly what TaskCubit asked for — unlike [FakeNotificationService],
+/// whose blanket no-op via noSuchMethod cannot make that assertion.
+class RecordingNotificationService implements NotificationService {
+  final List<Task> scheduledStartReminders = [];
+  final List<String> canceledStartReminderIds = [];
+
+  @override
+  Future<void> scheduleTaskStartReminder(Task task) async {
+    scheduledStartReminders.add(task);
+  }
+
+  @override
+  Future<void> cancelTaskStartReminder(String taskId) async {
+    canceledStartReminderIds.add(taskId);
+  }
+
   @override
   dynamic noSuchMethod(Invocation invocation) => Future<void>.value();
 }

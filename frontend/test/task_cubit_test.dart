@@ -759,6 +759,66 @@ void main() {
       expect(cubit.state.allTasks.map((t) => t.id), ['home-1']);
     });
   });
+
+  group('TaskCubit start-reminder notifications (PDR-004)', () {
+    test('createTask with startsAt schedules a start reminder', () async {
+      final notifications = RecordingNotificationService();
+      final cubit = TaskCubit(FakeTaskRepository(), notifications);
+      await cubit.load('h1');
+      final startsAt = DateTime.now().add(const Duration(hours: 2));
+
+      await cubit.createTask({'title': 'Pintar el salón', 'startsAt': startsAt.toIso8601String()});
+
+      expect(notifications.scheduledStartReminders, hasLength(1));
+      expect(notifications.scheduledStartReminders.single.startsAt, startsAt);
+    });
+
+    test('createTask without startsAt still calls scheduleTaskStartReminder (a no-op there)',
+        () async {
+      final notifications = RecordingNotificationService();
+      final cubit = TaskCubit(FakeTaskRepository(), notifications);
+      await cubit.load('h1');
+
+      await cubit.createTask({'title': 'Instantánea'});
+
+      // The call happens either way — NotificationService itself decides
+      // there is nothing to schedule when startsAt is null.
+      expect(notifications.scheduledStartReminders, hasLength(1));
+      expect(notifications.scheduledStartReminders.single.startsAt, isNull);
+    });
+
+    test('deleteTask cancels the start reminder', () async {
+      final notifications = RecordingNotificationService();
+      final cubit = TaskCubit(FakeTaskRepository(), notifications);
+      await cubit.load('h1');
+
+      await cubit.deleteTask('t1');
+
+      expect(notifications.canceledStartReminderIds, ['t1']);
+    });
+
+    test('completeTask cancels the start reminder', () async {
+      final notifications = RecordingNotificationService();
+      final cubit = TaskCubit(FakeTaskRepository(), notifications);
+      await cubit.load('h1');
+
+      await cubit.completeTask('t1');
+
+      expect(notifications.canceledStartReminderIds, ['t1']);
+    });
+
+    test('updateTask with startsAt schedules a start reminder', () async {
+      final notifications = RecordingNotificationService();
+      final cubit = TaskCubit(FakeTaskRepository(), notifications);
+      await cubit.load('h1');
+      final startsAt = DateTime.now().add(const Duration(hours: 5));
+
+      await cubit.updateTask('t1', {'startsAt': startsAt.toIso8601String()});
+
+      expect(notifications.scheduledStartReminders, hasLength(1));
+      expect(notifications.scheduledStartReminders.single.startsAt, startsAt);
+    });
+  });
 }
 
 /// First page succeeds, second fails — models a mid-scroll network drop.

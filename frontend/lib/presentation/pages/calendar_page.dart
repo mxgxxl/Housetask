@@ -109,34 +109,160 @@ class _CalendarPageState extends State<CalendarPage> {
                         icon: Icons.event_available,
                         title: 'Sin tareas este día',
                       )
-                    : ListView.separated(
-                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-                        itemCount: dayTasks.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 10),
-                        itemBuilder: (context, i) {
-                          final task = dayTasks[i];
-                          return TaskTile(
-                            task: task,
-                            onToggle: () {
-                              if (task.isCompleted) {
-                                context
-                                    .read<TaskCubit>()
-                                    .updateTask(task.id, {'status': 'pending'});
-                              } else {
-                                context.read<TaskCubit>().completeTask(task.id);
-                              }
-                            },
-                            onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute(
-                                  builder: (_) => TaskFormPage(task: task)),
-                            ),
-                          );
-                        },
-                      ),
+                    : _DayDetail(tasks: dayTasks),
               ),
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+/// PDR-004: tasks with both startsAt and endsAt render as hour-positioned
+/// blocks on a vertical axis, sorted by startsAt. Everything else (no
+/// duration, or start-only) lists as all-day above it — exactly how every
+/// day's detail rendered before this feature.
+class _DayDetail extends StatelessWidget {
+  final List<Task> tasks;
+
+  const _DayDetail({required this.tasks});
+
+  @override
+  Widget build(BuildContext context) {
+    final ranged = tasks.where((t) => t.startsAt != null && t.endsAt != null).toList()
+      ..sort((a, b) => a.startsAt!.compareTo(b.startsAt!));
+    final allDay = tasks.where((t) => t.startsAt == null || t.endsAt == null).toList();
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+      children: [
+        if (allDay.isNotEmpty)
+          Column(
+            key: const Key('dayDetailAllDay'),
+            children: [
+              for (final task in allDay)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: _taskRow(context, task),
+                ),
+            ],
+          ),
+        if (ranged.isNotEmpty) ...[
+          if (allDay.isNotEmpty) const SizedBox(height: 8),
+          _HourAxis(key: const Key('dayDetailHourAxis'), tasks: ranged),
+        ],
+      ],
+    );
+  }
+
+  Widget _taskRow(BuildContext context, Task task) {
+    return TaskTile(
+      task: task,
+      onToggle: () {
+        if (task.isCompleted) {
+          context.read<TaskCubit>().updateTask(task.id, {'status': 'pending'});
+        } else {
+          context.read<TaskCubit>().completeTask(task.id);
+        }
+      },
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => TaskFormPage(task: task)),
+      ),
+    );
+  }
+}
+
+/// Vertical 24-hour axis with [tasks] (all guaranteed startsAt+endsAt) drawn
+/// as positioned blocks — top offset and height both derived from each
+/// task's own start/end time, never from list order. Overlapping tasks are
+/// not laid out side-by-side (out of scope): a household's task volume makes
+/// same-hour conflicts rare, and simple stacking keeps this a first version
+/// rather than a full calendar-collision layout engine.
+class _HourAxis extends StatelessWidget {
+  static const double _hourHeight = 56;
+  static const double _labelWidth = 44;
+  static const double _minBlockHeight = 28;
+
+  final List<Task> tasks;
+
+  const _HourAxis({super.key, required this.tasks});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: _hourHeight * 24,
+      child: Stack(
+        children: [
+          for (var hour = 0; hour < 24; hour++)
+            Positioned(
+              top: hour * _hourHeight,
+              left: 0,
+              right: 0,
+              height: _hourHeight,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: _labelWidth,
+                    child: Text(
+                      '${hour.toString().padLeft(2, '0')}:00',
+                      style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                    ),
+                  ),
+                  const Expanded(
+                    child: Padding(
+                      padding: EdgeInsets.only(top: 4),
+                      child: Divider(height: 1),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          for (final task in tasks) _block(context, task),
+        ],
+      ),
+    );
+  }
+
+  Widget _block(BuildContext context, Task task) {
+    final start = task.startsAt!;
+    final end = task.endsAt!;
+    final top = (start.hour + start.minute / 60) * _hourHeight;
+    final durationHours = end.difference(start).inMinutes / 60;
+    final height = (durationHours * _hourHeight).clamp(_minBlockHeight, 24 * _hourHeight);
+
+    return Positioned(
+      top: top,
+      left: _labelWidth + 8,
+      right: 8,
+      height: height,
+      child: GestureDetector(
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => TaskFormPage(task: task)),
+        ),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: (task.isCompleted ? AppColors.textSecondary : AppColors.primary)
+                .withValues(alpha: 0.16),
+            border: Border.all(
+              color: task.isCompleted ? AppColors.textSecondary : AppColors.primary,
+            ),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+            task.title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              decoration: task.isCompleted ? TextDecoration.lineThrough : null,
+              color: task.isCompleted ? AppColors.textSecondary : AppColors.textPrimary,
+            ),
+          ),
+        ),
       ),
     );
   }

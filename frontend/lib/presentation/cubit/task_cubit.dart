@@ -517,6 +517,10 @@ class TaskCubit extends Cubit<TaskState> {
       _upsert(task, offlineNotice: task.isSynced ? null : kOfflineNoticeMessage);
       // Phase 3.3: schedule a local reminder if the task has a due date.
       await _notifications.scheduleTaskReminder(task);
+      // PDR-004: independent "starts in 30 min" reminder if the task has a
+      // startsAt — no-op otherwise, and never set on a recurring task (the
+      // backend already strips startsAt/endsAt from one).
+      await _notifications.scheduleTaskStartReminder(task);
       return task;
     } on Failure catch (f) {
       emit(state.copyWith(error: f.message));
@@ -530,6 +534,7 @@ class TaskCubit extends Cubit<TaskState> {
       final task = await _repo.update(_householdId!, taskId, payload);
       _upsert(task, offlineNotice: task.isSynced ? null : kOfflineNoticeMessage);
       await _notifications.scheduleTaskReminder(task);
+      await _notifications.scheduleTaskStartReminder(task);
     } on Failure catch (f) {
       emit(state.copyWith(error: f.message));
     }
@@ -541,6 +546,7 @@ class TaskCubit extends Cubit<TaskState> {
       final task = await _repo.complete(_householdId!, taskId);
       _upsert(task, offlineNotice: task.isSynced ? null : kOfflineNoticeMessage);
       await _notifications.cancelTaskReminder(taskId);
+      await _notifications.cancelTaskStartReminder(taskId);
     } on Failure catch (f) {
       emit(state.copyWith(error: f.message));
     }
@@ -560,6 +566,7 @@ class TaskCubit extends Cubit<TaskState> {
         _remove(taskId);
       }
       await _notifications.cancelTaskReminder(taskId);
+      await _notifications.cancelTaskStartReminder(taskId);
     } on Failure catch (f) {
       emit(state.copyWith(error: f.message));
     }
