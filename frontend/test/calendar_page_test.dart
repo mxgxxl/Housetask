@@ -224,4 +224,75 @@ void main() {
       expect(_monthBarFinder('dot1'), findsNothing);
     });
   });
+
+  group('CalendarPage day view — segmented blocks for multi-day tasks (PDR-004)', () {
+    // Deliberately different start/end hours so the start-day and end-day
+    // blocks land at distinct, individually-checkable heights.
+    DateTime day1(DateTime monday) => monday;
+    DateTime day2(DateTime monday) => monday.add(const Duration(days: 1));
+    DateTime day3(DateTime monday) => monday.add(const Duration(days: 2));
+
+    Task multiDayTask(DateTime monday, {String id = 'multi1'}) => buildTask(
+          id,
+          title: 'Mudanza',
+          startsAt: DateTime(day1(monday).year, day1(monday).month, day1(monday).day, 14),
+          endsAt: DateTime(day3(monday).year, day3(monday).month, day3(monday).day, 9),
+        );
+
+    testWidgets('the start day shows a block from startsAt to end-of-axis, continuing after',
+        (tester) async {
+      final monday = _safeMonday();
+      final task = multiDayTask(monday);
+
+      await pumpCalendarPage(tester, [task]);
+      await tester.tap(find.byKey(Key('monthDay-${_isoTestDate(day1(monday))}')));
+      await tester.pumpAndSettle();
+
+      final block = find.byKey(const Key('dayBlock-multi1'));
+      expect(block, findsOneWidget);
+      // 14:00 -> 24:00 = 10 hours = 10 * 56px.
+      expect(tester.getSize(block).height, closeTo(560, 1));
+      expect(find.descendant(of: block, matching: find.byIcon(Icons.expand_more)), findsOneWidget);
+      expect(find.descendant(of: block, matching: find.byIcon(Icons.expand_less)), findsNothing);
+      expect(find.byKey(const Key('dayDetailContinuing')), findsNothing);
+    });
+
+    testWidgets('an intermediate day shows an all-day continuing bar, not a timed block',
+        (tester) async {
+      final monday = _safeMonday();
+      final task = multiDayTask(monday);
+
+      await pumpCalendarPage(tester, [task]);
+      await tester.tap(find.byKey(Key('monthDay-${_isoTestDate(day2(monday))}')));
+      await tester.pumpAndSettle();
+
+      final continuing = find.byKey(const Key('dayDetailContinuing'));
+      expect(continuing, findsOneWidget);
+      expect(find.byKey(const Key('dayContinuing-multi1')), findsOneWidget);
+      // "Mudanza" also legitimately appears in the month grid's spanning bar
+      // above (this intermediate day is still under that bar) — scope the
+      // text check to the day-detail's continuing section specifically.
+      expect(find.descendant(of: continuing, matching: find.text('Mudanza')), findsOneWidget);
+      expect(find.descendant(of: continuing, matching: find.text('continúa')), findsOneWidget);
+      expect(find.byKey(const Key('dayDetailHourAxis')), findsNothing);
+    });
+
+    testWidgets('the end day shows a block from start-of-axis to endsAt, continuing before',
+        (tester) async {
+      final monday = _safeMonday();
+      final task = multiDayTask(monday);
+
+      await pumpCalendarPage(tester, [task]);
+      await tester.tap(find.byKey(Key('monthDay-${_isoTestDate(day3(monday))}')));
+      await tester.pumpAndSettle();
+
+      final block = find.byKey(const Key('dayBlock-multi1'));
+      expect(block, findsOneWidget);
+      // 00:00 -> 09:00 = 9 hours = 9 * 56px.
+      expect(tester.getSize(block).height, closeTo(504, 1));
+      expect(find.descendant(of: block, matching: find.byIcon(Icons.expand_less)), findsOneWidget);
+      expect(find.descendant(of: block, matching: find.byIcon(Icons.expand_more)), findsNothing);
+      expect(find.byKey(const Key('dayDetailContinuing')), findsNothing);
+    });
+  });
 }

@@ -17,6 +17,24 @@ DateTime _localDayKey(DateTime d) => DateTime(d.year, d.month, d.day);
 String _isoDate(DateTime d) =>
     '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
+/// Every day a task should appear on (PDR-004, Google Calendar-style):
+/// instant/start-only tasks by dueDate (unchanged), ranged tasks (both
+/// startsAt and endsAt) by range membership — every day from startsAt's day
+/// through endsAt's day inclusive, not just the day dueDate happens to fall
+/// on.
+List<Task> _tasksForDay(List<Task> tasks, DateTime day) {
+  final dayKey = _localDayKey(day);
+  return tasks.where((t) {
+    if (t.startsAt != null && t.endsAt != null) {
+      final start = _localDayKey(t.startsAt!);
+      final end = _localDayKey(t.endsAt!);
+      return !dayKey.isBefore(start) && !dayKey.isAfter(end);
+    }
+    final due = t.dueDate;
+    return due != null && _localDayKey(due) == dayKey;
+  }).toList();
+}
+
 /// Monthly calendar with a Google Calendar-style month grid (multi-day tasks
 /// as spanning bars, single-day ranged tasks as time chips, instant/
 /// start-only tasks as the pre-existing marker) plus a day detail below.
@@ -31,22 +49,6 @@ class _CalendarPageState extends State<CalendarPage> {
   DateTime _focusedMonth = _localDayKey(DateTime.now());
   DateTime _selectedDay = _localDayKey(DateTime.now());
 
-  /// Group tasks that have a due date by day (midnight-normalized key).
-  Map<DateTime, List<Task>> _eventsFrom(List<Task> tasks) {
-    final map = <DateTime, List<Task>>{};
-    for (final t in tasks) {
-      final d = t.dueDate;
-      if (d == null) continue;
-      final key = DateTime.utc(d.year, d.month, d.day);
-      map.putIfAbsent(key, () => []).add(t);
-    }
-    return map;
-  }
-
-  List<Task> _eventsForDay(Map<DateTime, List<Task>> events, DateTime day) {
-    return events[DateTime.utc(day.year, day.month, day.day)] ?? [];
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -59,8 +61,7 @@ class _CalendarPageState extends State<CalendarPage> {
           // Unfiltered bucket: the calendar shows the whole month regardless
           // of which tab the tasks page is on.
           final allTasks = state.allTasks;
-          final events = _eventsFrom(allTasks);
-          final dayTasks = _eventsForDay(events, _selectedDay);
+          final dayTasks = _tasksForDay(allTasks, _selectedDay);
 
           return Column(
             children: [
@@ -91,7 +92,7 @@ class _CalendarPageState extends State<CalendarPage> {
                         icon: Icons.event_available,
                         title: 'Sin tareas este día',
                       )
-                    : _DayDetail(tasks: dayTasks),
+                    : _DayDetail(day: _selectedDay, tasks: dayTasks),
               ),
             ],
           );
@@ -623,23 +624,95 @@ class _SpanBar extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Day detail
+// Day detail (PARTE B2)
 // ---------------------------------------------------------------------------
 
-/// PDR-004: tasks with both startsAt and endsAt render as hour-positioned
-/// blocks on a vertical axis, sorted by startsAt. Everything else (no
-/// duration, or start-only) lists as all-day above it — exactly how every
-/// day's detail rendered before this feature.
+enum _DaySegmentKind { block, continuing }
+
+/// A ranged task's slice of one specific day (PDR-004): [overlapStart,
+/// overlapEnd) = [max(startsAt, startOfDay), min(endsAt, endOfDay)) covers
+/// same-day, start-day, end-day and intermediate-day uniformly. An
+/// intermediate day (neither the task's start nor end day) renders as
+/// [kind]=continuing instead of a full-height block.
+class _DaySegment {
+  final Task task;
+  final _DaySegmentKind kind;
+  final DateTime? start;
+  final DateTime? end;
+  final bool continuesBefore;
+  final bool continuesAfter;
+
+  const _DaySegment.block(
+    this.task,
+    this.start,
+    this.end, {
+    required this.continuesBefore,
+    required this.continuesAfter,
+  }) : kind = _DaySegmentKind.block;
+
+  const _DaySegment.continuing(this.task)
+      : kind = _DaySegmentKind.continuing,
+        start = null,
+        end = null,
+        continuesBefore = true,
+        continuesAfter = true;
+}
+
+/// Segments every ranged task in [rangedTasks] against [day] using a single
+/// overlap rule (PDR-004): overlapStart = max(startsAt, startOfDay(day)),
+/// overlapEnd = min(endsAt, endOfDay(day)). Tasks for which [day] is neither
+/// their start day nor their end day are "continuing" (all-day) instead of a
+/// timed block, since their overlap would otherwise span the whole axis.
+List<_DaySegment> _segmentsForDay(List<Task> rangedTasks, DateTime day) {
+  final dayKey = _localDayKey(day);
+  final dayStart = dayKey;
+  final dayEnd = dayStart.add(const Duration(days: 1));
+
+  final segments = <_DaySegment>[];
+  for (final t in rangedTasks) {
+    final startsAt = t.startsAt!;
+    final endsAt = t.endsAt!;
+    final startDayKey = _localDayKey(startsAt);
+    final endDayKey = _localDayKey(endsAt);
+
+    if (startDayKey != dayKey && endDayKey != dayKey) {
+      segments.add(_DaySegment.continuing(t));
+      continue;
+    }
+
+    final overlapStart = startsAt.isAfter(dayStart) ? startsAt : dayStart;
+    final overlapEnd = endsAt.isBefore(dayEnd) ? endsAt : dayEnd;
+    if (!overlapStart.isBefore(overlapEnd)) continue;
+
+    segments.add(_DaySegment.block(
+      t,
+      overlapStart,
+      overlapEnd,
+      continuesBefore: startDayKey != dayKey,
+      continuesAfter: endDayKey != dayKey,
+    ));
+  }
+  return segments;
+}
+
+/// PDR-004: a ranged task renders as a "continuing" all-day bar on an
+/// intermediate day, or a timed block (whole or edge-clipped) otherwise.
+/// Everything else (no duration, or start-only) lists as all-day above it —
+/// exactly how every day's detail rendered before this feature.
 class _DayDetail extends StatelessWidget {
+  final DateTime day;
   final List<Task> tasks;
 
-  const _DayDetail({required this.tasks});
+  const _DayDetail({required this.day, required this.tasks});
 
   @override
   Widget build(BuildContext context) {
-    final ranged = tasks.where((t) => t.startsAt != null && t.endsAt != null).toList()
-      ..sort((a, b) => a.startsAt!.compareTo(b.startsAt!));
+    final ranged = tasks.where((t) => t.startsAt != null && t.endsAt != null).toList();
     final allDay = tasks.where((t) => t.startsAt == null || t.endsAt == null).toList();
+    final segments = _segmentsForDay(ranged, day);
+    final continuing = segments.where((s) => s.kind == _DaySegmentKind.continuing).toList();
+    final blocks = segments.where((s) => s.kind == _DaySegmentKind.block).toList()
+      ..sort((a, b) => a.start!.compareTo(b.start!));
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
@@ -655,9 +728,16 @@ class _DayDetail extends StatelessWidget {
                 ),
             ],
           ),
-        if (ranged.isNotEmpty) ...[
+        if (continuing.isNotEmpty) ...[
           if (allDay.isNotEmpty) const SizedBox(height: 8),
-          _HourAxis(key: const Key('dayDetailHourAxis'), tasks: ranged),
+          Column(
+            key: const Key('dayDetailContinuing'),
+            children: [for (final s in continuing) _ContinuingBar(segment: s)],
+          ),
+        ],
+        if (blocks.isNotEmpty) ...[
+          if (allDay.isNotEmpty || continuing.isNotEmpty) const SizedBox(height: 8),
+          _HourAxis(key: const Key('dayDetailHourAxis'), segments: blocks),
         ],
       ],
     );
@@ -680,10 +760,65 @@ class _DayDetail extends StatelessWidget {
   }
 }
 
-/// Vertical 24-hour axis with [tasks] (all guaranteed startsAt+endsAt) drawn
-/// as positioned blocks — top offset and height both derived from each
-/// task's own start/end time, never from list order. Overlapping tasks are
-/// not laid out side-by-side (out of scope): a household's task volume makes
+/// All-day bar for a ranged task that merely passes through this day
+/// (neither its start nor end) — Google Calendar-style "continues" strip,
+/// not a timed block on the hour axis.
+class _ContinuingBar extends StatelessWidget {
+  final _DaySegment segment;
+
+  const _ContinuingBar({required this.segment});
+
+  @override
+  Widget build(BuildContext context) {
+    final task = segment.task;
+    final color = task.isCompleted ? AppColors.textSecondary : AppColors.primary;
+
+    return Padding(
+      key: Key('dayContinuing-${task.id}'),
+      padding: const EdgeInsets.only(bottom: 8),
+      child: GestureDetector(
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => TaskFormPage(task: task)),
+        ),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.14),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.arrow_forward, size: 14, color: color),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  task.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    decoration: task.isCompleted ? TextDecoration.lineThrough : null,
+                    color: task.isCompleted ? AppColors.textSecondary : AppColors.textPrimary,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Text('continúa', style: TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Vertical 24-hour axis with [segments] (each a ranged task's slice of THIS
+/// day) drawn as positioned blocks — top offset and height derived from the
+/// segment's own overlap start/end, never from list order. A segment clipped
+/// by the day boundary (continuesBefore/continuesAfter) shows a chevron on
+/// the clipped edge instead of implying the task starts/ends there.
+/// Overlapping same-day blocks are not laid out side-by-side (out of scope
+/// this round, unchanged from before): a household's task volume makes
 /// same-hour conflicts rare, and simple stacking keeps this a first version
 /// rather than a full calendar-collision layout engine.
 class _HourAxis extends StatelessWidget {
@@ -691,9 +826,9 @@ class _HourAxis extends StatelessWidget {
   static const double _labelWidth = 44;
   static const double _minBlockHeight = 28;
 
-  final List<Task> tasks;
+  final List<_DaySegment> segments;
 
-  const _HourAxis({super.key, required this.tasks});
+  const _HourAxis({super.key, required this.segments});
 
   @override
   Widget build(BuildContext context) {
@@ -726,18 +861,19 @@ class _HourAxis extends StatelessWidget {
                 ],
               ),
             ),
-          for (final task in tasks) _block(context, task),
+          for (final segment in segments) _block(context, segment),
         ],
       ),
     );
   }
 
-  Widget _block(BuildContext context, Task task) {
-    final start = task.startsAt!;
-    final end = task.endsAt!;
+  Widget _block(BuildContext context, _DaySegment segment) {
+    final start = segment.start!;
+    final end = segment.end!;
     final top = (start.hour + start.minute / 60) * _hourHeight;
     final durationHours = end.difference(start).inMinutes / 60;
     final height = (durationHours * _hourHeight).clamp(_minBlockHeight, 24 * _hourHeight);
+    final task = segment.task;
 
     return Positioned(
       key: Key('dayBlock-${task.id}'),
@@ -759,16 +895,30 @@ class _HourAxis extends StatelessWidget {
             ),
             borderRadius: BorderRadius.circular(8),
           ),
-          child: Text(
-            task.title,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              decoration: task.isCompleted ? TextDecoration.lineThrough : null,
-              color: task.isCompleted ? AppColors.textSecondary : AppColors.textPrimary,
-            ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (segment.continuesBefore)
+                Icon(Icons.expand_less,
+                    size: 12,
+                    color: task.isCompleted ? AppColors.textSecondary : AppColors.primary),
+              Text(
+                task.title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  decoration: task.isCompleted ? TextDecoration.lineThrough : null,
+                  color: task.isCompleted ? AppColors.textSecondary : AppColors.textPrimary,
+                ),
+              ),
+              if (segment.continuesAfter)
+                Icon(Icons.expand_more,
+                    size: 12,
+                    color: task.isCompleted ? AppColors.textSecondary : AppColors.primary),
+            ],
           ),
         ),
       ),
