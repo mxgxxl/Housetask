@@ -438,7 +438,7 @@ to clients.
 14. NEVER configure `express.json()` without a payload size limit (e.g. `limit: '100kb'`). (MUST be enforced — currently NOT implemented, see TD-015)
 15. NEVER ship production with empty `CORS_ORIGINS`: when `NODE_ENV=production` it MUST be non-empty and the server MUST fail fast at startup otherwise; wildcard `*` is only acceptable in development. (MUST be enforced — currently NOT implemented, see TD-016)
 16. NEVER leave orphaned references when a member leaves a household: their pending assigned tasks MUST be unassigned (removed from `assignedTo`), tasks they created MUST be preserved, and the UI MUST render "Former member" for dangling user refs. (MUST be enforced — currently NOT implemented, see TD-018)
-17. NEVER allow edit/delete of a task by anyone other than the creator or an admin; any member may complete tasks and purchase shopping items. (MUST be enforced — currently NOT implemented, see TD-011, implement in Phase 2)
+17. NEVER allow edit/delete of a task by anyone other than the creator or an admin; any member may complete tasks and purchase shopping items. (Enforced since the TD-011 commit; see tasks.test.ts permission tests)
 18. NEVER render user-supplied text in any HTML-capable surface (future web client, email templates, push deep-links) without escaping at render time; mobile Text() widgets are safe by construction, storage stays raw per ADR-009
 
 ---
@@ -474,7 +474,7 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 | TD-008 | No CI/CD pipeline | Medium | Configure GitHub Actions | Planned (Phase 2) | TBD | 2026-08-08 |
 | TD-009 | No error tracking (Sentry not installed) | Medium | Integrate Sentry backend + frontend; backend + frontend with no-op fallback; security warnings (refresh replay) routed to Sentry as alert channel | Resolved (commits 1-2) | TBD | 2026-08-08 |
 | TD-010 | No database backups | Medium | Configure MongoDB Atlas backups | Planned (Phase 3) | TBD | 2026-08-08 |
-| TD-011 | No resource-level authorization on tasks (any member can delete) | High | Creator-or-admin rule for edit/delete; any member can complete | Planned (Phase 2) | TBD | 2026-08-10 |
+| TD-011 | No resource-level authorization on tasks (any member can delete) | High | Creator-or-admin rule for edit/delete; any member can complete tasks and purchase shopping items | Resolved (commit 1) | TBD | 2026-08-10 |
 | TD-012 | No ESLint/Prettier with no-console rule | Medium | Add lint config + pre-commit hook | Planned (Phase 2) | TBD | 2026-08-10 |
 | TD-013 | Recurrence computed in UTC without household timezone | Medium | Add household.timeZone + TZ-aware recurrence | Planned (Phase 2) | TBD | 2026-08-10 |
 | TD-014 | No idempotency on write POSTs (retry can duplicate) | High | Idempotency-Key header + Redis dedupe | Resolved (commit 2) | TBD | 2026-08-10 |
@@ -503,6 +503,7 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 | TD-037 | Sentry hardening bundle: configurable tracesSampleRate via env, Idempotency-Key in frontend 5xx context for TD-033 correlation, AppError-500 and concurrent-request context tests | Low | Apply when enabling Sentry with a real DSN in production | Deferred (until Sentry goes live) | TBD | 2026-08-11 |
 | TD-038 | sentry_flutter 8.14.2's Package.swift allows any sentry-cocoa 8.x (`from: "8.46.0"`) while its podspec pins exactly 8.46.0; SPM had resolved 8.58.4, which broke the plugin's Swift build (SentryBinaryImageCache API changed) | High | Pinned both Package.resolved files to 8.46.0 matching the podspec; re-pin on every sentry_flutter upgrade until upstream tightens the SPM constraint. Documented in `frontend/README.md`'s Known Issues. Filing the upstream request (against `getsentry/sentry-cocoa`, to tighten the Package.swift range so it can't drift past the podspec again) is a human action — requires a GitHub account and maintainer engagement — and is not something this pipeline can automate; tracked here as a manual follow-up, not automated work. | Resolved (commit 1); upstream report still open (manual follow-up) | TBD | 2026-08-11 |
 | TD-039 | Offline conflict resolution uses last-write-wins; concurrent edits on multiple devices can overwrite | Low | Evaluate CRDT or OT if user reports lost edits | Deferred (Phase 2, if conflicts become frequent) | TBD | 2026-08-11 |
+| TD-040 | flutter test monolithic run hangs on loaded hosts when combining test/widgets/* with the rest of the suite; passes cleanly in batches | Low | Investigate with --verbose on idle machine; adopt explicit sharding in CI (test/widgets/ as separate job) when TD-008 lands | Planned (with TD-008) | TBD | 2026-08-11 |
 
 ---
 
@@ -514,6 +515,7 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
   - `fix(frontend): fix socket reconnection on token refresh`
   - `refactor(backend): extract membership check to helper`
   - `chore: update dependencies`
+- NEVER use bulk git add on frontend/ or frontend/lib; always explicit file paths. frontend/lib/config/constants.dart carries a local URL override that must NEVER be committed (TD-017 covers making it env-based)
 - **PR requirements:**
   - All tests pass
   - TypeScript typecheck passes (`npm run typecheck`)
