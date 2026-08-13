@@ -29,6 +29,13 @@ class _TaskFormPageState extends State<TaskFormPage> {
 
   final Set<String> _assignedIds = {};
   DateTime? _dueDate;
+
+  /// Optional duration (PDR-004). Always null when [_isRecurring] is true —
+  /// duration + recurrence is out of scope this round, mirroring the
+  /// backend, which ignores/clears them on a recurring task.
+  DateTime? _startsAt;
+  DateTime? _endsAt;
+
   String _priority = 'medium';
   String _category = 'other';
   bool _isRecurring = false;
@@ -52,6 +59,12 @@ class _TaskFormPageState extends State<TaskFormPage> {
       _category = t.category;
       _isRecurring = t.isRecurring;
       _recurrenceType = t.recurrenceRule?.type ?? 'weekly';
+      // Enforces the invariant from the moment the form loads, not just when
+      // the user flips the switch — a recurring task never shows a duration.
+      if (!_isRecurring) {
+        _startsAt = t.startsAt;
+        _endsAt = t.endsAt;
+      }
     }
   }
 
@@ -87,8 +100,61 @@ class _TaskFormPageState extends State<TaskFormPage> {
     });
   }
 
+  Future<void> _pickStartsAt() async {
+    final now = DateTime.now();
+    final date = await showDatePicker(
+      context: context,
+      initialDate: _startsAt ?? now,
+      firstDate: DateTime(now.year - 1),
+      lastDate: DateTime(now.year + 3),
+    );
+    if (date == null || !mounted) return;
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(_startsAt ?? now),
+    );
+    final picked =
+        DateTime(date.year, date.month, date.day, time?.hour ?? 9, time?.minute ?? 0);
+    setState(() {
+      _startsAt = picked;
+      // PDR-004: picking a start with no due date yet aligns dueDate to it,
+      // so the task lands on the right day everywhere dueDate drives
+      // grouping (timeline, calendar month grid) instead of having none.
+      _dueDate ??= picked;
+    });
+  }
+
+  Future<void> _pickEndsAt() async {
+    final now = DateTime.now();
+    final base = _endsAt ?? _startsAt ?? now;
+    final date = await showDatePicker(
+      context: context,
+      initialDate: base,
+      firstDate: DateTime(now.year - 1),
+      lastDate: DateTime(now.year + 3),
+    );
+    if (date == null || !mounted) return;
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(base),
+    );
+    setState(() {
+      _endsAt = DateTime(date.year, date.month, date.day, time?.hour ?? 9, time?.minute ?? 0);
+    });
+  }
+
+  /// Inline validation message (PDR-004): only the pair needs ordering — a
+  /// single bound alone is always valid, matching the backend.
+  String? get _durationError {
+    if (_startsAt != null && _endsAt != null && !_endsAt!.isAfter(_startsAt!)) {
+      return 'El fin debe ser posterior al inicio';
+    }
+    return null;
+  }
+
   void _save() {
     if (!_formKey.currentState!.validate()) return;
+    if (_durationError != null) return;
 
     final payload = <String, dynamic>{
       'title': _title.text.trim(),
@@ -99,6 +165,10 @@ class _TaskFormPageState extends State<TaskFormPage> {
       'dueDate': _dueDate?.toIso8601String(),
       'isRecurring': _isRecurring,
     };
+    if (!_isRecurring) {
+      if (_startsAt != null) payload['startsAt'] = _startsAt!.toIso8601String();
+      if (_endsAt != null) payload['endsAt'] = _endsAt!.toIso8601String();
+    }
     if (_isRecurring) {
       payload['recurrenceRule'] = {
         'type': _recurrenceType,
@@ -161,6 +231,41 @@ class _TaskFormPageState extends State<TaskFormPage> {
               onTap: _pickDueDate,
               onClear: _dueDate == null ? null : () => setState(() => _dueDate = null),
             ),
+            if (!_isRecurring) ...[
+              const SizedBox(height: 16),
+              const SectionHeader(title: 'Duración (opcional)'),
+              _FieldTile(
+                icon: Icons.schedule_outlined,
+                label: 'Inicio',
+                value: _startsAt == null
+                    ? 'Sin definir'
+                    : DateFormat("d MMM y · HH:mm", 'es').format(_startsAt!),
+                onTap: _pickStartsAt,
+                onClear: _startsAt == null ? null : () => setState(() => _startsAt = null),
+              ),
+              const SizedBox(height: 12),
+              _FieldTile(
+                icon: Icons.schedule_outlined,
+                label: 'Fin',
+                value: _endsAt == null
+                    ? 'Sin definir'
+                    : DateFormat("d MMM y · HH:mm", 'es').format(_endsAt!),
+                onTap: _pickEndsAt,
+                onClear: _endsAt == null ? null : () => setState(() => _endsAt = null),
+              ),
+              if (_durationError != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8, left: 4),
+                  child: Text(
+                    _durationError!,
+                    style: const TextStyle(
+                      color: AppColors.error,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+            ],
             const SizedBox(height: 16),
             const SectionHeader(title: 'Prioridad'),
             Wrap(
@@ -203,7 +308,16 @@ class _TaskFormPageState extends State<TaskFormPage> {
               title: const Text('Tarea recurrente'),
               value: _isRecurring,
               activeColor: AppColors.primary,
-              onChanged: (v) => setState(() => _isRecurring = v),
+              onChanged: (v) => setState(() {
+                _isRecurring = v;
+                if (v) {
+                  // PDR-004: duration + recurrence is out of scope — turning
+                  // recurrence on hides and clears any startsAt/endsAt,
+                  // mirroring what the backend does on save.
+                  _startsAt = null;
+                  _endsAt = null;
+                }
+              }),
             ),
             if (_isRecurring)
               Row(

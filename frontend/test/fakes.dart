@@ -22,6 +22,8 @@ Task buildTask(
   String title = 'Tarea',
   bool completed = false,
   DateTime? dueDate,
+  DateTime? startsAt,
+  DateTime? endsAt,
   Map<String, dynamic>? completedBy,
 }) {
   return Task.fromJson({
@@ -34,6 +36,8 @@ Task buildTask(
     'assignedTo': const <dynamic>[],
     'isRecurring': false,
     if (dueDate != null) 'dueDate': dueDate.toIso8601String(),
+    if (startsAt != null) 'startsAt': startsAt.toIso8601String(),
+    if (endsAt != null) 'endsAt': endsAt.toIso8601String(),
     if (completedBy != null) 'completedBy': completedBy,
   });
 }
@@ -151,16 +155,24 @@ class FakeTaskRepository implements TaskRepository {
   /// what triggers the cubit's "saved offline" notice.
   final bool returnsUnsynced;
 
+  /// Payloads received by [create]/[update], in order — lets a test assert
+  /// exactly what TaskFormPage sent (e.g. startsAt/endsAt, PDR-004).
+  final List<Map<String, dynamic>> receivedCreatePayloads = [];
+  final List<Map<String, dynamic>> receivedUpdatePayloads = [];
+
   @override
   Future<Task> create(String householdId, Map<String, dynamic> payload) async {
+    receivedCreatePayloads.add(payload);
     if (failCreateWith != null) throw failCreateWith!;
     return buildTask('created', title: payload['title'] as String? ?? 'Tarea')
         .copyWith(isSynced: !returnsUnsynced);
   }
 
   @override
-  Future<Task> update(String householdId, String taskId, Map<String, dynamic> payload) async =>
-      buildTask(taskId).copyWith(isSynced: !returnsUnsynced);
+  Future<Task> update(String householdId, String taskId, Map<String, dynamic> payload) async {
+    receivedUpdatePayloads.add(payload);
+    return buildTask(taskId).copyWith(isSynced: !returnsUnsynced);
+  }
 
   @override
   Future<Task> complete(String householdId, String taskId) async =>

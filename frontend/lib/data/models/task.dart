@@ -14,6 +14,14 @@ class Task extends Equatable {
   final String priority; // 'low' | 'medium' | 'high'
   final String category; // cleaning | cooking | shopping | maintenance | other
   final DateTime? dueDate;
+
+  /// Optional duration (PDR-004): both null = an instantaneous task
+  /// (retrocompatible default). A recurring task never carries these — the
+  /// backend ignores/clears them (duration + recurrence is out of scope this
+  /// round), so the form hides the pickers whenever recurrence is on.
+  final DateTime? startsAt;
+  final DateTime? endsAt;
+
   final DateTime? completedAt;
   final User? completedBy;
   final bool isRecurring;
@@ -42,6 +50,8 @@ class Task extends Equatable {
     this.priority = 'medium',
     this.category = 'other',
     this.dueDate,
+    this.startsAt,
+    this.endsAt,
     this.completedAt,
     this.completedBy,
     this.isRecurring = false,
@@ -69,6 +79,9 @@ class Task extends Equatable {
       category: (json['category'] ?? 'other') as String,
       dueDate:
           json['dueDate'] != null ? DateTime.tryParse(json['dueDate'].toString()) : null,
+      startsAt:
+          json['startsAt'] != null ? DateTime.tryParse(json['startsAt'].toString()) : null,
+      endsAt: json['endsAt'] != null ? DateTime.tryParse(json['endsAt'].toString()) : null,
       completedAt: json['completedAt'] != null
           ? DateTime.tryParse(json['completedAt'].toString())
           : null,
@@ -95,6 +108,8 @@ class Task extends Equatable {
         'priority': priority,
         'category': category,
         'dueDate': dueDate?.toIso8601String(),
+        'startsAt': startsAt?.toIso8601String(),
+        'endsAt': endsAt?.toIso8601String(),
         'isRecurring': isRecurring,
         if (recurrenceRule != null) 'recurrenceRule': recurrenceRule!.toJson(),
         'parentTaskId': parentTaskId,
@@ -108,6 +123,8 @@ class Task extends Equatable {
     String? priority,
     String? category,
     DateTime? dueDate,
+    DateTime? startsAt,
+    DateTime? endsAt,
     bool? isRecurring,
     RecurrenceRule? recurrenceRule,
     bool? isSynced,
@@ -124,6 +141,8 @@ class Task extends Equatable {
       priority: priority ?? this.priority,
       category: category ?? this.category,
       dueDate: dueDate ?? this.dueDate,
+      startsAt: startsAt ?? this.startsAt,
+      endsAt: endsAt ?? this.endsAt,
       completedAt: completedAt,
       completedBy: completedBy,
       isRecurring: isRecurring ?? this.isRecurring,
@@ -145,6 +164,8 @@ class Task extends Equatable {
         priority,
         category,
         dueDate,
+        startsAt,
+        endsAt,
         completedAt,
         isRecurring,
         parentTaskId,
