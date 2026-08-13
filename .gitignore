@@ -1,3 +1,13 @@
 .DS_Store
 **/.DS_Store
 *.log
+frontend/ios/**/xcuserdata/
+frontend/ios/**/*.xcuserstate
+frontend/ios/**/DerivedData/
+
+# iOS Flutter/ dir: ignore all generated/per-machine content, track only the
+# static template files a fresh clone needs to build (TD-036 hardening)
+frontend/ios/Flutter/*
+!frontend/ios/Flutter/Debug.xcconfig
+!frontend/ios/Flutter/Release.xcconfig
+!frontend/ios/Flutter/AppFrameworkInfo.plist
