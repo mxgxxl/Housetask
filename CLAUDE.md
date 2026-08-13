@@ -525,6 +525,25 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
   - Update README if setup process changes
   - Include "💡 Proposed Improvements" section in PR description
 
+### Local-only configuration (NEVER commit)
+
+Two files carry local overrides that must NEVER be committed:
+- `frontend/lib/config/constants.dart`: local URL override pointing to Railway or localhost for development
+- `ios/Runner.xcodeproj/project.pbxproj`: Bundle Identifier changed to avoid Personal Team conflicts
+
+These files are protected with `git update-index --assume-unchanged`. To verify:
+```bash
+git ls-files -v | grep '^h'
+```
+Should show both files with lowercase 'h' prefix (assume-unchanged flag).
+
+To temporarily allow commits (rare, only for legitimate changes):
+```bash
+git update-index --no-assume-unchanged <file>
+# make change, commit
+git update-index --assume-unchanged <file>
+```
+
 ---
 
 ## 🏃 Local Development Setup
