@@ -625,6 +625,140 @@ void main() {
       expect(cubit.state.bucket(TaskFilter.pending).loaded, isTrue);
     });
   });
+
+  group('TaskCubit timeline (PDR-003)', () {
+    test('loadTimeline groups dated tasks by local day and separates undated ones', () async {
+      final today = DateTime.now();
+      final tomorrow = today.add(const Duration(days: 1));
+      final repo = FakeTaskRepository(timelinePages: [
+        page([
+          buildTask('a', dueDate: today),
+          buildTask('b', dueDate: tomorrow),
+          buildTask('c'), // undated
+        ]),
+      ]);
+      final cubit = TaskCubit(repo, FakeNotificationService());
+
+      await cubit.loadTimeline('h1');
+
+      final todayKey = DateTime(today.year, today.month, today.day);
+      final tomorrowKey = DateTime(tomorrow.year, tomorrow.month, tomorrow.day);
+      expect(cubit.state.timelineDays[todayKey]?.map((t) => t.id), ['a']);
+      expect(cubit.state.timelineDays[tomorrowKey]?.map((t) => t.id), ['b']);
+      expect(cubit.state.timelineUndated.map((t) => t.id), ['c']);
+    });
+
+    test('loadTimeline sends a window from yesterday through today+6', () async {
+      final repo = FakeTaskRepository(timelinePages: [page([])]);
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      final before = DateTime.now();
+
+      await cubit.loadTimeline('h1');
+
+      final from = repo.receivedFrom.single!;
+      final to = repo.receivedTo.single!;
+      final expectedFrom = DateTime(before.year, before.month, before.day - 1);
+      final expectedTo = DateTime(before.year, before.month, before.day + 6, 23, 59, 59, 999);
+      expect(from, expectedFrom);
+      expect(to, expectedTo);
+    });
+
+    test('"show more" is purely local: revealing a day\'s extra items issues no request',
+        () async {
+      // The cubit itself never fetches for "show more" — TasksPage's
+      // _DaySection reveals already-loaded items locally. This test pins
+      // that loadTimeline() alone already carries every item for the day
+      // (nothing paginated per-day), which is what makes that possible.
+      final today = DateTime.now();
+      final repo = FakeTaskRepository(timelinePages: [
+        page(List.generate(5, (i) => buildTask('t$i', dueDate: today))),
+      ]);
+      final cubit = TaskCubit(repo, FakeNotificationService());
+
+      await cubit.loadTimeline('h1');
+
+      final todayKey = DateTime(today.year, today.month, today.day);
+      expect(cubit.state.timelineDays[todayKey], hasLength(5));
+      expect(repo.timelineListCalls, 1);
+    });
+
+    test('loadMoreTimeline pages within the current window via the cursor first', () async {
+      final today = DateTime.now();
+      final repo = FakeTaskRepository(timelinePages: [
+        page([buildTask('a', dueDate: today)], nextCursor: 'c1', hasMore: true),
+        page([buildTask('b', dueDate: today)]),
+      ]);
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.loadTimeline('h1');
+      final windowToAfterLoad = cubit.state.timelineWindowTo;
+
+      await cubit.loadMoreTimeline();
+
+      // Same window: the second scripted page was reached via the cursor,
+      // not by widening `to`.
+      expect(repo.receivedTo[1], windowToAfterLoad);
+      expect(repo.receivedFrom[1], repo.receivedFrom[0]);
+      final todayKey = DateTime(today.year, today.month, today.day);
+      expect(
+        cubit.state.timelineDays[todayKey]?.map((t) => t.id).toSet(),
+        {'a', 'b'},
+      );
+      expect(cubit.state.timelineHasMore, isFalse);
+    });
+
+    test('loadMoreTimeline extends the window forward once the current one is exhausted',
+        () async {
+      final today = DateTime.now();
+      final future = today.add(const Duration(days: 10));
+      final repo = FakeTaskRepository(timelinePages: [
+        page([buildTask('a', dueDate: today)]), // hasMore: false
+        page([buildTask('a', dueDate: today), buildTask('b', dueDate: future)]),
+      ]);
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.loadTimeline('h1');
+      final initialTo = cubit.state.timelineWindowTo!;
+
+      await cubit.loadMoreTimeline();
+
+      // No cursor left in the current window, so it widened `to` instead and
+      // re-fetched from scratch (cursor: null).
+      expect(repo.receivedCursors[1], isNull);
+      expect(repo.receivedTo[1], isNot(initialTo));
+      expect(repo.receivedTo[1]!.isAfter(initialTo), isTrue);
+      expect(cubit.state.timelineWindowTo, repo.receivedTo[1]);
+
+      // The re-fetched 'a' (already bucketed) overwrote in place rather than
+      // duplicating, and the newly-included 'b' was added.
+      final todayKey = DateTime(today.year, today.month, today.day);
+      final futureKey = DateTime(future.year, future.month, future.day);
+      expect(cubit.state.timelineDays[todayKey]?.map((t) => t.id), ['a']);
+      expect(cubit.state.timelineDays[futureKey]?.map((t) => t.id), ['b']);
+    });
+
+    test('loadTimeline/loadMoreTimeline never touch the TaskFilter.all bucket Home/Calendar read',
+        () async {
+      final today = DateTime.now();
+      final repo = FakeTaskRepository(
+        pagesByStatus: {
+          null: [page([buildTask('home-1')], total: 1)],
+        },
+        timelinePages: [
+          page([buildTask('t1', dueDate: today)], nextCursor: 'c1', hasMore: true),
+          page([buildTask('t2', dueDate: today)]),
+        ],
+      );
+      final cubit = TaskCubit(repo, FakeNotificationService());
+
+      // Mirrors MainScaffold._loadForHousehold: both load() (for
+      // Home/Calendar's `all` bucket) and loadTimeline() fire for the same
+      // household.
+      await cubit.load('h1');
+      await cubit.loadTimeline('h1');
+      await cubit.loadMoreTimeline();
+
+      expect(cubit.state.allTasks.map((t) => t.id), ['home-1']);
+    });
+  });
 }
 
 /// First page succeeds, second fails — models a mid-scroll network drop.
@@ -637,6 +771,8 @@ class _FailingSecondPageRepository extends FakeTaskRepository {
     String? status,
     int limit = 50,
     String? cursor,
+    DateTime? from,
+    DateTime? to,
   }) async {
     receivedCursors.add(cursor);
     listCalls++;

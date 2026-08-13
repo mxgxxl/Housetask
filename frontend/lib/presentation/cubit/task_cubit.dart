@@ -130,6 +130,34 @@ class TaskState extends Equatable {
   /// drives the spinner in the offline banner (TD-003).
   final bool isSyncing;
 
+  /// Day-grouped timeline for the "Todas" tab (PDR-003) — deliberately
+  /// separate from [buckets]: [TaskFilter.all] stays the unfiltered,
+  /// unbounded-by-date list Home/Calendar read via [allTasks], while the
+  /// timeline is scoped to a rolling from/to window that would otherwise
+  /// silently drop tasks outside it from those dashboards.
+  ///
+  /// Keyed by local midnight ([DateTime] with only year/month/day set) so a
+  /// task's day is decided once, in [TaskCubit], rather than re-derived by
+  /// every widget that reads it.
+  final Map<DateTime, List<Task>> timelineDays;
+
+  /// Tasks with no dueDate — always included in every from/to window response
+  /// (see task.service.ts `dueDateWindowFilter`) since they have no day to be
+  /// grouped under; the UI puts them in a "Sin fecha" section instead.
+  final List<Task> timelineUndated;
+
+  final String? timelineCursor;
+  final bool timelineHasMore;
+
+  /// Current window bounds, so [TaskCubit.loadMoreTimeline] knows what to
+  /// extend. Null before the first [TaskCubit.loadTimeline] call.
+  final DateTime? timelineWindowFrom;
+  final DateTime? timelineWindowTo;
+
+  final bool timelineLoading;
+  final bool timelineLoadingMore;
+  final String? timelineError;
+
   const TaskState({
     this.status = TaskStatusUi.initial,
     this.error,
@@ -138,6 +166,15 @@ class TaskState extends Equatable {
     this.isOffline = false,
     this.offlineNotice,
     this.isSyncing = false,
+    this.timelineDays = const {},
+    this.timelineUndated = const [],
+    this.timelineCursor,
+    this.timelineHasMore = false,
+    this.timelineWindowFrom,
+    this.timelineWindowTo,
+    this.timelineLoading = false,
+    this.timelineLoadingMore = false,
+    this.timelineError,
   });
 
   /// Pagination state for [filter], empty if it has never been loaded.
@@ -167,6 +204,15 @@ class TaskState extends Equatable {
     bool? isOffline,
     String? offlineNotice,
     bool? isSyncing,
+    Map<DateTime, List<Task>>? timelineDays,
+    List<Task>? timelineUndated,
+    String? timelineCursor,
+    bool? timelineHasMore,
+    DateTime? timelineWindowFrom,
+    DateTime? timelineWindowTo,
+    bool? timelineLoading,
+    bool? timelineLoadingMore,
+    String? timelineError,
   }) {
     return TaskState(
       status: status ?? this.status,
@@ -176,12 +222,39 @@ class TaskState extends Equatable {
       isOffline: isOffline ?? this.isOffline,
       offlineNotice: offlineNotice,
       isSyncing: isSyncing ?? this.isSyncing,
+      timelineDays: timelineDays ?? this.timelineDays,
+      timelineUndated: timelineUndated ?? this.timelineUndated,
+      // Explicitly nullable, like TaskBucket.nextCursor: the window running
+      // out of pages must be able to clear it.
+      timelineCursor: timelineCursor,
+      timelineHasMore: timelineHasMore ?? this.timelineHasMore,
+      timelineWindowFrom: timelineWindowFrom ?? this.timelineWindowFrom,
+      timelineWindowTo: timelineWindowTo ?? this.timelineWindowTo,
+      timelineLoading: timelineLoading ?? this.timelineLoading,
+      timelineLoadingMore: timelineLoadingMore ?? this.timelineLoadingMore,
+      timelineError: timelineError,
     );
   }
 
   @override
-  List<Object?> get props =>
-      [status, error, activeFilter, buckets, isOffline, offlineNotice, isSyncing];
+  List<Object?> get props => [
+        status,
+        error,
+        activeFilter,
+        buckets,
+        isOffline,
+        offlineNotice,
+        isSyncing,
+        timelineDays,
+        timelineUndated,
+        timelineCursor,
+        timelineHasMore,
+        timelineWindowFrom,
+        timelineWindowTo,
+        timelineLoading,
+        timelineLoadingMore,
+        timelineError,
+      ];
 }
 
 /// Manages the task list for the active household, including realtime sync.
@@ -357,6 +430,72 @@ class TaskCubit extends Cubit<TaskState> {
     }
   }
 
+  /// Fetch the initial timeline window for the "Todas" tab (PDR-003):
+  /// yesterday through today+6, computed from the DEVICE's local calendar so
+  /// day boundaries match what the user actually sees, independent of
+  /// TD-013 (household timezone, not yet implemented).
+  Future<void> loadTimeline(String householdId) async {
+    _householdId = householdId;
+    final now = DateTime.now();
+    final from = _startOfLocalDay(now.subtract(const Duration(days: _timelineLookbackDays)));
+    final to = _endOfLocalDay(now.add(const Duration(days: _timelineInitialForwardDays)));
+
+    emit(state.copyWith(timelineLoading: true, timelineError: null));
+    try {
+      final result = await _repo.list(householdId, from: from, to: to);
+      final grouped = _groupTasksByLocalDay(result.items);
+      emit(state.copyWith(
+        timelineLoading: false,
+        timelineDays: grouped.days,
+        timelineUndated: grouped.undated,
+        timelineCursor: result.nextCursor,
+        timelineHasMore: result.hasMore,
+        timelineWindowFrom: from,
+        timelineWindowTo: to,
+      ));
+    } on Failure catch (f) {
+      emit(state.copyWith(timelineLoading: false, timelineError: f.message));
+    }
+  }
+
+  /// Continue the timeline: first drains any further pages of the CURRENT
+  /// window via [TaskState.timelineCursor] (a household with a busy week can
+  /// exceed one page), then — once that window is exhausted — extends `to`
+  /// forward by [_timelineExtendDays] and fetches page one of the wider
+  /// window. Either way the response is merged into the existing buckets by
+  /// task id rather than appended, so re-fetching an already-seen item when
+  /// the window widens (a plain superset re-fetch, since `from` never moves)
+  /// overwrites it in place instead of duplicating it.
+  Future<void> loadMoreTimeline() async {
+    if (_householdId == null || state.timelineLoadingMore) return;
+
+    final from = state.timelineWindowFrom;
+    var to = state.timelineWindowTo;
+    if (from == null || to == null) return; // loadTimeline() never ran.
+
+    final continuingWithinWindow = state.timelineHasMore && state.timelineCursor != null;
+    final cursor = continuingWithinWindow ? state.timelineCursor : null;
+    if (!continuingWithinWindow) {
+      to = _endOfLocalDay(to.add(const Duration(days: _timelineExtendDays)));
+    }
+
+    emit(state.copyWith(timelineLoadingMore: true));
+    try {
+      final result = await _repo.list(_householdId!, from: from, to: to, cursor: cursor);
+      final merged = _mergeTimelineItems(state.timelineDays, state.timelineUndated, result.items);
+      emit(state.copyWith(
+        timelineLoadingMore: false,
+        timelineDays: merged.days,
+        timelineUndated: merged.undated,
+        timelineCursor: result.nextCursor,
+        timelineHasMore: result.hasMore,
+        timelineWindowTo: to,
+      ));
+    } on Failure catch (f) {
+      emit(state.copyWith(timelineLoadingMore: false, timelineError: f.message));
+    }
+  }
+
   /// Ask the backend to generate any missed recurring occurrences, then reload
   /// if new tasks were created. Silent + non-critical: never surfaces errors.
   Future<void> catchUpRecurringTasks(String householdId) async {
@@ -519,17 +658,82 @@ class TaskCubit extends Cubit<TaskState> {
   }
 
   /// Pending first, then by due date ascending (nulls last).
-  List<Task> _sorted(List<Task> tasks) {
-    final copy = List<Task>.from(tasks);
-    copy.sort((a, b) {
-      if (a.isCompleted != b.isCompleted) return a.isCompleted ? 1 : -1;
-      final ad = a.dueDate;
-      final bd = b.dueDate;
-      if (ad == null && bd == null) return 0;
-      if (ad == null) return 1;
-      if (bd == null) return -1;
-      return ad.compareTo(bd);
-    });
-    return copy;
+  List<Task> _sorted(List<Task> tasks) => _sortTasksForDisplay(tasks);
+}
+
+/// Timeline window (PDR-003): starts at "yesterday" so a task due yesterday
+/// but not yet done is never hidden the moment the clock ticks past
+/// midnight, and initially reaches 6 days into the future (an 8-day window
+/// total: yesterday, today, +1..+6).
+const _timelineLookbackDays = 1;
+const _timelineInitialForwardDays = 6;
+
+/// Extra days appended to the window each time [TaskCubit.loadMoreTimeline]
+/// runs out of pages within the current one.
+const _timelineExtendDays = 7;
+
+DateTime _startOfLocalDay(DateTime d) => DateTime(d.year, d.month, d.day);
+
+DateTime _endOfLocalDay(DateTime d) =>
+    DateTime(d.year, d.month, d.day, 23, 59, 59, 999);
+
+/// Grouped items for the timeline: dated tasks keyed by local midnight, plus
+/// the undated ones the backend always includes alongside a from/to window.
+class _TimelineGroups {
+  final Map<DateTime, List<Task>> days;
+  final List<Task> undated;
+  const _TimelineGroups(this.days, this.undated);
+}
+
+_TimelineGroups _groupTasksByLocalDay(List<Task> tasks) {
+  final days = <DateTime, List<Task>>{};
+  final undated = <Task>[];
+  for (final task in tasks) {
+    final due = task.dueDate;
+    if (due == null) {
+      undated.add(task);
+      continue;
+    }
+    final key = _startOfLocalDay(due.toLocal());
+    (days[key] ??= []).add(task);
   }
+  for (final key in days.keys) {
+    days[key] = _sortTasksForDisplay(days[key]!);
+  }
+  return _TimelineGroups(days, undated);
+}
+
+/// Pending first, then by due date ascending — same ordering rule as
+/// TaskCubit._sorted, kept as a top-level function since the merge helper
+/// below needs it too and does not have a TaskCubit instance to call it on.
+List<Task> _sortTasksForDisplay(List<Task> tasks) {
+  final copy = List<Task>.from(tasks);
+  copy.sort((a, b) {
+    if (a.isCompleted != b.isCompleted) return a.isCompleted ? 1 : -1;
+    final ad = a.dueDate;
+    final bd = b.dueDate;
+    if (ad == null && bd == null) return 0;
+    if (ad == null) return 1;
+    if (bd == null) return -1;
+    return ad.compareTo(bd);
+  });
+  return copy;
+}
+
+/// Merge a newly-fetched page into the existing timeline buckets, keyed by
+/// task id so a widened window's superset re-fetch overwrites rather than
+/// duplicates already-bucketed items.
+_TimelineGroups _mergeTimelineItems(
+  Map<DateTime, List<Task>> existingDays,
+  List<Task> existingUndated,
+  List<Task> newItems,
+) {
+  final byId = <String, Task>{
+    for (final t in existingDays.values.expand((l) => l)) t.id: t,
+    for (final t in existingUndated) t.id: t,
+  };
+  for (final t in newItems) {
+    byId[t.id] = t;
+  }
+  return _groupTasksByLocalDay(byId.values.toList());
 }

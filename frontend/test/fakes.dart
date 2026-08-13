@@ -64,9 +64,23 @@ class FakeTaskRepository implements TaskRepository {
   /// that each tab queries the server instead of filtering locally.
   final List<String?> receivedStatuses = [];
 
+  /// `from`/`to` received by [list], in order — lets a test assert the
+  /// timeline window sent on each call (PDR-003).
+  final List<DateTime?> receivedFrom = [];
+  final List<DateTime?> receivedTo = [];
+
   /// Pages keyed by status param, for tests that drive several tabs. Falls
   /// back to [pages] when a status has no scripted queue.
   final Map<String?, List<PaginatedResponse<Task>>> pagesByStatus;
+
+  /// Pages replayed in order for timeline calls (any call with `from` and/or
+  /// `to` set) — kept separate from [pagesByStatus] so scripting the
+  /// TaskFilter.all bucket's page(s) never gets consumed by loadTimeline(),
+  /// and vice versa: the two are distinguishable by whether from/to are set,
+  /// exactly like the real endpoint.
+  final List<PaginatedResponse<Task>> timelinePages;
+
+  int timelineListCalls = 0;
 
   final Map<String?, int> _callsByStatus = {};
 
@@ -84,6 +98,7 @@ class FakeTaskRepository implements TaskRepository {
   FakeTaskRepository({
     this.pages = const [],
     this.pagesByStatus = const {},
+    this.timelinePages = const [],
     this.failListWith,
     this.failCreateWith,
     this.gate,
@@ -98,9 +113,22 @@ class FakeTaskRepository implements TaskRepository {
     String? status,
     int limit = 50,
     String? cursor,
+    DateTime? from,
+    DateTime? to,
   }) async {
     receivedCursors.add(cursor);
     receivedStatuses.add(status);
+    receivedFrom.add(from);
+    receivedTo.add(to);
+
+    if (from != null || to != null) {
+      final n = timelineListCalls;
+      timelineListCalls++;
+      if (gate != null) await gate;
+      if (failListWith != null) throw failListWith!;
+      return n < timelinePages.length ? timelinePages[n] : const PaginatedResponse.empty();
+    }
+
     final index = listCalls;
     listCalls++;
 

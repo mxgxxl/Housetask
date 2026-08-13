@@ -51,6 +51,10 @@ class _MainScaffoldState extends State<MainScaffold> {
     if (_loadedHouseholdId == householdId) return;
     _loadedHouseholdId = householdId;
     context.read<TaskCubit>().load(householdId);
+    // "Todas" (PDR-003) is warmed up front like every other tab, rather than
+    // lazily from TasksPage.initState, so it is ready the moment the user
+    // switches to the Tareas tab instead of showing its own loading spinner.
+    context.read<TaskCubit>().loadTimeline(householdId);
     context.read<ShoppingCubit>().load(householdId);
     context.read<SocketCubit>().joinHousehold(householdId);
     // Generate any missed recurring occurrences for this household.

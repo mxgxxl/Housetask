@@ -41,6 +41,16 @@ class TaskRepository {
 
   /// Fetch one page of tasks. Omit [cursor] for the first page.
   ///
+  /// [from]/[to] (PDR-003 timeline) restrict the page to tasks whose dueDate
+  /// falls in that window, plus every undated task (the backend always
+  /// includes them — see task.service.ts `dueDateWindowFilter` — so the
+  /// timeline's "Sin fecha" bucket never has to be fetched separately).
+  /// Serialized via `.toUtc().toIso8601String()` so the instant sent is
+  /// unambiguous regardless of the device's timezone: the caller computes
+  /// [from]/[to] from its own local calendar boundaries (e.g. "start of
+  /// yesterday"), and the server only ever sees an absolute UTC instant, never
+  /// a bare date it would have to guess a timezone for.
+  ///
   /// Falls back to the cache when the request cannot be answered at all
   /// (offline, timeout, 5xx) — never on an ordinary 4xx, which is a real
   /// answer from the server. A cache fallback always returns everything
@@ -52,6 +62,8 @@ class TaskRepository {
     String? status,
     int limit = 50,
     String? cursor,
+    DateTime? from,
+    DateTime? to,
   }) async {
     try {
       final data = await _api.get(
@@ -60,6 +72,8 @@ class TaskRepository {
           'limit': limit,
           if (status != null) 'status': status,
           if (cursor != null) 'cursor': cursor,
+          if (from != null) 'from': from.toUtc().toIso8601String(),
+          if (to != null) 'to': to.toUtc().toIso8601String(),
         },
       );
       final page = PaginatedResponse<Task>.fromJson(
