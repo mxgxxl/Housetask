@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../config/theme.dart';
 import '../../core/utils/ui_helpers.dart';
 import '../../data/models/task.dart';
+import '../../data/models/user.dart';
+import '../cubit/household_cubit.dart';
 import 'user_avatar.dart';
 
 /// A single task row: completion checkbox, title, category, due date,
@@ -24,6 +27,23 @@ class TaskTile extends StatelessWidget {
     // indicator below combine naturally: the row reads as "queued to be
     // removed once back online".
     final struckThrough = task.isCompleted || task.isDeleted;
+
+    // A completer who is no longer a household member (TD-018) still has a
+    // valid User document — the id just no longer appears in the current
+    // members list — so "current member" is decided here, not by a null
+    // name/email.
+    String? completedByLabel;
+    User? completedByAvatarUser;
+    final completedBy = task.completedBy;
+    if (task.isCompleted && completedBy != null) {
+      final members = context.watch<HouseholdCubit>().state.current?.members ?? const [];
+      final isCurrentMember = members.any((m) => m.user.id == completedBy.id);
+      completedByLabel = isCurrentMember
+          ? (completedBy.name.isEmpty ? completedBy.email : completedBy.name)
+          : 'Ex-miembro';
+      completedByAvatarUser =
+          isCurrentMember ? completedBy : User(id: completedBy.id, email: '', name: '');
+    }
 
     return Opacity(
       opacity: task.isDeleted ? 0.5 : 1,
@@ -111,6 +131,27 @@ class TaskTile extends StatelessWidget {
                           ],
                         ],
                       ),
+                      if (completedByLabel != null) ...[
+                        const SizedBox(height: 4),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            UserAvatar(user: completedByAvatarUser!, size: 16),
+                            const SizedBox(width: 4),
+                            Flexible(
+                              child: Text(
+                                'Completada por $completedByLabel',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  color: AppColors.textSecondary,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 ),

@@ -28,7 +28,7 @@ interface TaskResponse {
   status: 'pending' | 'completed';
   dueDate?: string;
   completedAt?: string;
-  completedBy?: { id: string };
+  completedBy?: { id: string; name?: string };
   isRecurring: boolean;
   parentTaskId?: string | null;
 }
@@ -136,6 +136,25 @@ describe('GET /api/households/:householdId/tasks', () => {
     const ids = (res.body.data.items as TaskResponse[]).map((t) => t.id);
     // Completed goes last even though its dueDate is the earliest.
     expect(ids).toEqual([sooner.id, later.id, finished.id]);
+  });
+
+  it('should include completedBy populated with the completer name in the list payload', async () => {
+    const { user, household } = await setupHousehold();
+    const task = await createTask(user, household, { title: 'Finish me' });
+    await request(app)
+      .patch(`${await tasksUrl(household)}/${task.id}/complete`)
+      .set(authHeader(user.accessToken));
+
+    const res = await request(app)
+      .get(await tasksUrl(household))
+      .set(authHeader(user.accessToken));
+
+    expect(res.status).toBe(200);
+    const items = res.body.data.items as TaskResponse[];
+    const completed = items.find((t) => t.id === task.id);
+    // The frontend TaskTile (PDR-002) needs the name inline — not just an id
+    // it would have to resolve against a second endpoint.
+    expect(completed?.completedBy).toMatchObject({ id: user.id, name: user.name });
   });
 });
 

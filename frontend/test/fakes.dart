@@ -1,9 +1,12 @@
 import 'dart:async';
 
 import 'package:homesync/core/errors/failures.dart';
+import 'package:homesync/data/models/household.dart';
+import 'package:homesync/data/models/member.dart';
 import 'package:homesync/data/models/paginated_response.dart';
 import 'package:homesync/data/models/shopping_item.dart';
 import 'package:homesync/data/models/task.dart';
+import 'package:homesync/data/repositories/household_repository.dart';
 import 'package:homesync/data/repositories/shopping_repository.dart';
 import 'package:homesync/data/repositories/task_repository.dart';
 import 'package:homesync/services/cache_service.dart';
@@ -19,6 +22,7 @@ Task buildTask(
   String title = 'Tarea',
   bool completed = false,
   DateTime? dueDate,
+  Map<String, dynamic>? completedBy,
 }) {
   return Task.fromJson({
     'id': id,
@@ -30,6 +34,7 @@ Task buildTask(
     'assignedTo': const <dynamic>[],
     'isRecurring': false,
     if (dueDate != null) 'dueDate': dueDate.toIso8601String(),
+    if (completedBy != null) 'completedBy': completedBy,
   });
 }
 
@@ -237,6 +242,33 @@ class FakeShoppingRepository implements ShoppingRepository {
     if (syncGate != null) await syncGate;
     return syncPendingOperationsResult;
   }
+}
+
+/// Stands in for HouseholdRepository wherever a HouseholdCubit needs one to
+/// construct but the test only cares about state it sets directly via
+/// emit() — none of these methods are expected to be called.
+class FakeHouseholdRepository implements HouseholdRepository {
+  @override
+  Future<Household> create(String name) async => throw UnimplementedError();
+
+  @override
+  Future<Household> getById(String id) async => throw UnimplementedError();
+
+  @override
+  Future<Household> join(String inviteCode) async => throw UnimplementedError();
+
+  @override
+  Future<List<Member>> members(String id) async => throw UnimplementedError();
+
+  @override
+  Future<Household> removeMember(String householdId, String userId) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<String?> currentHouseholdId() async => null;
+
+  @override
+  Future<void> setCurrentHouseholdId(String? id) async {}
 }
 
 /// Controllable connectivity signal for cubit tests: no platform channel, no

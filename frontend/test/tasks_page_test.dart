@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homesync/data/models/paginated_response.dart';
 import 'package:homesync/data/models/task.dart';
+import 'package:homesync/presentation/cubit/household_cubit.dart';
 import 'package:homesync/presentation/cubit/task_cubit.dart';
 import 'package:homesync/presentation/pages/tasks_page.dart';
 
@@ -32,8 +33,15 @@ Future<TaskCubit> pumpTasksPage(
 
   await tester.pumpWidget(
     MaterialApp(
-      home: BlocProvider<TaskCubit>.value(
-        value: cubit,
+      home: MultiBlocProvider(
+        providers: [
+          BlocProvider<TaskCubit>.value(value: cubit),
+          // TaskTile reads HouseholdCubit to resolve "who completed this"
+          // (PDR-002); an empty/initial state is enough for these tests.
+          BlocProvider<HouseholdCubit>(
+            create: (_) => HouseholdCubit(FakeHouseholdRepository()),
+          ),
+        ],
         child: const TasksPage(),
       ),
     ),
