@@ -121,3 +121,13 @@ export function daysFromNow(days: number): string {
   date.setDate(date.getDate() + days);
   return date.toISOString();
 }
+
+/**
+ * ISO string for `hours` from now — handy for startsAt/endsAt assertions
+ * (PDR-004), where day-level granularity is too coarse to express a range.
+ */
+export function hoursFromNow(hours: number): string {
+  const date = new Date();
+  date.setHours(date.getHours() + hours);
+  return date.toISOString();
+}

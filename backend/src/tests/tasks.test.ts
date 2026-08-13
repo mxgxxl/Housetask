@@ -10,6 +10,7 @@ import {
   createTestHousehold,
   createTestUser,
   daysFromNow,
+  hoursFromNow,
   joinTestHousehold,
 } from './helpers';
 
@@ -27,6 +28,8 @@ interface TaskResponse {
   title: string;
   status: 'pending' | 'completed';
   dueDate?: string;
+  startsAt?: string;
+  endsAt?: string;
   completedAt?: string;
   completedBy?: { id: string; name?: string };
   isRecurring: boolean;
@@ -468,6 +471,137 @@ describe('POST /api/households/:householdId/tasks', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('Task title is required');
+  });
+});
+
+describe('startsAt/endsAt — optional task duration (PDR-004)', () => {
+  it('should create a task with a valid startsAt/endsAt range', async () => {
+    const { user, household } = await setupHousehold();
+    const startsAt = hoursFromNow(1);
+    const endsAt = hoursFromNow(3);
+
+    const res = await request(app)
+      .post(await tasksUrl(household))
+      .set(authHeader(user.accessToken))
+      .send({ title: 'Pintar el salón', startsAt, endsAt });
+
+    expect(res.status).toBe(201);
+    expect(new Date(res.body.data.startsAt).toISOString()).toBe(new Date(startsAt).toISOString());
+    expect(new Date(res.body.data.endsAt).toISOString()).toBe(new Date(endsAt).toISOString());
+  });
+
+  it('should reject endsAt <= startsAt with 400', async () => {
+    const { user, household } = await setupHousehold();
+
+    const sameInstant = hoursFromNow(2);
+    const same = await request(app)
+      .post(await tasksUrl(household))
+      .set(authHeader(user.accessToken))
+      .send({ title: 'Rango inválido (igual)', startsAt: sameInstant, endsAt: sameInstant });
+    expect(same.status).toBe(400);
+    expect(same.body.error).toBe('endsAt must be after startsAt');
+
+    const before = await request(app)
+      .post(await tasksUrl(household))
+      .set(authHeader(user.accessToken))
+      .send({
+        title: 'Rango inválido (invertido)',
+        startsAt: hoursFromNow(3),
+        endsAt: hoursFromNow(1),
+      });
+    expect(before.status).toBe(400);
+    expect(before.body.error).toBe('endsAt must be after startsAt');
+  });
+
+  it('should allow a start-only task (no endsAt)', async () => {
+    const { user, household } = await setupHousehold();
+    const startsAt = hoursFromNow(1);
+
+    const res = await request(app)
+      .post(await tasksUrl(household))
+      .set(authHeader(user.accessToken))
+      .send({ title: 'Solo inicio', startsAt });
+
+    expect(res.status).toBe(201);
+    expect(new Date(res.body.data.startsAt).toISOString()).toBe(new Date(startsAt).toISOString());
+    expect(res.body.data.endsAt).toBeUndefined();
+  });
+
+  it('should ignore startsAt/endsAt on a recurring task', async () => {
+    const { user, household } = await setupHousehold();
+
+    const res = await request(app)
+      .post(await tasksUrl(household))
+      .set(authHeader(user.accessToken))
+      .send({
+        title: 'Serie recurrente',
+        startsAt: hoursFromNow(1),
+        endsAt: hoursFromNow(3),
+        isRecurring: true,
+        recurrenceRule: { type: 'daily', interval: 1 },
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.isRecurring).toBe(true);
+    expect(res.body.data.startsAt).toBeUndefined();
+    expect(res.body.data.endsAt).toBeUndefined();
+  });
+
+  it('GET should return startsAt/endsAt when present', async () => {
+    const { user, household } = await setupHousehold();
+    const startsAt = hoursFromNow(1);
+    const endsAt = hoursFromNow(3);
+    const created = await createTask(user, household, {
+      title: 'Con duración',
+      startsAt,
+      endsAt,
+    });
+
+    const res = await request(app)
+      .get(await tasksUrl(household))
+      .set(authHeader(user.accessToken));
+
+    expect(res.status).toBe(200);
+    const found = (res.body.data.items as TaskResponse[]).find((t) => t.id === created.id);
+    expect(new Date(found!.startsAt!).toISOString()).toBe(new Date(startsAt).toISOString());
+    expect(new Date(found!.endsAt!).toISOString()).toBe(new Date(endsAt).toISOString());
+  });
+
+  it('should reject a PATCH that would make endsAt <= startsAt', async () => {
+    const { user, household } = await setupHousehold();
+    const task = await createTask(user, household, {
+      title: 'Editable',
+      startsAt: hoursFromNow(1),
+      endsAt: hoursFromNow(3),
+    });
+
+    const res = await request(app)
+      .patch(`${await tasksUrl(household)}/${task.id}`)
+      .set(authHeader(user.accessToken))
+      // Only endsAt is sent — validated against the task's EXISTING startsAt.
+      .send({ endsAt: hoursFromNow(0) });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('endsAt must be after startsAt');
+  });
+
+  it('should clear startsAt/endsAt when a PATCH flips a task to recurring', async () => {
+    const { user, household } = await setupHousehold();
+    const task = await createTask(user, household, {
+      title: 'A punto de ser recurrente',
+      startsAt: hoursFromNow(1),
+      endsAt: hoursFromNow(3),
+    });
+
+    const res = await request(app)
+      .patch(`${await tasksUrl(household)}/${task.id}`)
+      .set(authHeader(user.accessToken))
+      .send({ isRecurring: true, recurrenceRule: { type: 'daily', interval: 1 } });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.isRecurring).toBe(true);
+    expect(res.body.data.startsAt).toBeUndefined();
+    expect(res.body.data.endsAt).toBeUndefined();
   });
 });
 

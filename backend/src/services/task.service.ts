@@ -51,6 +51,8 @@ export interface CreateTaskInput {
   description?: string;
   assignedTo?: string[];
   dueDate?: string | Date;
+  startsAt?: string | Date;
+  endsAt?: string | Date;
   priority?: TaskPriority;
   category?: TaskCategory;
   isRecurring?: boolean;
@@ -62,11 +64,24 @@ export interface UpdateTaskInput {
   description?: string;
   assignedTo?: string[];
   dueDate?: string | Date | null;
+  startsAt?: string | Date | null;
+  endsAt?: string | Date | null;
   priority?: TaskPriority;
   status?: TaskStatus;
   category?: TaskCategory;
   isRecurring?: boolean;
   recurrenceRule?: IRecurrenceRule;
+}
+
+/**
+ * PDR-004: if both startsAt and endsAt are given, endsAt must be strictly
+ * after startsAt. A single bound alone (start-only, or end-only) is valid —
+ * only the pair needs ordering.
+ */
+function assertValidDuration(startsAt?: Date, endsAt?: Date): void {
+  if (startsAt && endsAt && endsAt <= startsAt) {
+    throw new AppError('endsAt must be after startsAt', 400);
+  }
 }
 
 async function populated(task: ITask): Promise<ITask> {
@@ -297,6 +312,18 @@ export async function createTask(
   const assignedTo = input.assignedTo || [];
   assertAssigneesAreMembers(assignedTo, memberIds);
 
+  const isRecurring = input.isRecurring ?? false;
+
+  // PDR-004: duration + recurrence is out of scope this round — a recurring
+  // task never persists startsAt/endsAt, whatever the client sent.
+  let startsAt: Date | undefined;
+  let endsAt: Date | undefined;
+  if (!isRecurring) {
+    startsAt = input.startsAt ? sanitizeDate(input.startsAt, 'startsAt') : undefined;
+    endsAt = input.endsAt ? sanitizeDate(input.endsAt, 'endsAt') : undefined;
+    assertValidDuration(startsAt, endsAt);
+  }
+
   const task = await TaskModel.create({
     householdId: new Types.ObjectId(householdId),
     title: sanitizeString(input.title, MAX_TITLE_LENGTH, 'Task title'),
@@ -309,7 +336,9 @@ export async function createTask(
     priority: input.priority || 'medium',
     category: input.category || 'other',
     dueDate: input.dueDate ? sanitizeDate(input.dueDate, 'dueDate') : undefined,
-    isRecurring: input.isRecurring ?? false,
+    startsAt,
+    endsAt,
+    isRecurring,
     recurrenceRule: input.recurrenceRule,
   });
 
@@ -358,6 +387,31 @@ export async function updateTask(
   if (input.category !== undefined) task.category = input.category;
   if (input.isRecurring !== undefined) task.isRecurring = input.isRecurring;
   if (input.recurrenceRule !== undefined) task.recurrenceRule = input.recurrenceRule;
+
+  // PDR-004: duration + recurrence is out of scope. A task that is (or just
+  // became, via isRecurring above) recurring never carries startsAt/endsAt —
+  // any it already had are cleared rather than merely refusing to persist
+  // new ones, so the invariant holds regardless of how it got here.
+  if (task.isRecurring) {
+    task.startsAt = undefined;
+    task.endsAt = undefined;
+  } else if (input.startsAt !== undefined || input.endsAt !== undefined) {
+    const nextStartsAt =
+      input.startsAt !== undefined
+        ? input.startsAt
+          ? sanitizeDate(input.startsAt, 'startsAt')
+          : undefined
+        : task.startsAt;
+    const nextEndsAt =
+      input.endsAt !== undefined
+        ? input.endsAt
+          ? sanitizeDate(input.endsAt, 'endsAt')
+          : undefined
+        : task.endsAt;
+    assertValidDuration(nextStartsAt, nextEndsAt);
+    task.startsAt = nextStartsAt;
+    task.endsAt = nextEndsAt;
+  }
 
   // Keep completion metadata consistent when status is set directly.
   if (input.status !== undefined) {

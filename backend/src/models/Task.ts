@@ -24,6 +24,14 @@ export interface ITask extends Document {
   priority: TaskPriority;
   category: TaskCategory;
   dueDate?: Date;
+  /**
+   * Optional duration (PDR-004): absent = an instantaneous task
+   * (retrocompatible with every task created before this feature). A
+   * recurring task never carries these — duration + recurrence is out of
+   * scope this round, see task.service.ts.
+   */
+  startsAt?: Date;
+  endsAt?: Date;
   completedAt?: Date;
   completedBy?: Types.ObjectId;
   isRecurring: boolean;
@@ -63,6 +71,8 @@ const taskSchema = new Schema<ITask>(
       default: 'other',
     },
     dueDate: { type: Date },
+    startsAt: { type: Date },
+    endsAt: { type: Date },
     completedAt: { type: Date },
     completedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     isRecurring: { type: Boolean, default: false },
