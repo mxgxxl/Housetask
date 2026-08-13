@@ -4,9 +4,9 @@ import 'package:intl/intl.dart';
 import '../../config/theme.dart';
 import '../../core/utils/ui_helpers.dart';
 import '../../data/models/task.dart';
-import '../../data/models/user.dart';
 import '../cubit/household_cubit.dart';
 import '../cubit/task_cubit.dart';
+import '../widgets/assignee_selector.dart';
 import '../widgets/common.dart';
 
 /// Create or edit a task.
@@ -143,12 +143,13 @@ class _TaskFormPageState extends State<TaskFormPage> {
             ),
             const SizedBox(height: 20),
             const SectionHeader(title: 'Asignar a'),
-            _AssigneeSelector(
+            AssigneeSelector(
               users: memberUsers,
               selectedIds: _assignedIds,
               onToggle: (id) => setState(() {
                 _assignedIds.contains(id) ? _assignedIds.remove(id) : _assignedIds.add(id);
               }),
+              onClearAll: () => setState(_assignedIds.clear),
             ),
             const SizedBox(height: 12),
             _FieldTile(
@@ -254,40 +255,6 @@ class _TaskFormPageState extends State<TaskFormPage> {
       default:
         return 'Personalizada';
     }
-  }
-}
-
-class _AssigneeSelector extends StatelessWidget {
-  final List<User> users;
-  final Set<String> selectedIds;
-  final void Function(String id) onToggle;
-
-  const _AssigneeSelector({
-    required this.users,
-    required this.selectedIds,
-    required this.onToggle,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    if (users.isEmpty) {
-      return const Text('No hay miembros en el hogar',
-          style: TextStyle(color: AppColors.textSecondary));
-    }
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: users.map((u) {
-        final selected = selectedIds.contains(u.id);
-        return FilterChip(
-          label: Text(u.name.isEmpty ? u.email : u.name),
-          selected: selected,
-          onSelected: (_) => onToggle(u.id),
-          selectedColor: AppColors.primary.withValues(alpha: 0.16),
-          checkmarkColor: AppColors.primary,
-        );
-      }).toList(),
-    );
   }
 }
 
