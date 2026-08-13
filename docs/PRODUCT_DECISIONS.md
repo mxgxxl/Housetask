@@ -30,7 +30,7 @@ Los PDRs registran decisiones de producto con Context / Decision / Consequences,
 
 ## PDR-003: Timeline por días en pestaña Todas
 
-**Status:** Planned
+**Status:** In progress (commits 2-3 de este round: filtrado por rango de fechas en backend, timeline agrupado por día en frontend)
 
 - **Context:** La lista plana no responde "qué hice / qué hago / qué viene".
 - **Decision:** Vista agrupada por día (ayer arriba, hoy, mañana, sucesivos), 3 tareas visibles por día + "mostrar más", más días al hacer scroll; endpoint de rango por fechas apoyado en paginación por cursor existente; agrupación por día en el cliente (timezone local del dispositivo) para no depender de TD-013.
