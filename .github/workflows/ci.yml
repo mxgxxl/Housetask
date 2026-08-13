@@ -1,0 +1,159 @@
+name: CI
+
+# Railway already does continuous DEPLOYMENT (auto-deploy on push to main —
+# see CLAUDE.md "Deployment"); this workflow is continuous INTEGRATION only:
+# it verifies a push/PR before Railway ever sees it, it does not deploy
+# anything itself.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel a still-running CI run for the same branch/PR the moment a new push
+# supersedes it — the superseded run's minutes would otherwise burn for
+# nothing (TD-008: keep this workflow lightweight to limit Actions cost).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (typecheck, build, test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20' # matches backend/Dockerfile's node:20-alpine
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm run build
+
+      # No MongoDB/Redis service container needed: the suite starts its own
+      # in-memory MongoDB per run (mongodb-memory-server, see
+      # src/tests/globalSetup.ts) and never contacts a real Redis — every
+      # env var the tests need (JWT secrets, REDIS_COMMAND_TIMEOUT_MS) has an
+      # in-repo default set in jest.config.js. No secrets required.
+      - run: npm test
+
+  frontend:
+    name: Frontend (analyze, test, build apk)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true # caches the Flutter SDK install itself
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17' # required by the Android Gradle build (apk)
+
+      # Pub packages and Gradle's own caches are independent of the Flutter
+      # SDK cache above — both are keyed off the lockfiles that would
+      # invalidate them, with an OS-scoped fallback for a partial hit.
+      - name: Cache pub packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('frontend/pubspec.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('frontend/android/**/*.gradle*', 'frontend/android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - run: flutter pub get
+
+      # --no-fatal-infos: this Flutter version defaults --fatal-infos to ON,
+      # so plain `flutter analyze` exits 1 purely from the repo's 11
+      # pre-existing `info`-level lints (BuildContext-across-async-gaps,
+      # deprecated Material members) — confirmed locally, not assumed.
+      # --fatal-warnings stays on (its default), so this step is still
+      # blocking for anything that actually matters.
+      - run: flutter analyze --no-fatal-infos
+
+      # TD-040: never run flutter test monolithically — a combined run hangs
+      # on loaded hosts. Each shard below is its own step so a failure in one
+      # doesn't hide the others' results, and every one of them (except the
+      # explicitly-quarantined step further down) is blocking.
+      - name: Test — test/ (top-level)
+        run: |
+          mapfile -t files < <(find test -maxdepth 1 -name "*_test.dart")
+          flutter test "${files[@]}"
+
+      - name: Test — test/widgets/task_tile_test.dart
+        run: flutter test test/widgets/task_tile_test.dart
+
+      - name: Test — test/widgets/assignee_selector_test.dart
+        run: flutter test test/widgets/assignee_selector_test.dart
+
+      - name: Test — test/widgets/offline_banner_test.dart (TD-040 known issue, allow-failure)
+        # TD-040: this specific file hangs on loaded hosts even in complete
+        # isolation (frontend_server_aot's CPU time stalls) — a toolchain/host
+        # stall, not root-caused yet. Bounded timeout so a hang can't eat this
+        # job's whole budget, and continue-on-error so it can't block the
+        # rest of CI on an issue nothing in this repo's code can fix yet.
+        timeout-minutes: 3
+        continue-on-error: true
+        run: flutter test test/widgets/offline_banner_test.dart
+
+      # Android smoke test: ubuntu-latest ships the Android SDK pre-installed,
+      # so this needs no extra setup beyond the JDK above.
+      - run: flutter build apk --debug
+
+  frontend-ios:
+    name: Frontend iOS simulator build (main only)
+    runs-on: macos-latest
+    timeout-minutes: 25
+    # macOS runner minutes cost several times more than Linux — restricted to
+    # main so a PR never pays for it (TD-008: keep this workflow lightweight).
+    if: github.ref == 'refs/heads/main'
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Cache pub packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('frontend/pubspec.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - run: flutter pub get
+
+      # Simulator build: no signing/provisioning needed at all — --no-codesign
+      # makes that explicit rather than relying on --simulator's implicit skip.
+      - run: flutter build ios --simulator --debug --no-codesign
