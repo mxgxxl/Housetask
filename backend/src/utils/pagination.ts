@@ -60,6 +60,28 @@ export function parseCursorParam(raw: unknown): string | undefined {
 }
 
 /**
+ * Read an optional ISO-timestamp query parameter (e.g. `from`/`to` for the
+ * PDR-003 timeline window, docs/PRODUCT_DECISIONS.md). The client computes
+ * these as absolute instants from its own local calendar boundaries — the
+ * server treats them as opaque UTC instants, never as server-local days.
+ *
+ * @throws AppError 400 when present but not a single, parseable date string.
+ */
+export function parseDateParam(raw: unknown, field: string): Date | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (typeof raw !== 'string' || raw.length === 0) {
+    throw new AppError(`Invalid ${field}`, 400);
+  }
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new AppError(`Invalid ${field}`, 400);
+  }
+  return parsed;
+}
+
+/**
  * Encode a sort position as an opaque base64 cursor.
  *
  * The payload carries the FULL sort position, not just the id: under a

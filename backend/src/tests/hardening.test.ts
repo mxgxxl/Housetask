@@ -266,6 +266,16 @@ describe('list indexes match the listing sort', () => {
     expect(patterns).not.toContain(JSON.stringify({ householdId: 1, status: 1, dueDate: 1 }));
   });
 
+  it('should have built a second Task index for the PDR-003 from/to window query', async () => {
+    const patterns = await builtKeyPatterns(TaskModel);
+
+    // { householdId, status, dueDate, _id } above cannot bound dueDate
+    // tightly when status is unfiltered (the timeline query, which shows
+    // both statuses) — this narrower index is genuinely different, not a
+    // duplicate of it.
+    expect(patterns).toContain(JSON.stringify({ householdId: 1, dueDate: 1 }));
+  });
+
   it('should have built a ShoppingItem index with exactly the listing sort key pattern', async () => {
     const patterns = await builtKeyPatterns(ShoppingItemModel);
 

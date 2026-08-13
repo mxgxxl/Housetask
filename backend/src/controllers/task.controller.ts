@@ -2,14 +2,16 @@ import { Response } from 'express';
 import * as taskService from '../services/task.service';
 import { AppError } from '../middleware/error.middleware';
 import { sendSuccess } from '../utils/response';
-import { parseCursorParam, parseLimit } from '../utils/pagination';
+import { parseCursorParam, parseDateParam, parseLimit } from '../utils/pagination';
 import { AuthenticatedRequest, TaskStatus } from '../types';
 
 const VALID_STATUS: TaskStatus[] = ['pending', 'completed'];
 
 /**
- * GET /api/households/:householdId/tasks?status=&limit=&cursor=
- * Lists one page of tasks (pending first, then by dueDate asc).
+ * GET /api/households/:householdId/tasks?status=&limit=&cursor=&from=&to=
+ * Lists one page of tasks (pending first, then by dueDate asc). `from`/`to`
+ * (PDR-003) additionally restrict dueDate to that window — see
+ * taskService.listTasks for how they combine with status and undated tasks.
  * Responds with { items, nextCursor, hasMore, total }.
  */
 export async function list(req: AuthenticatedRequest, res: Response): Promise<void> {
@@ -26,6 +28,8 @@ export async function list(req: AuthenticatedRequest, res: Response): Promise<vo
     status,
     limit: parseLimit(req.query.limit),
     cursor: parseCursorParam(req.query.cursor),
+    from: parseDateParam(req.query.from, 'from'),
+    to: parseDateParam(req.query.to, 'to'),
   });
   sendSuccess(res, page);
 }

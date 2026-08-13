@@ -87,4 +87,15 @@ const taskSchema = new Schema<ITask>(
 // irrelevant, so the old one was pure write overhead.
 taskSchema.index({ householdId: 1, status: -1, dueDate: 1, _id: -1 });
 
+// Supports the PDR-003 timeline's from/to window query (GET /tasks?from=&to=),
+// which filters by dueDate WITHOUT an equality predicate on status (the
+// timeline shows pending and completed tasks together). The index above can't
+// produce tight bounds for that shape: status sits between householdId and
+// dueDate in its key, and a compound index only bounds a field tightly when
+// every field before it is equality-matched (ESR rule) — leaving status
+// unconstrained forces a bounds-less scan of the whole household on dueDate.
+// This is a genuinely different key order, not a prefix of the index above,
+// so it is not redundant with it (unlike the index TD-026 already removed).
+taskSchema.index({ householdId: 1, dueDate: 1 });
+
 export const TaskModel = model<ITask>('Task', taskSchema);

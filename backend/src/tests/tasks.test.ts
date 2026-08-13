@@ -293,6 +293,142 @@ describe('GET /api/households/:householdId/tasks — pagination', () => {
   });
 });
 
+describe('GET /api/households/:householdId/tasks — date-range filtering (PDR-003)', () => {
+  it('should return dated tasks within [from, to] and exclude tasks outside the window', async () => {
+    const { user, household } = await setupHousehold();
+    const before = await createTask(user, household, { title: 'Before', dueDate: daysFromNow(-10) });
+    const within = await createTask(user, household, { title: 'Within', dueDate: daysFromNow(0) });
+    const after = await createTask(user, household, { title: 'After', dueDate: daysFromNow(10) });
+
+    const res = await request(app)
+      .get(await tasksUrl(household))
+      .query({ from: daysFromNow(-2), to: daysFromNow(2) })
+      .set(authHeader(user.accessToken));
+
+    expect(res.status).toBe(200);
+    const ids = (res.body.data.items as TaskResponse[]).map((t) => t.id);
+    expect(ids).toContain(within.id);
+    expect(ids).not.toContain(before.id);
+    expect(ids).not.toContain(after.id);
+  });
+
+  it('should always include undated tasks in a from/to window (PDR-003 "Sin fecha" bucket)', async () => {
+    const { user, household } = await setupHousehold();
+    const within = await createTask(user, household, { title: 'Within', dueDate: daysFromNow(0) });
+    const outside = await createTask(user, household, { title: 'Outside', dueDate: daysFromNow(10) });
+    const undated = await createTask(user, household, { title: 'Sin fecha' });
+
+    const res = await request(app)
+      .get(await tasksUrl(household))
+      .query({ from: daysFromNow(-2), to: daysFromNow(2) })
+      .set(authHeader(user.accessToken));
+
+    expect(res.status).toBe(200);
+    const ids = (res.body.data.items as TaskResponse[]).map((t) => t.id);
+    // Undated tasks have no day to place on the client's timeline, so they
+    // always surface ("para que nada se pierda") regardless of the window —
+    // the client buckets them into "Sin fecha" instead of dropping them.
+    expect(ids).toContain(within.id);
+    expect(ids).toContain(undated.id);
+    expect(ids).not.toContain(outside.id);
+  });
+
+  it('should combine the status filter with the from/to window', async () => {
+    const { user, household } = await setupHousehold();
+    const pendingWithin = await createTask(user, household, {
+      title: 'Pending within',
+      dueDate: daysFromNow(0),
+    });
+    const completedWithin = await createTask(user, household, {
+      title: 'Completed within',
+      dueDate: daysFromNow(1),
+    });
+    await request(app)
+      .patch(`${await tasksUrl(household)}/${completedWithin.id}/complete`)
+      .set(authHeader(user.accessToken));
+    const pendingOutside = await createTask(user, household, {
+      title: 'Pending outside',
+      dueDate: daysFromNow(10),
+    });
+
+    const res = await request(app)
+      .get(await tasksUrl(household))
+      .query({ status: 'pending', from: daysFromNow(-2), to: daysFromNow(2) })
+      .set(authHeader(user.accessToken));
+
+    expect(res.status).toBe(200);
+    const ids = (res.body.data.items as TaskResponse[]).map((t) => t.id);
+    expect(ids).toEqual([pendingWithin.id]);
+    expect(ids).not.toContain(completedWithin.id);
+    expect(ids).not.toContain(pendingOutside.id);
+  });
+
+  it('should paginate a from/to window with the cursor without overlap or gaps', async () => {
+    const { user, household } = await setupHousehold();
+    const offsets = [3, 1, 6, 0, 4, 2, 5];
+    const created = [];
+    for (const offset of offsets) {
+      created.push(
+        await createTask(user, household, { title: `Day ${offset}`, dueDate: daysFromNow(offset) })
+      );
+    }
+    // Well outside the window, must never appear in any page.
+    await createTask(user, household, { title: 'Far future', dueDate: daysFromNow(100) });
+
+    const query = { from: daysFromNow(-1), to: daysFromNow(7) };
+    const full = await request(app)
+      .get(await tasksUrl(household))
+      .query({ ...query, limit: 100 })
+      .set(authHeader(user.accessToken));
+    const expected = (full.body.data.items as TaskResponse[]).map((t) => t.id);
+    expect(expected).toHaveLength(offsets.length);
+
+    const walked: string[] = [];
+    let cursor: string | null = null;
+    let pages = 0;
+    for (;;) {
+      const pageQuery: Record<string, string> = { ...query, limit: '3' };
+      if (cursor) pageQuery.cursor = cursor;
+
+      const res = await request(app)
+        .get(await tasksUrl(household))
+        .query(pageQuery)
+        .set(authHeader(user.accessToken));
+
+      expect(res.status).toBe(200);
+      walked.push(...(res.body.data.items as TaskResponse[]).map((t) => t.id));
+      pages += 1;
+
+      if (!res.body.data.hasMore) break;
+      cursor = res.body.data.nextCursor as string;
+      expect(pages).toBeLessThan(10);
+    }
+
+    expect(pages).toBe(3);
+    expect(walked).toEqual(expected);
+    expect(new Set(walked).size).toBe(offsets.length);
+  });
+
+  it('should behave exactly as before when from/to are absent', async () => {
+    const { user, household } = await setupHousehold();
+    const dated = await createTask(user, household, { title: 'Dated', dueDate: daysFromNow(0) });
+    const farFuture = await createTask(user, household, {
+      title: 'Far future',
+      dueDate: daysFromNow(365),
+    });
+    const undated = await createTask(user, household, { title: 'Sin fecha' });
+
+    const res = await request(app)
+      .get(await tasksUrl(household))
+      .set(authHeader(user.accessToken));
+
+    expect(res.status).toBe(200);
+    const ids = (res.body.data.items as TaskResponse[]).map((t) => t.id);
+    expect(ids).toEqual(expect.arrayContaining([dated.id, farFuture.id, undated.id]));
+    expect(ids).toHaveLength(3);
+  });
+});
+
 describe('POST /api/households/:householdId/tasks', () => {
   it('should reject a body over the 100kb limit with a 413 envelope, not a 500', async () => {
     const { user, household } = await setupHousehold();

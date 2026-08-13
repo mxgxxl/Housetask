@@ -198,11 +198,34 @@ export interface ListTasksOptions {
   status?: TaskStatus;
   limit: number;
   cursor?: string;
+  from?: Date;
+  to?: Date;
+}
+
+/**
+ * Match tasks whose dueDate falls within [from, to], PLUS every undated task.
+ *
+ * Undated tasks have no day to place on the PDR-003 timeline, so the client
+ * always buckets them into its "Sin fecha" section regardless of which window
+ * it asked for — "para que nada se pierda" (docs/PRODUCT_DECISIONS.md
+ * PDR-003). Returning them from every from/to query, rather than adding a
+ * second endpoint call, is what the client's single-request
+ * `loadTimeline()`/`agrupa client-side por día local` is built around.
+ * Returns null when neither bound is given (date filtering off entirely —
+ * the pre-PDR-003 behavior).
+ */
+function dueDateWindowFilter(from?: Date, to?: Date): Record<string, unknown> | null {
+  if (!from && !to) return null;
+  const range: Record<string, Date> = {};
+  if (from) range.$gte = from;
+  if (to) range.$lte = to;
+  return { $or: [{ dueDate: null }, { dueDate: range }] };
 }
 
 /**
  * List one page of a household's tasks. Pending tasks come first, then by
- * dueDate asc. Optionally filtered by status, which combines with the cursor.
+ * dueDate asc. Optionally filtered by status and/or a dueDate window
+ * (from/to, PDR-003), both of which combine with the cursor.
  */
 export async function listTasks(
   householdId: string,
@@ -212,15 +235,24 @@ export async function listTasks(
   const baseFilter: Record<string, unknown> = { householdId: new Types.ObjectId(householdId) };
   if (options.status) baseFilter.status = options.status;
 
-  const pageFilter = { ...baseFilter };
+  const dateFilter = dueDateWindowFilter(options.from, options.to);
+  const countFilter = dateFilter ? { ...baseFilter, ...dateFilter } : baseFilter;
+
+  // dateFilter and the cursor filter are each a top-level `$or`: merging them
+  // with a plain spread would let the second silently clobber the first, so
+  // once both are present they are combined under `$and` instead.
+  let pageFilter: Record<string, unknown> = countFilter;
   if (options.cursor) {
-    Object.assign(pageFilter, taskCursorFilter(decodeCursor(options.cursor, isTaskCursor)));
+    const cursorFilter = taskCursorFilter(decodeCursor(options.cursor, isTaskCursor));
+    pageFilter = dateFilter
+      ? { ...baseFilter, $and: [dateFilter, cursorFilter] }
+      : { ...baseFilter, ...cursorFilter };
   }
 
   // Counted only on the first page: the value is identical for every page of a
   // walk, so recomputing it per page is a pure waste of a collection scan.
   const [total, docs] = await Promise.all([
-    options.cursor ? Promise.resolve(null) : TaskModel.countDocuments(baseFilter),
+    options.cursor ? Promise.resolve(null) : TaskModel.countDocuments(countFilter),
     TaskModel.find(pageFilter)
       .sort(TASK_SORT)
       // One extra row is the cheapest way to know whether another page exists.
