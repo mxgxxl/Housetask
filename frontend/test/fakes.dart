@@ -84,6 +84,7 @@ class FakeTaskRepository implements TaskRepository {
     this.gate,
     this.offlineDeleteReturns,
     this.returnsUnsynced = false,
+    this.syncGate,
   });
 
   @override
@@ -151,9 +152,14 @@ class FakeTaskRepository implements TaskRepository {
   /// Operations "processed" by the next syncPendingOperations() call.
   int syncPendingOperationsResult = 0;
 
+  /// Completed manually when non-null, so a test can observe the cubit's
+  /// isSyncing:true window before letting the sync actually finish.
+  final Future<void>? syncGate;
+
   @override
   Future<int> syncPendingOperations() async {
     syncCalls++;
+    if (syncGate != null) await syncGate;
     return syncPendingOperationsResult;
   }
 }
@@ -180,6 +186,7 @@ class FakeShoppingRepository implements ShoppingRepository {
     this.gate,
     this.offlineDeleteReturns,
     this.returnsUnsynced = false,
+    this.syncGate,
   });
 
   @override
@@ -222,10 +229,12 @@ class FakeShoppingRepository implements ShoppingRepository {
 
   int syncCalls = 0;
   int syncPendingOperationsResult = 0;
+  final Future<void>? syncGate;
 
   @override
   Future<int> syncPendingOperations() async {
     syncCalls++;
+    if (syncGate != null) await syncGate;
     return syncPendingOperationsResult;
   }
 }

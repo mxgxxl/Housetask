@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:hive_flutter/hive_flutter.dart';
 
 import '../data/models/household.dart';
@@ -182,15 +184,36 @@ class CacheService {
   /// stream instead, since this value goes stale the instant it's read.
   int get pendingOperationsCountSync => _pendingOperations.length;
 
-  /// Live queue size: yields the current count immediately on listen, then
-  /// again every time the box changes (via Hive's own `watch()`), so a
-  /// `StreamBuilder` badge stays exact without polling or piggybacking on an
-  /// unrelated cubit rebuild. A getter rather than a stored field so every
-  /// subscriber gets its own generator instance and its own immediate
-  /// current-value emission.
-  Stream<int> get pendingOperationsCount async* {
-    yield _pendingOperations.length;
-    yield* _pendingOperations.watch().map((_) => _pendingOperations.length);
+  StreamController<int>? _pendingOperationsCountController;
+  StreamSubscription<BoxEvent>? _pendingOperationsWatchSub;
+
+  /// Live queue size: a single cached broadcast stream, created lazily once
+  /// and reused on every call — NOT a new `Stream` per access. All listeners
+  /// (e.g. several `StreamBuilder`s rebuilding) share the same underlying
+  /// `box.watch()` subscription, which exists only while at least one
+  /// listener is attached and is torn down when the last one cancels.
+  ///
+  /// The current count is (re-)emitted whenever the FIRST listener attaches,
+  /// so a `StreamBuilder` that mounts after the queue already has entries
+  /// still gets the right value without waiting for the next box mutation.
+  /// A second listener joining while the first is still attached will not
+  /// get that replay (broadcast streams never replay past events) — a
+  /// deliberate tradeoff for a single shared stream; harmless here since the
+  /// app never mounts more than one offline banner at a time.
+  Stream<int> get pendingOperationsCount {
+    _pendingOperationsCountController ??= StreamController<int>.broadcast(
+      onListen: () {
+        _pendingOperationsCountController?.add(_pendingOperations.length);
+        _pendingOperationsWatchSub = _pendingOperations.watch().listen((_) {
+          _pendingOperationsCountController?.add(_pendingOperations.length);
+        });
+      },
+      onCancel: () {
+        _pendingOperationsWatchSub?.cancel();
+        _pendingOperationsWatchSub = null;
+      },
+    );
+    return _pendingOperationsCountController!.stream;
   }
 
   // ---- Logout ----

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -15,7 +16,8 @@ import '../fakes.dart';
 /// test is a StatelessWidget with no dependency on MainScaffold's own state
 /// (household, tab index, the five pages), so there is no reason to stand
 /// all of that up to exercise it.
-Widget _host({required TaskCubit taskCubit, required ShoppingCubit shoppingCubit}) {
+Widget _host(
+    {required TaskCubit taskCubit, required ShoppingCubit shoppingCubit}) {
   return MaterialApp(
     home: Scaffold(
       body: MultiBlocProvider(
@@ -37,7 +39,8 @@ void main() {
   // cache_service_test.dart, so the queue-size assertions exercise the real
   // Hive box rather than a mock.
   setUpAll(() async {
-    tempDir = await Directory.systemTemp.createTemp('homesync_offline_banner_test');
+    tempDir =
+        await Directory.systemTemp.createTemp('homesync_offline_banner_test');
     await CacheService().init(testDirectory: tempDir.path);
   });
 
@@ -66,7 +69,8 @@ void main() {
         idempotencyKey: 'key-$id',
       );
 
-  testWidgets('shows the yellow offline banner when TaskCubit.isOffline is true',
+  testWidgets(
+      'shows the yellow offline banner when TaskCubit.isOffline is true',
       (tester) async {
     final taskCubit = TaskCubit(
       FakeTaskRepository()..lastListWasFromCache = true,
@@ -75,24 +79,30 @@ void main() {
     await taskCubit.load('h1');
     final shoppingCubit = ShoppingCubit(FakeShoppingRepository());
 
-    await tester.pumpWidget(_host(taskCubit: taskCubit, shoppingCubit: shoppingCubit));
+    await tester
+        .pumpWidget(_host(taskCubit: taskCubit, shoppingCubit: shoppingCubit));
     await tester.pump();
 
-    expect(find.text('Sin conexión — cambios guardados localmente'), findsOneWidget);
+    expect(find.text('Sin conexión — cambios guardados localmente'),
+        findsOneWidget);
   });
 
   testWidgets('no banner at all when neither cubit is offline', (tester) async {
-    final taskCubit = TaskCubit(FakeTaskRepository(), FakeNotificationService());
+    final taskCubit =
+        TaskCubit(FakeTaskRepository(), FakeNotificationService());
     await taskCubit.load('h1');
     final shoppingCubit = ShoppingCubit(FakeShoppingRepository());
 
-    await tester.pumpWidget(_host(taskCubit: taskCubit, shoppingCubit: shoppingCubit));
+    await tester
+        .pumpWidget(_host(taskCubit: taskCubit, shoppingCubit: shoppingCubit));
     await tester.pump();
 
-    expect(find.text('Sin conexión — cambios guardados localmente'), findsNothing);
+    expect(
+        find.text('Sin conexión — cambios guardados localmente'), findsNothing);
   });
 
-  testWidgets('shows no pending-count badge when the queue is empty', (tester) async {
+  testWidgets('shows no pending-count badge when the queue is empty',
+      (tester) async {
     final taskCubit = TaskCubit(
       FakeTaskRepository()..lastListWasFromCache = true,
       FakeNotificationService(),
@@ -100,16 +110,19 @@ void main() {
     await taskCubit.load('h1');
     final shoppingCubit = ShoppingCubit(FakeShoppingRepository());
 
-    await tester.pumpWidget(_host(taskCubit: taskCubit, shoppingCubit: shoppingCubit));
+    await tester
+        .pumpWidget(_host(taskCubit: taskCubit, shoppingCubit: shoppingCubit));
     await tester.pump();
 
     // The banner itself is up (sanity check the precondition), but nothing
     // in it looks like a queue-count badge.
-    expect(find.text('Sin conexión — cambios guardados localmente'), findsOneWidget);
+    expect(find.text('Sin conexión — cambios guardados localmente'),
+        findsOneWidget);
     expect(find.text('0'), findsNothing);
   });
 
-  testWidgets('shows a badge with the exact pending-count when the queue is non-empty',
+  testWidgets(
+      'shows a badge with the exact pending-count when the queue is non-empty',
       (tester) async {
     CacheService().addPendingOperation(pendingOp('a'));
     CacheService().addPendingOperation(pendingOp('b'));
@@ -122,9 +135,65 @@ void main() {
     await taskCubit.load('h1');
     final shoppingCubit = ShoppingCubit(FakeShoppingRepository());
 
-    await tester.pumpWidget(_host(taskCubit: taskCubit, shoppingCubit: shoppingCubit));
+    await tester
+        .pumpWidget(_host(taskCubit: taskCubit, shoppingCubit: shoppingCubit));
     await tester.pump();
 
     expect(find.text('3'), findsOneWidget);
+  });
+
+  testWidgets(
+      'shows the syncing spinner while TaskCubit.syncPending is in flight',
+      (tester) async {
+    final gate = Completer<void>();
+    final taskRepo = FakeTaskRepository(syncGate: gate.future)
+      ..lastListWasFromCache = true;
+    final taskCubit = TaskCubit(taskRepo, FakeNotificationService());
+    await taskCubit.load('h1');
+    final shoppingCubit = ShoppingCubit(FakeShoppingRepository());
+
+    await tester
+        .pumpWidget(_host(taskCubit: taskCubit, shoppingCubit: shoppingCubit));
+    await tester.pump();
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+
+    // syncPending() sets TaskCubit.state.isSyncing synchronously before
+    // awaiting the repository (checked directly since that part needs no
+    // pump at all), but BlocProvider's own notification to `context.watch`
+    // is delivered a microtask later, and OfflineBanner's rebuild is a
+    // frame after that — two pumps to actually see it mid-flight in the
+    // widget tree.
+    final syncFuture = taskCubit.syncPending();
+    expect(taskCubit.state.isSyncing, isTrue);
+    await tester.pump();
+    await tester.pump();
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    gate.complete();
+    await syncFuture;
+    await tester.pump();
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+  });
+
+  testWidgets(
+      'renders exactly one banner when TaskCubit and ShoppingCubit are offline simultaneously',
+      (tester) async {
+    final taskCubit = TaskCubit(
+      FakeTaskRepository()..lastListWasFromCache = true,
+      FakeNotificationService(),
+    );
+    await taskCubit.load('h1');
+    final shoppingCubit =
+        ShoppingCubit(FakeShoppingRepository()..lastListWasFromCache = true);
+    await shoppingCubit.load('h1');
+
+    await tester
+        .pumpWidget(_host(taskCubit: taskCubit, shoppingCubit: shoppingCubit));
+    await tester.pump();
+
+    // Both cubits report offline; the banner combines them with || rather
+    // than rendering one per cubit, so exactly one must appear, not two.
+    expect(find.text('Sin conexión — cambios guardados localmente'),
+        findsOneWidget);
   });
 }
