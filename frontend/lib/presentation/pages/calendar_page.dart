@@ -1,15 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:table_calendar/table_calendar.dart';
+import 'package:intl/intl.dart';
 import '../../config/theme.dart';
+import '../../core/utils/ui_helpers.dart';
 import '../../data/models/task.dart';
 import '../cubit/task_cubit.dart';
 import '../widgets/common.dart';
 import '../widgets/task_tile.dart';
 import 'task_form_page.dart';
 
-/// Monthly calendar with markers on days that have tasks; tapping a day lists
-/// its tasks below.
+/// Local-day key (time-of-day stripped) used throughout this file for day
+/// comparisons/grouping — startsAt/endsAt/dueDate are device-local already
+/// (see task_form_page.dart), so no timezone conversion belongs here.
+DateTime _localDayKey(DateTime d) => DateTime(d.year, d.month, d.day);
+
+String _isoDate(DateTime d) =>
+    '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+/// Monthly calendar with a Google Calendar-style month grid (multi-day tasks
+/// as spanning bars, single-day ranged tasks as time chips, instant/
+/// start-only tasks as the pre-existing marker) plus a day detail below.
 class CalendarPage extends StatefulWidget {
   const CalendarPage({super.key});
 
@@ -18,9 +28,8 @@ class CalendarPage extends StatefulWidget {
 }
 
 class _CalendarPageState extends State<CalendarPage> {
-  DateTime _focusedDay = DateTime.now();
-  DateTime _selectedDay = DateTime.now();
-  CalendarFormat _format = CalendarFormat.month;
+  DateTime _focusedMonth = _localDayKey(DateTime.now());
+  DateTime _selectedDay = _localDayKey(DateTime.now());
 
   /// Group tasks that have a due date by day (midnight-normalized key).
   Map<DateTime, List<Task>> _eventsFrom(List<Task> tasks) {
@@ -49,7 +58,8 @@ class _CalendarPageState extends State<CalendarPage> {
         builder: (context, state) {
           // Unfiltered bucket: the calendar shows the whole month regardless
           // of which tab the tasks page is on.
-          final events = _eventsFrom(state.allTasks);
+          final allTasks = state.allTasks;
+          final events = _eventsFrom(allTasks);
           final dayTasks = _eventsForDay(events, _selectedDay);
 
           return Column(
@@ -57,48 +67,20 @@ class _CalendarPageState extends State<CalendarPage> {
               Card(
                 margin: const EdgeInsets.all(12),
                 child: Padding(
-                  padding: const EdgeInsets.all(4),
-                  child: TableCalendar<Task>(
-                    locale: 'es',
-                    firstDay: DateTime.utc(2022, 1, 1),
-                    lastDay: DateTime.utc(2030, 12, 31),
-                    focusedDay: _focusedDay,
-                    calendarFormat: _format,
-                    startingDayOfWeek: StartingDayOfWeek.monday,
-                    selectedDayPredicate: (day) => isSameDay(_selectedDay, day),
-                    eventLoader: (day) => _eventsForDay(events, day),
-                    onDaySelected: (selected, focused) {
-                      setState(() {
-                        _selectedDay = selected;
-                        _focusedDay = focused;
-                      });
-                    },
-                    onFormatChanged: (fmt) => setState(() => _format = fmt),
-                    onPageChanged: (focused) => _focusedDay = focused,
-                    availableCalendarFormats: const {
-                      CalendarFormat.month: 'Mes',
-                      CalendarFormat.twoWeeks: '2 semanas',
-                      CalendarFormat.week: 'Semana',
-                    },
-                    calendarStyle: CalendarStyle(
-                      todayDecoration: BoxDecoration(
-                        color: AppColors.primary.withValues(alpha: 0.35),
-                        shape: BoxShape.circle,
-                      ),
-                      selectedDecoration: const BoxDecoration(
-                        color: AppColors.primary,
-                        shape: BoxShape.circle,
-                      ),
-                      markerDecoration: const BoxDecoration(
-                        color: AppColors.secondary,
-                        shape: BoxShape.circle,
-                      ),
-                      markersMaxCount: 3,
-                    ),
-                    headerStyle: const HeaderStyle(
-                      formatButtonShowsNext: false,
-                      titleCentered: true,
-                    ),
+                  padding: const EdgeInsets.all(8),
+                  child: _MonthGrid(
+                    focusedMonth: _focusedMonth,
+                    selectedDay: _selectedDay,
+                    tasks: allTasks,
+                    onPrevMonth: () => setState(() {
+                      _focusedMonth =
+                          DateTime(_focusedMonth.year, _focusedMonth.month - 1, 1);
+                    }),
+                    onNextMonth: () => setState(() {
+                      _focusedMonth =
+                          DateTime(_focusedMonth.year, _focusedMonth.month + 1, 1);
+                    }),
+                    onDaySelected: (day) => setState(() => _selectedDay = day),
                   ),
                 ),
               ),
@@ -118,6 +100,531 @@ class _CalendarPageState extends State<CalendarPage> {
     );
   }
 }
+
+// ---------------------------------------------------------------------------
+// Month grid (PARTE B1)
+// ---------------------------------------------------------------------------
+
+/// A ranged task (startsAt+endsAt) whose start and end fall on different
+/// days — the only kind the month grid draws as a spanning bar.
+class _SpanningTask {
+  final Task task;
+  final DateTime startDay;
+  final DateTime endDay;
+
+  const _SpanningTask(this.task, this.startDay, this.endDay);
+}
+
+class _MonthClassification {
+  final List<Task> instant;
+  final List<Task> singleDayRanged;
+  final List<_SpanningTask> spanning;
+
+  const _MonthClassification(this.instant, this.singleDayRanged, this.spanning);
+}
+
+/// Splits the household's tasks into the three month-grid treatments
+/// (PDR-004): instant/start-only tasks keep their pre-existing marker (no
+/// distinct treatment is specified for start-only, so it is grouped with
+/// instant); a ranged task starting and ending on the same day is a time
+/// chip; a ranged task crossing a day boundary is a spanning bar.
+_MonthClassification _classifyForMonth(List<Task> tasks) {
+  final instant = <Task>[];
+  final singleDayRanged = <Task>[];
+  final spanning = <_SpanningTask>[];
+  for (final t in tasks) {
+    if (t.startsAt != null && t.endsAt != null) {
+      final startDay = _localDayKey(t.startsAt!);
+      final endDay = _localDayKey(t.endsAt!);
+      if (startDay == endDay) {
+        singleDayRanged.add(t);
+      } else {
+        spanning.add(_SpanningTask(t, startDay, endDay));
+      }
+    } else if (t.dueDate != null) {
+      instant.add(t);
+    }
+  }
+  return _MonthClassification(instant, singleDayRanged, spanning);
+}
+
+class _DayChip {
+  final Task task;
+  final bool isRanged;
+
+  const _DayChip(this.task, {required this.isRanged});
+}
+
+/// Buckets instant + single-day-ranged tasks by the one day each renders on.
+Map<DateTime, List<_DayChip>> _cellChipsFor(List<Task> instant, List<Task> singleDayRanged) {
+  final map = <DateTime, List<_DayChip>>{};
+  for (final t in instant) {
+    final key = _localDayKey(t.dueDate!);
+    map.putIfAbsent(key, () => []).add(_DayChip(t, isRanged: false));
+  }
+  for (final t in singleDayRanged) {
+    final key = _localDayKey(t.startsAt!);
+    map.putIfAbsent(key, () => []).add(_DayChip(t, isRanged: true));
+  }
+  return map;
+}
+
+/// The Monday-start weeks (each 7 consecutive days) needed to fully display
+/// [monthAnchor]'s month, padded with the leading/trailing days of the
+/// adjacent months.
+List<List<DateTime>> _weeksFor(DateTime monthAnchor) {
+  final firstOfMonth = DateTime(monthAnchor.year, monthAnchor.month, 1);
+  final lastOfMonth = DateTime(monthAnchor.year, monthAnchor.month + 1, 0);
+  final leadingOffset = firstOfMonth.weekday - DateTime.monday;
+  final firstGridDay = firstOfMonth.subtract(Duration(days: leadingOffset));
+  final trailingOffset = DateTime.sunday - lastOfMonth.weekday;
+  final lastGridDay = lastOfMonth.add(Duration(days: trailingOffset));
+
+  final weeks = <List<DateTime>>[];
+  var cursor = firstGridDay;
+  while (!cursor.isAfter(lastGridDay)) {
+    weeks.add(List.generate(7, (i) => cursor.add(Duration(days: i))));
+    cursor = cursor.add(const Duration(days: 7));
+  }
+  return weeks;
+}
+
+class _MonthGrid extends StatelessWidget {
+  final DateTime focusedMonth;
+  final DateTime selectedDay;
+  final List<Task> tasks;
+  final VoidCallback onPrevMonth;
+  final VoidCallback onNextMonth;
+  final ValueChanged<DateTime> onDaySelected;
+
+  const _MonthGrid({
+    required this.focusedMonth,
+    required this.selectedDay,
+    required this.tasks,
+    required this.onPrevMonth,
+    required this.onNextMonth,
+    required this.onDaySelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final weeks = _weeksFor(focusedMonth);
+    final classification = _classifyForMonth(tasks);
+    final cellChips = _cellChipsFor(classification.instant, classification.singleDayRanged);
+
+    return Column(
+      children: [
+        _MonthHeader(focusedMonth: focusedMonth, onPrev: onPrevMonth, onNext: onNextMonth),
+        const _WeekdayHeader(),
+        for (var i = 0; i < weeks.length; i++)
+          _WeekRow(
+            week: weeks[i],
+            rowIndex: i,
+            focusedMonth: focusedMonth,
+            selectedDay: selectedDay,
+            cellChips: cellChips,
+            spanningTasks: classification.spanning,
+            onDaySelected: onDaySelected,
+          ),
+      ],
+    );
+  }
+}
+
+class _MonthHeader extends StatelessWidget {
+  final DateTime focusedMonth;
+  final VoidCallback onPrev;
+  final VoidCallback onNext;
+
+  const _MonthHeader({required this.focusedMonth, required this.onPrev, required this.onNext});
+
+  @override
+  Widget build(BuildContext context) {
+    final raw = DateFormat('MMMM y', 'es').format(focusedMonth);
+    final title = raw.isEmpty ? raw : raw[0].toUpperCase() + raw.substring(1);
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        IconButton(icon: const Icon(Icons.chevron_left), onPressed: onPrev),
+        Text(title, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+        IconButton(icon: const Icon(Icons.chevron_right), onPressed: onNext),
+      ],
+    );
+  }
+}
+
+class _WeekdayHeader extends StatelessWidget {
+  const _WeekdayHeader();
+
+  static const _labels = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        for (final label in _labels)
+          Expanded(
+            child: Center(
+              child: Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// One spanning bar's position within a single week row — column indices are
+/// relative to that row (0=Monday..6=Sunday), never absolute dates, since a
+/// task crossing a week boundary needs one independently-clipped [_RowBar]
+/// per row it touches.
+class _RowBar {
+  final Task task;
+  final int startCol;
+  final int endCol;
+
+  /// True only when this row segment contains the task's ACTUAL start/end —
+  /// false at a row-boundary clip, which is what tells [_SpanBar] whether to
+  /// round that edge or draw it flat with a continuation chevron instead.
+  final bool roundLeft;
+  final bool roundRight;
+  final bool continuesBefore;
+  final bool continuesAfter;
+  final int lane;
+
+  const _RowBar({
+    required this.task,
+    required this.startCol,
+    required this.endCol,
+    required this.roundLeft,
+    required this.roundRight,
+    required this.continuesBefore,
+    required this.continuesAfter,
+    this.lane = 0,
+  });
+
+  _RowBar withLane(int newLane) => _RowBar(
+        task: task,
+        startCol: startCol,
+        endCol: endCol,
+        roundLeft: roundLeft,
+        roundRight: roundRight,
+        continuesBefore: continuesBefore,
+        continuesAfter: continuesAfter,
+        lane: newLane,
+      );
+}
+
+/// Greedily assigns each bar the lowest lane whose last-occupied column ends
+/// before this bar starts, so concurrent spanning tasks stack in separate
+/// horizontal lanes instead of overlapping.
+List<_RowBar> _assignLanes(List<_RowBar> bars) {
+  final sorted = [...bars]..sort((a, b) => a.startCol.compareTo(b.startCol));
+  final laneEndCols = <int>[];
+  final result = <_RowBar>[];
+  for (final bar in sorted) {
+    final lane = laneEndCols.indexWhere((endCol) => endCol < bar.startCol);
+    if (lane == -1) {
+      laneEndCols.add(bar.endCol);
+      result.add(bar.withLane(laneEndCols.length - 1));
+    } else {
+      laneEndCols[lane] = bar.endCol;
+      result.add(bar.withLane(lane));
+    }
+  }
+  return result;
+}
+
+class _WeekRow extends StatelessWidget {
+  static const double _dayNumberHeight = 28;
+  static const double _barHeight = 16;
+  static const double _barSpacing = 2;
+
+  final List<DateTime> week;
+  final int rowIndex;
+  final DateTime focusedMonth;
+  final DateTime selectedDay;
+  final Map<DateTime, List<_DayChip>> cellChips;
+  final List<_SpanningTask> spanningTasks;
+  final ValueChanged<DateTime> onDaySelected;
+
+  const _WeekRow({
+    required this.week,
+    required this.rowIndex,
+    required this.focusedMonth,
+    required this.selectedDay,
+    required this.cellChips,
+    required this.spanningTasks,
+    required this.onDaySelected,
+  });
+
+  List<_RowBar> _barsForRow() {
+    final rowStart = week.first;
+    final rowEnd = week.last;
+    final bars = <_RowBar>[];
+    for (final s in spanningTasks) {
+      if (s.endDay.isBefore(rowStart) || s.startDay.isAfter(rowEnd)) continue;
+      final barStartDay = s.startDay.isAfter(rowStart) ? s.startDay : rowStart;
+      final barEndDay = s.endDay.isBefore(rowEnd) ? s.endDay : rowEnd;
+      bars.add(_RowBar(
+        task: s.task,
+        startCol: barStartDay.difference(rowStart).inDays,
+        endCol: barEndDay.difference(rowStart).inDays,
+        roundLeft: barStartDay == s.startDay,
+        roundRight: barEndDay == s.endDay,
+        continuesBefore: barStartDay != s.startDay,
+        continuesAfter: barEndDay != s.endDay,
+      ));
+    }
+    return _assignLanes(bars);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final laned = _barsForRow();
+    final laneCount = laned.isEmpty ? 0 : laned.map((b) => b.lane).reduce((a, b) => a > b ? a : b) + 1;
+    final barsAreaHeight = laneCount == 0 ? 0.0 : laneCount * (_barHeight + _barSpacing);
+
+    return Container(
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: AppColors.divider)),
+      ),
+      child: Column(
+        children: [
+          SizedBox(
+            height: _dayNumberHeight,
+            child: Row(
+              children: [
+                for (final day in week)
+                  Expanded(
+                    child: _DayNumberCell(
+                      day: day,
+                      isCurrentMonth: day.month == focusedMonth.month,
+                      isSelected: _localDayKey(day) == _localDayKey(selectedDay),
+                      onTap: () => onDaySelected(day),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          if (barsAreaHeight > 0)
+            SizedBox(
+              height: barsAreaHeight,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final colWidth = constraints.maxWidth / 7;
+                  return Stack(
+                    children: [
+                      for (final bar in laned)
+                        Positioned(
+                          key: Key('monthBar-${bar.task.id}-row$rowIndex'),
+                          top: bar.lane * (_barHeight + _barSpacing),
+                          left: bar.startCol * colWidth + 2,
+                          width: (bar.endCol - bar.startCol + 1) * colWidth - 4,
+                          height: _barHeight,
+                          child: GestureDetector(
+                            onTap: () => onDaySelected(week[bar.startCol]),
+                            child: _SpanBar(bar: bar),
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (final day in week)
+                Expanded(
+                  child: _DayChipsCell(
+                    chips: cellChips[_localDayKey(day)] ?? const [],
+                    onTap: () => onDaySelected(day),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DayNumberCell extends StatelessWidget {
+  final DateTime day;
+  final bool isCurrentMonth;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _DayNumberCell({
+    required this.day,
+    required this.isCurrentMonth,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isToday = _localDayKey(day) == _localDayKey(DateTime.now());
+    final Color textColor;
+    final BoxDecoration? decoration;
+    if (isSelected) {
+      textColor = Colors.white;
+      decoration = const BoxDecoration(color: AppColors.primary, shape: BoxShape.circle);
+    } else if (isToday) {
+      textColor = AppColors.primary;
+      decoration = BoxDecoration(color: AppColors.primary.withValues(alpha: 0.16), shape: BoxShape.circle);
+    } else {
+      textColor = isCurrentMonth
+          ? AppColors.textPrimary
+          : AppColors.textSecondary.withValues(alpha: 0.5);
+      decoration = null;
+    }
+
+    return GestureDetector(
+      key: Key('monthDay-${_isoDate(day)}'),
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Center(
+        child: Container(
+          width: 26,
+          height: 26,
+          alignment: Alignment.center,
+          decoration: decoration,
+          child: Text(
+            '${day.day}',
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: textColor),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DayChipsCell extends StatelessWidget {
+  static const int _maxDots = 3;
+
+  final List<_DayChip> chips;
+  final VoidCallback onTap;
+
+  const _DayChipsCell({required this.chips, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    if (chips.isEmpty) return const SizedBox(height: 4);
+
+    final ranged = chips.where((c) => c.isRanged).toList();
+    final instant = chips.where((c) => !c.isRanged).take(_maxDots).toList();
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final c in ranged)
+              Container(
+                key: Key('monthChip-${c.task.id}'),
+                width: double.infinity,
+                margin: const EdgeInsets.only(bottom: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  '${formatTime(c.task.startsAt!)}–${formatTime(c.task.endsAt!)} ${c.task.title}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 9,
+                    color: AppColors.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            if (instant.isNotEmpty)
+              Wrap(
+                spacing: 2,
+                children: [
+                  for (final c in instant)
+                    Container(
+                      key: Key('monthDot-${c.task.id}'),
+                      width: 6,
+                      height: 6,
+                      decoration: const BoxDecoration(
+                        color: AppColors.secondary,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                ],
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Renders one [_RowBar] segment: rounded only on the edge(s) that are the
+/// task's true start/end (flat, plus a chevron, where a row clipped it).
+class _SpanBar extends StatelessWidget {
+  final _RowBar bar;
+
+  const _SpanBar({required this.bar});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = bar.task.isCompleted ? AppColors.textSecondary : AppColors.primary;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.horizontal(
+          left: Radius.circular(bar.roundLeft ? 8 : 0),
+          right: Radius.circular(bar.roundRight ? 8 : 0),
+        ),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      alignment: Alignment.centerLeft,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (bar.continuesBefore)
+            const Icon(Icons.chevron_left, size: 12, color: Colors.white),
+          Flexible(
+            child: Text(
+              bar.task.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+                decoration: bar.task.isCompleted ? TextDecoration.lineThrough : null,
+              ),
+            ),
+          ),
+          if (bar.continuesAfter)
+            const Icon(Icons.chevron_right, size: 12, color: Colors.white),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Day detail
+// ---------------------------------------------------------------------------
 
 /// PDR-004: tasks with both startsAt and endsAt render as hour-positioned
 /// blocks on a vertical axis, sorted by startsAt. Everything else (no
@@ -233,6 +740,7 @@ class _HourAxis extends StatelessWidget {
     final height = (durationHours * _hourHeight).clamp(_minBlockHeight, 24 * _hourHeight);
 
     return Positioned(
+      key: Key('dayBlock-${task.id}'),
       top: top,
       left: _labelWidth + 8,
       right: 8,

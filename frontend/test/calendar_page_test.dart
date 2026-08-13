@@ -17,6 +17,29 @@ PaginatedResponse<Task> page(List<Task> items) => PaginatedResponse<Task>(
       total: items.length,
     );
 
+/// Mirrors calendar_page.dart's private `_isoDate` so tests can build the
+/// same `monthDay-yyyy-MM-dd` keys without importing a private symbol.
+String _isoTestDate(DateTime d) =>
+    '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+/// Finds a month-grid spanning bar by task id regardless of which week row
+/// it landed in (`monthBar-<id>-row<N>`) — the row index is an
+/// implementation detail tests should not have to predict.
+Finder _monthBarFinder(String taskId) => find.byWidgetPredicate((w) {
+      final key = w.key;
+      return key is ValueKey<String> && key.value.startsWith('monthBar-$taskId-row');
+    });
+
+/// The first Monday on/after the 8th of the current real month — safely
+/// mid-month (never the grid's leading row from the previous month, never
+/// near month-end) and a deterministic week-row start, so date arithmetic in
+/// these tests never depends on which day "now" happens to be.
+DateTime _safeMonday() {
+  final now = DateTime.now();
+  var day = DateTime(now.year, now.month, 8);
+  return day.add(Duration(days: (DateTime.monday - day.weekday) % 7));
+}
+
 /// Mounts the real CalendarPage with [tasks] as the household's unfiltered
 /// (TaskFilter.all) bucket — the same bucket Home/Calendar always read,
 /// regardless of what the Tareas tabs or the PDR-003 timeline are doing.
@@ -137,6 +160,68 @@ void main() {
       expect(find.descendant(of: allDay, matching: find.text('Sin rango')), findsOneWidget);
       expect(find.descendant(of: allDay, matching: find.text('Con rango')), findsNothing);
       expect(find.descendant(of: hourAxis, matching: find.text('Sin rango')), findsNothing);
+    });
+  });
+
+  group('CalendarPage month grid (PDR-004, Google Calendar-style)', () {
+    testWidgets(
+        'a multi-day ranged task renders as a single spanning bar covering every day it comprises',
+        (tester) async {
+      final monday = _safeMonday();
+      final day1 = monday;
+      final day2 = monday.add(const Duration(days: 1));
+      final day3 = monday.add(const Duration(days: 2));
+      final spanning = buildTask(
+        'span1',
+        title: 'Mudanza',
+        startsAt: DateTime(day1.year, day1.month, day1.day, 9),
+        endsAt: DateTime(day3.year, day3.month, day3.day, 18),
+      );
+
+      await pumpCalendarPage(tester, [spanning]);
+
+      final bar = _monthBarFinder('span1');
+      // All three days fall in the same Monday-start week row, so this is a
+      // SINGLE bar widget, not one per day.
+      expect(bar, findsOneWidget);
+
+      final barRect = tester.getRect(bar);
+      for (final day in [day1, day2, day3]) {
+        final dayRect = tester.getRect(find.byKey(Key('monthDay-${_isoTestDate(day)}')));
+        expect(barRect.left, lessThanOrEqualTo(dayRect.center.dx),
+            reason: '${_isoTestDate(day)} should be under the bar');
+        expect(barRect.right, greaterThanOrEqualTo(dayRect.center.dx),
+            reason: '${_isoTestDate(day)} should be under the bar');
+      }
+    });
+
+    testWidgets('a single-day ranged task renders as a time-range chip, not a bar',
+        (tester) async {
+      final day = _safeMonday();
+      final task = buildTask(
+        'chip1',
+        title: 'Pintar el salón',
+        startsAt: DateTime(day.year, day.month, day.day, 13),
+        endsAt: DateTime(day.year, day.month, day.day, 20),
+      );
+
+      await pumpCalendarPage(tester, [task]);
+
+      expect(find.byKey(const Key('monthChip-chip1')), findsOneWidget);
+      expect(find.text('13:00–20:00 Pintar el salón'), findsOneWidget);
+      expect(_monthBarFinder('chip1'), findsNothing);
+    });
+
+    testWidgets('an instant task still renders as the pre-existing marker dot, unchanged',
+        (tester) async {
+      final day = _safeMonday();
+      final task = buildTask('dot1', title: 'Tarea instantánea', dueDate: day);
+
+      await pumpCalendarPage(tester, [task]);
+
+      expect(find.byKey(const Key('monthDot-dot1')), findsOneWidget);
+      expect(find.byKey(const Key('monthChip-dot1')), findsNothing);
+      expect(_monthBarFinder('dot1'), findsNothing);
     });
   });
 }
