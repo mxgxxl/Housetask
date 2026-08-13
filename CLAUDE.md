@@ -715,6 +715,12 @@ As of this commit, Phase 1 (Stabilization) is COMPLETE. All TD items in Phase 1 
 
 ---
 
+## 📦 Product Decisions
+
+Las decisiones de producto (monetización, gamificación, UX de alto nivel) viven en docs/PRODUCT_DECISIONS.md como PDRs. Léelo antes de implementar cualquier feature nueva: el código implementa los PDRs, no las redefine.
+
+---
+
 ## 📞 Key Files Quick Reference
 
 | File | Purpose |
