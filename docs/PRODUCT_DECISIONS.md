@@ -38,8 +38,8 @@ Los PDRs registran decisiones de producto con Context / Decision / Consequences,
 
 ## PDR-004: Tareas con duración y bloques en calendario
 
-**Status:** Planned
+**Status:** In progress (commits 1-3 de este round: startsAt/endsAt en backend, pickers de duración en el formulario, bloques con hora en calendario + recordatorio de inicio)
 
 - **Context:** Tareas no instantáneas ("pintar el salón de 13 a 20") no tienen representación hoy.
 - **Decision:** startsAt/endsAt opcionales en Task (sin ellos = instantánea, retrocompatible); calendario pinta rangos como bloques con hora y el resto como all-day; notificación "empieza en 30 min" con el sistema existente.
-- **Consequences:** Extiende modelo y calendario sin romper recurrencia existente.
+- **Consequences:** Extiende modelo y calendario sin romper recurrencia existente. Duration + recurrence is out of scope this round: recurring tasks ignore startsAt/endsAt — the form hides the duration pickers whenever recurrence is on, and the backend never persists (and clears any pre-existing) startsAt/endsAt on a recurring task.
