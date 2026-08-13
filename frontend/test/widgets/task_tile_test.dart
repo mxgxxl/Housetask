@@ -26,11 +26,11 @@ HouseholdCubit _householdCubit(List<Member> members) {
   return cubit;
 }
 
-Widget _host(Task task, {List<Member> members = const []}) {
+Widget _host(Task task, {List<Member> members = const [], HouseholdCubit? householdCubit}) {
   return MaterialApp(
     home: Scaffold(
       body: BlocProvider<HouseholdCubit>.value(
-        value: _householdCubit(members),
+        value: householdCubit ?? _householdCubit(members),
         child: TaskTile(task: task),
       ),
     ),
@@ -121,6 +121,54 @@ void main() {
       await tester.pumpWidget(_host(task));
 
       expect(find.textContaining('Completada por'), findsNothing);
+    });
+
+    testWidgets(
+        'while HouseholdCubit has not loaded yet, a completed task shows the neutral '
+        'placeholder instead of prematurely claiming "Ex-miembro"', (tester) async {
+      final task = buildTask(
+        '1',
+        completed: true,
+        completedBy: {'id': 'u1', 'name': 'Ana Gómez', 'email': 'ana@test.com'},
+      );
+      // Default HouseholdCubit state is `initial` — membership is unknown,
+      // not "resolved to zero members".
+      final loadingCubit = HouseholdCubit(FakeHouseholdRepository());
+
+      await tester.pumpWidget(_host(task, householdCubit: loadingCubit));
+
+      expect(find.text('Completada por Ex-miembro'), findsNothing);
+      expect(find.text('Completada por Ana Gómez'), findsNothing);
+      expect(find.text('Completada'), findsOneWidget);
+    });
+
+    testWidgets(
+        'once HouseholdCubit finishes loading with the completer absent, it resolves to '
+        '"Ex-miembro" instead of staying on the placeholder forever', (tester) async {
+      final task = buildTask(
+        '1',
+        completed: true,
+        completedBy: {'id': 'gone', 'name': 'Carlos Viejo', 'email': 'carlos@test.com'},
+      );
+      final cubit = HouseholdCubit(FakeHouseholdRepository());
+
+      await tester.pumpWidget(_host(task, householdCubit: cubit));
+      expect(find.text('Completada'), findsOneWidget);
+
+      cubit.emit(const HouseholdState(
+        status: HouseholdStatusUi.loaded,
+        current: Household(
+          id: 'h1',
+          name: 'Casa de prueba',
+          inviteCode: 'CASADEMO',
+          createdBy: 'u0',
+          members: [],
+        ),
+      ));
+      await tester.pump();
+
+      expect(find.text('Completada por Ex-miembro'), findsOneWidget);
+      expect(find.text('Completada'), findsNothing);
     });
   });
 }

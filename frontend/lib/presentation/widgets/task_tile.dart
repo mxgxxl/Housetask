@@ -31,18 +31,30 @@ class TaskTile extends StatelessWidget {
     // A completer who is no longer a household member (TD-018) still has a
     // valid User document — the id just no longer appears in the current
     // members list — so "current member" is decided here, not by a null
-    // name/email.
+    // name/email. Crucially, that lookup requires the household to actually
+    // be loaded: while HouseholdCubit is still initial/loading/error, `members`
+    // is empty for a reason that has nothing to do with the completer, so
+    // treating "not found" as "Ex-miembro" in that window would flag every
+    // completer as a former member for as long as the household takes to
+    // load. `completedByPending` distinguishes that transient case so the UI
+    // can show a neutral placeholder instead of a false "Ex-miembro".
     String? completedByLabel;
     User? completedByAvatarUser;
+    bool completedByPending = false;
     final completedBy = task.completedBy;
     if (task.isCompleted && completedBy != null) {
-      final members = context.watch<HouseholdCubit>().state.current?.members ?? const [];
-      final isCurrentMember = members.any((m) => m.user.id == completedBy.id);
-      completedByLabel = isCurrentMember
-          ? (completedBy.name.isEmpty ? completedBy.email : completedBy.name)
-          : 'Ex-miembro';
-      completedByAvatarUser =
-          isCurrentMember ? completedBy : User(id: completedBy.id, email: '', name: '');
+      final householdState = context.watch<HouseholdCubit>().state;
+      if (householdState.status == HouseholdStatusUi.loaded) {
+        final members = householdState.current?.members ?? const [];
+        final isCurrentMember = members.any((m) => m.user.id == completedBy.id);
+        completedByLabel = isCurrentMember
+            ? (completedBy.name.isEmpty ? completedBy.email : completedBy.name)
+            : 'Ex-miembro';
+        completedByAvatarUser =
+            isCurrentMember ? completedBy : User(id: completedBy.id, email: '', name: '');
+      } else {
+        completedByPending = true;
+      }
     }
 
     return Opacity(
@@ -151,6 +163,9 @@ class TaskTile extends StatelessWidget {
                             ),
                           ],
                         ),
+                      ] else if (completedByPending) ...[
+                        const SizedBox(height: 4),
+                        const _CompletedByPlaceholder(),
                       ],
                     ],
                   ),
@@ -162,6 +177,35 @@ class TaskTile extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Neutral placeholder for the "completed by" row while HouseholdCubit has
+/// not resolved membership yet — deliberately does not say "Ex-miembro",
+/// which would be a false claim until the household actually loads.
+class _CompletedByPlaceholder extends StatelessWidget {
+  const _CompletedByPlaceholder();
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 16,
+          height: 16,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: AppColors.textSecondary.withValues(alpha: 0.18),
+          ),
+        ),
+        const SizedBox(width: 4),
+        const Text(
+          'Completada',
+          style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
+        ),
+      ],
     );
   }
 }
