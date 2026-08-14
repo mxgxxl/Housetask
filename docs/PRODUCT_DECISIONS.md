@@ -24,6 +24,7 @@ Los PDRs registran decisiones de producto con Context / Decision / Consequences,
   - **Nota de economía (A1):** Coins granted server-side on first task/purchase completion (TASK_COINS=5, PURCHASE_COINS=2, DAILY_CAP=50). Idempotent via unique ledger index. Hunger/mood decay lazily on read. Art is placeholder for now (Rive/Lottie later).
   - **Nota de economía (A2):** Adoption is two-step (request by member A, confirm by member B). Feed/play free with 1h cooldown (anti-farm of states, no coins). Cosmetics bought with coins (ledger negative), unique per household. Generic PATCH completion now grants coins (economy consistency).
   - **Nota A3:** Frontend pet tab with adoption (propose/confirm/cancel), care view (feed/play with cooldown), cosmetics shop. Art is emoji placeholder; Rive/Lottie deferred. Realtime socket refresh deferred to A4.
+  - **Nota (adopción instantánea, hogares de 1 miembro):** Adoption is cooperative for 2+ member households (propose + confirm by a different member). Single-member households adopt instantly on propose (no confirmation step).
 
 ## PDR-002: Visibilidad cooperativa en flujos core
 
