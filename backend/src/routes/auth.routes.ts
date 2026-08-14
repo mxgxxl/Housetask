@@ -2,6 +2,8 @@ import { Router, RequestHandler } from 'express';
 import rateLimit from 'express-rate-limit';
 import * as authController from '../controllers/auth.controller';
 import { authMiddleware } from '../middleware/auth.middleware';
+import { validate } from '../middleware/validate';
+import { registerSchema, loginSchema, refreshTokenSchema } from '../schemas/auth.schema';
 import { asyncHandler } from '../utils/asyncHandler';
 
 /**
@@ -39,10 +41,15 @@ export function createAuthRouter(options: AuthRouterOptions): Router {
     ? buildAuthLimiter()
     : (_req, _res, next) => next();
 
-  router.post('/register', limiter, asyncHandler(authController.register));
-  router.post('/login', limiter, asyncHandler(authController.login));
-  router.post('/refresh', asyncHandler(authController.refresh));
-  router.post('/logout', asyncHandler(authController.logout));
+  router.post(
+    '/register',
+    limiter,
+    validate(registerSchema),
+    asyncHandler(authController.register),
+  );
+  router.post('/login', limiter, validate(loginSchema), asyncHandler(authController.login));
+  router.post('/refresh', validate(refreshTokenSchema), asyncHandler(authController.refresh));
+  router.post('/logout', validate(refreshTokenSchema), asyncHandler(authController.logout));
   router.get('/me', authMiddleware, asyncHandler(authController.me));
 
   return router;

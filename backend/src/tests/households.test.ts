@@ -44,6 +44,57 @@ describe('POST /api/households', () => {
   });
 });
 
+describe('Zod edge validation on household endpoints (TD-028)', () => {
+  it('should return 400 with a clear message when the name is empty (regression)', async () => {
+    const user = await createTestUser(app);
+
+    const res = await request(app)
+      .post('/api/households')
+      .set(authHeader(user.accessToken))
+      .send({ name: '   ' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toBe('Household name is required');
+  });
+
+  it('should return 400 (not a 500) when the name is not a string', async () => {
+    const user = await createTestUser(app);
+
+    const res = await request(app)
+      .post('/api/households')
+      .set(authHeader(user.accessToken))
+      .send({ name: 12345 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('should return 400 when the name exceeds 100 characters', async () => {
+    const user = await createTestUser(app);
+
+    const res = await request(app)
+      .post('/api/households')
+      .set(authHeader(user.accessToken))
+      .send({ name: 'x'.repeat(101) });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Household name must be at most 100 characters');
+  });
+
+  it('should return 400 with a clear message when the invite code is missing', async () => {
+    const user = await createTestUser(app);
+
+    const res = await request(app)
+      .post('/api/households/join')
+      .set(authHeader(user.accessToken))
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Invite code is required');
+  });
+});
+
 describe('POST /api/households/join', () => {
   it('should add the caller as a plain member when the invite code is valid', async () => {
     const { member, household } = await createHouseholdWithMember(app);

@@ -1,20 +1,15 @@
 import { Response } from 'express';
 import * as householdService from '../services/household.service';
-import { AppError } from '../middleware/error.middleware';
 import { sendSuccess } from '../utils/response';
 import { AuthenticatedRequest } from '../types';
 
 /**
  * POST /api/households
- * Body: { name }
+ * Body: { name } — shape validated by createHouseholdSchema (TD-028).
  * Creates a household with the caller as its first admin.
  */
 export async function create(req: AuthenticatedRequest, res: Response): Promise<void> {
-  const { name } = req.body ?? {};
-  if (typeof name !== 'string' || name.trim().length === 0) {
-    throw new AppError('Household name is required', 400);
-  }
-
+  const { name } = req.body;
   const household = await householdService.createHousehold(req.user!.userId, name);
   sendSuccess(res, householdService.serializeHousehold(household), 201);
 }
@@ -30,15 +25,11 @@ export async function getById(req: AuthenticatedRequest, res: Response): Promise
 
 /**
  * POST /api/households/join
- * Body: { inviteCode }
+ * Body: { inviteCode } — shape validated by joinHouseholdSchema (TD-028).
  * Adds the caller to a household as a member.
  */
 export async function join(req: AuthenticatedRequest, res: Response): Promise<void> {
-  const { inviteCode } = req.body ?? {};
-  if (typeof inviteCode !== 'string' || inviteCode.trim().length === 0) {
-    throw new AppError('Invite code is required', 400);
-  }
-
+  const { inviteCode } = req.body;
   const household = await householdService.joinHousehold(req.user!.userId, inviteCode);
   sendSuccess(res, householdService.serializeHousehold(household));
 }

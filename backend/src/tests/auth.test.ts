@@ -80,6 +80,68 @@ describe('POST /api/auth/register', () => {
   });
 });
 
+describe('Zod edge validation on auth endpoints (TD-028)', () => {
+  it('should return 400 with a clear message when name is missing on register', async () => {
+    const res = await request(app)
+      .post('/api/auth/register')
+      .send({ email: 'noname@test.com', password: 'password123' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toBe('Name is required');
+  });
+
+  it('should return 400 when the register name exceeds 100 characters', async () => {
+    const res = await request(app)
+      .post('/api/auth/register')
+      .send({ email: 'longname@test.com', password: 'password123', name: 'x'.repeat(101) });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Name must be at most 100 characters');
+  });
+
+  it('should return 400 (not a 500) when register email is not a string', async () => {
+    const res = await request(app)
+      .post('/api/auth/register')
+      .send({ email: 12345, password: 'password123', name: 'Numeric email' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('should return 400 for a malformed email on login (tightened: was accepted and 401ed before)', async () => {
+    // Deliberate tightening (TD-028): login previously only checked
+    // `typeof email === 'string'`, so a syntactically invalid email reached
+    // authService.login and came back 401 'Invalid credentials' (the same
+    // generic path as an unknown-but-valid-looking email). Rejecting the
+    // syntax up front with 400 is safe under Hard Rule 2: it never confirms
+    // whether any SPECIFIC address is registered, it only checks shape.
+    const res = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'not-an-email', password: 'whatever' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('A valid email is required');
+  });
+
+  it('should return 400 with a clear message when password is missing on login', async () => {
+    const res = await request(app).post('/api/auth/login').send({ email: 'missing@test.com' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Password is required');
+  });
+
+  it('should return 400 with a clear message when refreshToken is missing', async () => {
+    const refreshRes = await request(app).post('/api/auth/refresh').send({});
+    expect(refreshRes.status).toBe(400);
+    expect(refreshRes.body.error).toBe('Refresh token is required');
+
+    const logoutRes = await request(app).post('/api/auth/logout').send({});
+    expect(logoutRes.status).toBe(400);
+    expect(logoutRes.body.error).toBe('Refresh token is required');
+  });
+});
+
 describe('malformed request bodies', () => {
   it('should answer 400 with the standard envelope for malformed JSON, never 500', async () => {
     const res = await request(app)
