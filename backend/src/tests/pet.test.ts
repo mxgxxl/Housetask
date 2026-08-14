@@ -13,6 +13,7 @@ import {
 } from './helpers';
 import { PetModel } from '../models/Pet';
 import { AdoptionRequestModel } from '../models/AdoptionRequest';
+import * as socketConfig from '../config/socket';
 import { computeDecay, getBalance, grantCoins } from '../services/economy.service';
 import {
   ADOPTION_BONUS_COINS,
@@ -666,5 +667,101 @@ describe('POST /api/households/:householdId/pet/cosmetics/active', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data.activeCosmetic).toBe(cheapest.id);
+  });
+});
+
+// No dedicated socket-client test harness exists in this suite (no test
+// connects a real socket.io-client to buildTestApp's server) — these spy on
+// config/socket.ts's emitToHousehold instead, the same seam pet.service.ts
+// itself calls through. The spy is not given a mockImplementation, so it
+// still runs the real (safe no-op in tests, since initSocket() never runs
+// here) emitToHousehold — only observing what would have been broadcast.
+describe('pet:* socket events emitted during the adoption flow', () => {
+  it('emits pet:adopt_requested with the pending-request payload when a 2+ member household proposes', async () => {
+    const { admin, household } = await createHouseholdWithMember(app);
+    const emitSpy = jest.spyOn(socketConfig, 'emitToHousehold');
+
+    const res = await request(app)
+      .post(`${petUrl(household)}/adopt`)
+      .set(authHeader(admin.accessToken))
+      .send({ species: 'dog', name: 'Firulais' });
+
+    expect(res.status).toBe(201);
+    expect(emitSpy).toHaveBeenCalledTimes(1);
+    const [householdId, event, payload] = emitSpy.mock.calls[0] as [
+      string,
+      string,
+      Record<string, unknown>,
+    ];
+    emitSpy.mockRestore();
+
+    expect(householdId).toBe(household.id);
+    expect(event).toBe('pet:adopt_requested');
+    // String(...) rather than toMatchObject: whether Mongoose's toJSON()
+    // has already stringified ObjectId fields at this point is an
+    // implementation detail this test shouldn't depend on either way.
+    expect(String(payload.householdId)).toBe(household.id);
+    expect(payload.species).toBe('dog');
+    expect(payload.name).toBe('Firulais');
+    expect(String(payload.requestedBy)).toBe(admin.id);
+    expect(payload.status).toBe('pending');
+  });
+
+  it('emits pet:adopted with the created-pet payload when a DIFFERENT member confirms', async () => {
+    const { admin, member, household } = await createHouseholdWithMember(app);
+    await request(app)
+      .post(`${petUrl(household)}/adopt`)
+      .set(authHeader(admin.accessToken))
+      .send({ species: 'dog', name: 'Firulais' });
+
+    const emitSpy = jest.spyOn(socketConfig, 'emitToHousehold');
+
+    const res = await request(app)
+      .post(`${petUrl(household)}/adopt/confirm`)
+      .set(authHeader(member.accessToken));
+
+    expect(res.status).toBe(201);
+    expect(emitSpy).toHaveBeenCalledTimes(1);
+    const [householdId, event, payload] = emitSpy.mock.calls[0] as [
+      string,
+      string,
+      Record<string, unknown>,
+    ];
+    emitSpy.mockRestore();
+
+    expect(householdId).toBe(household.id);
+    expect(event).toBe('pet:adopted');
+    expect(String(payload.householdId)).toBe(household.id);
+    expect(payload.species).toBe('dog');
+    expect(payload.name).toBe('Firulais');
+    expect(String(payload.adoptedBy)).toBe(member.id);
+  });
+
+  it('emits pet:adopted (not pet:adopt_requested) with the created-pet payload when a 1-member household adopts instantly', async () => {
+    const { user, household } = await setupHousehold();
+    const emitSpy = jest.spyOn(socketConfig, 'emitToHousehold');
+
+    const res = await request(app)
+      .post(`${petUrl(household)}/adopt`)
+      .set(authHeader(user.accessToken))
+      .send({ species: 'cat', name: 'Michi' });
+
+    expect(res.status).toBe(201);
+    // Exactly one emit for the whole flow — no pet:adopt_requested at all,
+    // since a single-member household never goes through the request step.
+    expect(emitSpy).toHaveBeenCalledTimes(1);
+    const [householdId, event, payload] = emitSpy.mock.calls[0] as [
+      string,
+      string,
+      Record<string, unknown>,
+    ];
+    emitSpy.mockRestore();
+
+    expect(householdId).toBe(household.id);
+    expect(event).toBe('pet:adopted');
+    expect(String(payload.householdId)).toBe(household.id);
+    expect(payload.species).toBe('cat');
+    expect(payload.name).toBe('Michi');
+    expect(String(payload.adoptedBy)).toBe(user.id);
   });
 });
