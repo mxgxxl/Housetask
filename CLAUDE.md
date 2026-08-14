@@ -229,6 +229,10 @@ Document key architectural decisions here. Format: Context → Decision → Cons
 | `household:member_joined` | Member + Household | User joined household |
 | `household:member_left` | Member + Household | User left/removed |
 | `tasks:batch_created` | `{ tasks[], count }` | Recurring catch-up generation |
+| `pet:adopt_requested` | AdoptionRequest: `{ id, householdId, species, name, requestedBy, status: 'pending', createdAt, updatedAt }` | 2+ member household proposes an adoption (PDR-001) |
+| `pet:adopted` | Pet: `{ id, householdId, species, name, adoptedAt, adoptedBy, hunger, mood, lastFedAt, lastPlayedAt, cosmetics, activeCosmetic, createdAt, updatedAt }` (hunger/mood decayed to now) | A DIFFERENT member confirms a pending adoption, OR a single-member household adopts instantly on propose (no confirmation step — PDR-001) |
+| `pet:adopt_cancelled` | `{ householdId }` | Pending adoption request cancelled by its requester or a household admin |
+| `pet:updated` | Pet (same shape as `pet:adopted`) | Pet fed, played with, a cosmetic bought, or the active cosmetic changed |
 
 **Client → Server events:**
 | Event | Payload | Purpose |
