@@ -43,3 +43,9 @@ Los PDRs registran decisiones de producto con Context / Decision / Consequences,
 - **Context:** Tareas no instantáneas ("pintar el salón de 13 a 20") no tienen representación hoy.
 - **Decision:** startsAt/endsAt opcionales en Task (sin ellos = instantánea, retrocompatible); calendario pinta rangos como bloques con hora y el resto como all-day; notificación "empieza en 30 min" con el sistema existente.
 - **Consequences:** Extiende modelo y calendario sin romper recurrencia existente. Duration + recurrence is out of scope this round: recurring tasks ignore startsAt/endsAt — the form hides the duration pickers whenever recurrence is on, and the backend never persists (and clears any pre-existing) startsAt/endsAt on a recurring task. Calendar follows Google Calendar-style rendering: ranged tasks appear on every day they span (month spanning bars + day-view segmented blocks); single-day ranged tasks show as time-range chips / hour blocks.
+
+## PDR-005: Android minSdk 23 (Android 7.0+)
+
+- **Context:** Flutter 3.44+ enforces minSdk 23 as a hard error (`DependencyVersionChecker.errorMinSdkVersion`) — a project below that floor cannot build at all on this Flutter version, independent of any Gradle/AGP/Kotlin fix.
+- **Decision:** Raise minSdk from 21 to 23, dropping support for Android 5.0–6.0 (<5% market).
+- **Consequences:** Cleaner builds, no workaround flags; acceptable for validation phase.

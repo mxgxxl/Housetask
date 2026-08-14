@@ -504,6 +504,7 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 | TD-038 | sentry_flutter 8.14.2's Package.swift allows any sentry-cocoa 8.x (`from: "8.46.0"`) while its podspec pins exactly 8.46.0; SPM had resolved 8.58.4, which broke the plugin's Swift build (SentryBinaryImageCache API changed) | High | Pinned both Package.resolved files to 8.46.0 matching the podspec; re-pin on every sentry_flutter upgrade until upstream tightens the SPM constraint. Documented in `frontend/README.md`'s Known Issues. Filing the upstream request (against `getsentry/sentry-cocoa`, to tighten the Package.swift range so it can't drift past the podspec again) is a human action — requires a GitHub account and maintainer engagement — and is not something this pipeline can automate; tracked here as a manual follow-up, not automated work. | Resolved (commit 1); upstream report still open (manual follow-up) | TBD | 2026-08-11 |
 | TD-039 | Offline conflict resolution uses last-write-wins; concurrent edits on multiple devices can overwrite | Low | Evaluate CRDT or OT if user reports lost edits | Deferred (Phase 2, if conflicts become frequent) | TBD | 2026-08-11 |
 | TD-040 | flutter test hangs on loaded hosts — confirmed (2026-08-13) to reproduce even running test/widgets/offline_banner_test.dart alone, not only when combined with the rest of the suite as first documented. `frontend_server_aot`'s CPU time froze completely (observed stuck at a fixed value for 200s+) even after clearing `build/test_cache`'s incremental-compile cache, so it is a toolchain/host-level stall (likely resource pressure — observed alongside load average ~4 and <60MB free pages), not a test-code defect or a stale-cache artifact. task_tile_test.dart and assignee_selector_test.dart both pass cleanly, alone or together; only offline_banner_test.dart triggers it | Low | Investigate with --verbose on idle machine. CI runs Flutter tests sharded (top-level + each widgets file separately); offline_banner_test isolated with allow-failure until root-caused | Mitigated in CI (commit 1, TD-008); root cause still open | TBD | 2026-08-11 |
+| TD-041 | Android minSdk 23+ and Flutter pin in CI — Flutter's DependencyVersionChecker enforces errorMinSdkVersion=23 (build-breaking). Project minSdk raised from 21 to 23 (Android 7.0+), accepting <5% market loss for cleaner builds. CI pins Flutter version (not channel: stable) to prevent surprise floor bumps when Flutter stable advances | Low | When upgrading Flutter, check minSdk/Gradle/AGP/Kotlin floors and bump deliberately, not reactively | Resolved | TBD | 2026-08-14 |
 
 ---
 
@@ -626,7 +627,7 @@ The paginated envelope (commit 9f9f629 backend / 597515e frontend) is a breaking
 Publishing the app first would make every list break for users until the backend catches up.
 
 ### Frontend
-- Android: applicationId `com.homesync.app`, minSdkVersion 21
+- Android: applicationId `com.homesync.app`, minSdkVersion 23 (PDR-005)
 - iOS: Bundle ID `com.homesync.app`
 - Build with: `flutter build apk --release` / `flutter build ios --release`
 
