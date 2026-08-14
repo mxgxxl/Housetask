@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../config/pet_config.dart';
 import '../../config/theme.dart';
+import '../../data/models/pet.dart';
 import '../cubit/pet_cubit.dart';
 import '../widgets/common.dart';
 import 'pet_shop_page.dart';
@@ -253,20 +256,6 @@ class _PendingRequestView extends StatelessWidget {
   }
 }
 
-/// null when the action is available now, otherwise a short "Disponible en
-/// N min" label computed from the last action time + the cooldown window.
-/// Purely client-side (the backend's 409 has no "retry after" field) —
-/// mirrors backend/src/config/economy.ts's FEED_COOLDOWN_HOURS/
-/// PLAY_COOLDOWN_HOURS via config/pet_config.dart.
-String? cooldownRemainingLabel(DateTime? lastAt, int cooldownHours) {
-  if (lastAt == null) return null;
-  final readyAt = lastAt.add(Duration(hours: cooldownHours));
-  final remaining = readyAt.difference(DateTime.now());
-  if (remaining.inSeconds <= 0) return null;
-  final minutes = (remaining.inSeconds / 60).ceil();
-  return 'Disponible en $minutes min';
-}
-
 /// Look up a catalog Cosmetic by id, or null (never adopted / unknown id).
 Cosmetic? _cosmeticById(String? id) {
   if (id == null) return null;
@@ -361,8 +350,6 @@ class _CareView extends StatelessWidget {
   Widget build(BuildContext context) {
     final pet = state.pet!;
     final emoji = kSpeciesEmoji[pet.species] ?? '🐾';
-    final feedRemaining = cooldownRemainingLabel(pet.lastFedAt, kFeedCooldownHours);
-    final playRemaining = cooldownRemainingLabel(pet.lastPlayedAt, kPlayCooldownHours);
     final activeCosmetic = _cosmeticById(pet.activeCosmetic);
 
     return RefreshIndicator(
@@ -389,36 +376,149 @@ class _CareView extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 24),
-          _StatBar(label: 'Hambre', value: pet.hunger),
-          const SizedBox(height: 12),
-          _StatBar(label: 'Ánimo', value: pet.mood),
-          const SizedBox(height: 24),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: _CareButton(
-                  label: 'Alimentar',
-                  icon: Icons.restaurant,
-                  disabledText: feedRemaining,
-                  enabled: feedRemaining == null && !state.actionInProgress,
-                  onPressed: () => context.read<PetCubit>().feed(),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _CareButton(
-                  label: 'Jugar',
-                  icon: Icons.sports_esports,
-                  disabledText: playRemaining,
-                  enabled: playRemaining == null && !state.actionInProgress,
-                  onPressed: () => context.read<PetCubit>().play(),
-                ),
-              ),
-            ],
-          ),
+          _LiveCareStats(pet: pet, actionInProgress: state.actionInProgress),
         ],
       ),
+    );
+  }
+}
+
+/// Ticks once a second so the hunger/mood bars and feed/play cooldown
+/// labels move in real time between PetCubit refreshes (PDR-001 A4),
+/// instead of only updating when something else happens to rebuild the
+/// page. Scoped to just the stat bars + care buttons — not the whole
+/// page — so the 1s tick only rebuilds this subtree; the emoji/name/shop
+/// button in _CareView above never re-render on the tick.
+///
+/// Deliberately advances by decrementing its OWN state on every timer tick
+/// (`_advance`) instead of recomputing from `DateTime.now()` on every
+/// build: `Timer` firing is what `WidgetTester.pump(duration)` reliably
+/// fast-forwards in tests, but plain `DateTime.now()` is not virtualized
+/// the same way (that needs package:clock, not used in this project) — so
+/// a tick-counter design is both correct in production (ticks track real
+/// seconds closely enough for a countdown label) and deterministically
+/// testable.
+class _LiveCareStats extends StatefulWidget {
+  final Pet pet;
+  final bool actionInProgress;
+
+  const _LiveCareStats({required this.pet, required this.actionInProgress});
+
+  @override
+  State<_LiveCareStats> createState() => _LiveCareStatsState();
+}
+
+class _LiveCareStatsState extends State<_LiveCareStats> {
+  static const _tick = Duration(seconds: 1);
+
+  Timer? _timer;
+  late double _hunger;
+  late double _mood;
+  Duration? _feedRemaining;
+  Duration? _playRemaining;
+
+  @override
+  void initState() {
+    super.initState();
+    _resetFromWidget();
+    _timer = Timer.periodic(_tick, (_) {
+      if (mounted) setState(_advance);
+    });
+  }
+
+  @override
+  void didUpdateWidget(_LiveCareStats oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // A fresh Pet arrived (manual refresh, feed/play response, or a
+    // realtime pet:updated event) — its hunger/mood/cooldowns are already
+    // current as of THIS moment, so the local countdown must restart from
+    // them instead of compounding on top of the previous snapshot.
+    if (oldWidget.pet != widget.pet) {
+      _resetFromWidget();
+    }
+  }
+
+  /// Snapshot hunger/mood (already decayed-to-fetch-time by the backend)
+  /// and compute each cooldown's remaining Duration once, from the real
+  /// clock — after this, `_advance` ticks both forward without touching
+  /// `DateTime.now()` again.
+  void _resetFromWidget() {
+    _hunger = widget.pet.hunger.toDouble();
+    _mood = widget.pet.mood.toDouble();
+    _feedRemaining = _initialRemaining(widget.pet.lastFedAt, kFeedCooldownHours);
+    _playRemaining = _initialRemaining(widget.pet.lastPlayedAt, kPlayCooldownHours);
+  }
+
+  static Duration? _initialRemaining(DateTime? lastAt, int cooldownHours) {
+    if (lastAt == null) return null;
+    final remaining = lastAt.add(Duration(hours: cooldownHours)).difference(DateTime.now());
+    return remaining > Duration.zero ? remaining : null;
+  }
+
+  void _advance() {
+    _hunger = (_hunger - kHungerDecayPerHour / 3600).clamp(0, 100).toDouble();
+    _mood = (_mood - kMoodDecayPerHour / 3600).clamp(0, 100).toDouble();
+    _feedRemaining = _tickDown(_feedRemaining);
+    _playRemaining = _tickDown(_playRemaining);
+  }
+
+  static Duration? _tickDown(Duration? remaining) {
+    if (remaining == null) return null;
+    final next = remaining - _tick;
+    return next > Duration.zero ? next : null;
+  }
+
+  /// null when the action is available now, otherwise a short "Disponible
+  /// en N min" label — mirrors backend/src/config/economy.ts's
+  /// FEED_COOLDOWN_HOURS/PLAY_COOLDOWN_HOURS via config/pet_config.dart.
+  static String? _remainingLabel(Duration? remaining) {
+    if (remaining == null) return null;
+    final minutes = (remaining.inSeconds / 60).ceil();
+    return 'Disponible en $minutes min';
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final feedLabel = _remainingLabel(_feedRemaining);
+    final playLabel = _remainingLabel(_playRemaining);
+
+    return Column(
+      children: [
+        _StatBar(label: 'Hambre', value: _hunger),
+        const SizedBox(height: 12),
+        _StatBar(label: 'Ánimo', value: _mood),
+        const SizedBox(height: 24),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: _CareButton(
+                label: 'Alimentar',
+                icon: Icons.restaurant,
+                disabledText: feedLabel,
+                enabled: _feedRemaining == null && !widget.actionInProgress,
+                onPressed: () => context.read<PetCubit>().feed(),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _CareButton(
+                label: 'Jugar',
+                icon: Icons.sports_esports,
+                disabledText: playLabel,
+                enabled: _playRemaining == null && !widget.actionInProgress,
+                onPressed: () => context.read<PetCubit>().play(),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

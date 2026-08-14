@@ -184,4 +184,72 @@ void main() {
       expect(find.textContaining('Disponible en'), findsNothing);
     });
   });
+
+  // PDR-001 A4: live countdown — Timer.periodic(1s) in _LiveCareStats.
+  group('PetPage — live cooldown countdown', () {
+    testWidgets('ticks the remaining-time label down as the cooldown elapses', (tester) async {
+      final lastFedAt = DateTime.now().subtract(const Duration(minutes: 58));
+      final cubit = PetCubit(FakePetRepository(pet: buildPet('p1', lastFedAt: lastFedAt)));
+      await cubit.load('h1', 'me');
+
+      await tester.pumpWidget(_host(cubit));
+      await tester.pump();
+
+      String textOf(Finder finder) =>
+          (tester.widget<Text>(finder)).data ?? '';
+      final before = textOf(find.textContaining('Disponible en'));
+
+      // 90s of ticks: crosses at least one more full minute boundary, so
+      // the "Disponible en N min" label must have counted down.
+      for (var i = 0; i < 90; i++) {
+        await tester.pump(const Duration(seconds: 1));
+      }
+
+      final after = textOf(find.textContaining('Disponible en'));
+      expect(after, isNot(before));
+    });
+
+    testWidgets('ticks the countdown to zero and enables the button once the cooldown expires',
+        (tester) async {
+      // 3s left on a 1h cooldown — comfortably crossed by the loop below,
+      // but non-zero at mount so the initial state is still "disabled".
+      final lastFedAt =
+          DateTime.now().subtract(const Duration(hours: 1)).add(const Duration(seconds: 3));
+      final cubit = PetCubit(FakePetRepository(pet: buildPet('p1', lastFedAt: lastFedAt)));
+      await cubit.load('h1', 'me');
+
+      await tester.pumpWidget(_host(cubit));
+      await tester.pump();
+
+      ElevatedButton feedButton() => tester.widget<ElevatedButton>(
+            find.ancestor(of: find.text('Alimentar'), matching: find.byType(ElevatedButton)),
+          );
+
+      expect(feedButton().onPressed, isNull);
+      expect(find.textContaining('Disponible en'), findsOneWidget);
+
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(seconds: 1));
+      }
+
+      expect(feedButton().onPressed, isNotNull);
+      expect(find.textContaining('Disponible en'), findsNothing);
+    });
+
+    testWidgets('disposes the timer when the page is removed from the tree', (tester) async {
+      final cubit = PetCubit(FakePetRepository(pet: buildPet('p1')));
+      await cubit.load('h1', 'me');
+
+      await tester.pumpWidget(_host(cubit));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+
+      // Replacing the tree unmounts _LiveCareStatsState. If dispose() did
+      // not cancel its Timer.periodic, flutter_test's binding fails this
+      // test on teardown with "A Timer is still pending" — so a clean pass
+      // here is itself the assertion that the timer was cancelled.
+      await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+      await tester.pumpAndSettle();
+    });
+  });
 }

@@ -135,6 +135,32 @@ class PetCubit extends Cubit<PetState> {
     await load(_householdId!, _currentUserId!);
   }
 
+  /// Apply an incoming realtime pet/adoption/economy socket event (PDR-001
+  /// A4: pet:adopt_requested, pet:adopted, pet:adopt_cancelled, pet:updated).
+  /// Pet/AdoptionRequest/Economy are each a single value per household — no
+  /// list to merge into like Task/ShoppingItem's applyRealtime — so every
+  /// pet:* event just means "reload", the same pattern SocketCubit already
+  /// uses for tasks:batch_created -> TaskCubit.refresh(). Returns a Future
+  /// (rather than fire-and-forget) so callers/tests can await completion;
+  /// SocketService's callback type is void, so the socket wiring itself
+  /// simply discards it, same as any other Dart void callback backed by an
+  /// async method.
+  ///
+  /// Same household guard as TaskCubit/ShoppingCubit.applyRealtime: a user
+  /// can belong to more than one household, so an event for a household
+  /// other than the one currently loaded is ignored.
+  Future<void> applyRealtime(String event, dynamic data) async {
+    if (data is Map) {
+      final map = Map<String, dynamic>.from(data);
+      if (_householdId != null &&
+          map['householdId'] != null &&
+          map['householdId'].toString() != _householdId) {
+        return;
+      }
+    }
+    await refresh();
+  }
+
   Future<void> proposeAdoption({required String species, required String name}) async {
     if (_householdId == null) return;
     emit(state.copyWith(actionInProgress: true, error: null));

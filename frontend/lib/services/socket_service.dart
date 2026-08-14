@@ -84,6 +84,18 @@ class SocketService {
     _socket?.on('tasks:batch_created', cb);
   }
 
+  /// Subscribe to all pet/adoption/economy lifecycle events (PDR-001 A4).
+  void onPetUpdated(void Function(String event, dynamic data) cb) {
+    for (final e in [
+      'pet:adopt_requested',
+      'pet:adopted',
+      'pet:adopt_cancelled',
+      'pet:updated',
+    ]) {
+      _socket?.on(e, (data) => cb(e, data));
+    }
+  }
+
   void off(String event) => _socket?.off(event);
 
   /// Disconnect and tear down the socket (used on logout).

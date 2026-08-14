@@ -2,18 +2,20 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../data/datasources/local/auth_local_datasource.dart';
 import '../../services/socket_service.dart';
 import 'household_cubit.dart';
+import 'pet_cubit.dart';
 import 'shopping_cubit.dart';
 import 'task_cubit.dart';
 
 /// Bridges the Socket.io connection to the feature cubits: it connects using
 /// the stored token, joins the active household room, and forwards realtime
-/// events to the Task, Shopping, and Household cubits.
+/// events to the Task, Shopping, Household, and Pet cubits.
 class SocketCubit extends Cubit<bool> {
   final SocketService _socket;
   final AuthLocalDataSource _local;
   final TaskCubit _taskCubit;
   final ShoppingCubit _shoppingCubit;
   final HouseholdCubit _householdCubit;
+  final PetCubit _petCubit;
 
   bool _listenersBound = false;
 
@@ -23,6 +25,7 @@ class SocketCubit extends Cubit<bool> {
     this._taskCubit,
     this._shoppingCubit,
     this._householdCubit,
+    this._petCubit,
   ) : super(false);
 
   /// Connect with the stored access token and start listening for events.
@@ -51,6 +54,8 @@ class SocketCubit extends Cubit<bool> {
     _socket.onHouseholdUpdated(_householdCubit.applyRealtime);
     // A batch of recurring occurrences was generated elsewhere; reload tasks.
     _socket.onTasksBatchCreated((_) => _taskCubit.refresh());
+    // PDR-001 A4: any pet/adoption/economy change elsewhere reloads the pet.
+    _socket.onPetUpdated(_petCubit.applyRealtime);
   }
 
   /// Join a household room (call after creating/joining a household).
