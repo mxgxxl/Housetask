@@ -3,7 +3,19 @@
  * swagger-ui-express at /api/docs.
  */
 
+import {
+  COSMETICS,
+  FEED_AMOUNT,
+  FEED_COOLDOWN_HOURS,
+  PLAY_AMOUNT,
+  PLAY_COOLDOWN_HOURS,
+} from './economy';
+
 const bearerAuth = [{ bearerAuth: [] }];
+
+// Sourced from the real catalog (config/economy.ts) rather than hardcoded,
+// so the docs can't drift from what POST cosmetics/buy actually accepts.
+const cosmeticIds = COSMETICS.map((c) => c.id);
 
 /**
  * Optional Idempotency-Key header accepted by every resource-creating POST
@@ -124,6 +136,65 @@ export const swaggerSpec: Record<string, unknown> = {
             enum: ['fridge', 'pantry', 'cleaning', 'personal', 'other'],
           },
           isPurchased: { type: 'boolean' },
+        },
+      },
+      Pet: {
+        type: 'object',
+        description:
+          "The household's shared pet (PDR-001). hunger/mood are decayed to the " +
+          'current time on every read (economy.service.ts computeDecay) — nothing is ' +
+          'written back until the next feed/play/adoption.',
+        properties: {
+          id: { type: 'string' },
+          householdId: { type: 'string' },
+          species: { type: 'string', enum: ['cat', 'dog'] },
+          name: { type: 'string' },
+          adoptedAt: { type: 'string', format: 'date-time' },
+          adoptedBy: { type: 'string', description: 'User id of the adopting/confirming member' },
+          hunger: { type: 'integer', minimum: 0, maximum: 100 },
+          mood: { type: 'integer', minimum: 0, maximum: 100 },
+          lastFedAt: { type: 'string', format: 'date-time', nullable: true },
+          lastPlayedAt: { type: 'string', format: 'date-time', nullable: true },
+          cosmetics: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Owned cosmetic ids',
+          },
+          activeCosmetic: { type: 'string', nullable: true },
+        },
+      },
+      AdoptionRequest: {
+        type: 'object',
+        description:
+          'A pending adoption proposal — 2+ member households only. A single-member ' +
+          'household never produces one of these: POST .../pet/adopt adopts instantly ' +
+          'instead and returns a Pet, not this shape (PDR-001).',
+        properties: {
+          id: { type: 'string' },
+          householdId: { type: 'string' },
+          species: { type: 'string', enum: ['cat', 'dog'] },
+          name: { type: 'string' },
+          requestedBy: { type: 'string', description: 'User id of the proposing member' },
+          status: { type: 'string', enum: ['pending'] },
+        },
+      },
+      EconomyTransaction: {
+        type: 'object',
+        properties: {
+          amount: { type: 'integer', description: 'Positive to earn, negative to spend' },
+          reason: {
+            type: 'string',
+            enum: [
+              'task_complete',
+              'purchase_complete',
+              'feed',
+              'play',
+              'cosmetic_buy',
+              'adoption_bonus',
+            ],
+          },
+          refId: { type: 'string', nullable: true },
+          createdAt: { type: 'string', format: 'date-time' },
         },
       },
     },
@@ -460,6 +531,369 @@ export const swaggerSpec: Record<string, unknown> = {
           idempotencyKeyHeader,
         ],
         responses: { '201': { description: 'Created' } },
+      },
+    },
+    '/households/{householdId}/pet': {
+      get: {
+        tags: ['Pet'],
+        summary: "Get the household's pet, hunger/mood decayed to now",
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          '200': {
+            description: 'OK',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    data: { $ref: '#/components/schemas/Pet' },
+                  },
+                },
+              },
+            },
+          },
+          '404': { description: 'This household has not adopted a pet yet' },
+        },
+      },
+    },
+    '/households/{householdId}/pet/adopt': {
+      get: {
+        tags: ['Pet'],
+        summary: 'Get the pending adoption request, if any',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          '200': {
+            description: 'OK',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    data: { $ref: '#/components/schemas/AdoptionRequest' },
+                  },
+                },
+              },
+            },
+          },
+          '404': { description: 'No pending adoption request for this household' },
+        },
+      },
+      post: {
+        tags: ['Pet'],
+        summary: 'Start a household adoption',
+        description:
+          '2+ member households get a pending AdoptionRequest requiring a DIFFERENT ' +
+          'member to confirm (see POST .../adopt/confirm). A single-member household has ' +
+          'nobody else who could ever confirm, so it adopts the Pet instantly instead — ' +
+          'the response is the Pet itself, not a pending request.',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+          idempotencyKeyHeader,
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['species', 'name'],
+                properties: {
+                  species: { type: 'string', enum: ['cat', 'dog'] },
+                  name: { type: 'string', minLength: 1, maxLength: 50 },
+                },
+              },
+              example: { species: 'dog', name: 'Firulais' },
+            },
+          },
+        },
+        responses: {
+          '201': {
+            description:
+              'A pending AdoptionRequest (2+ member household) OR the created Pet ' +
+              '(single-member household, adopted instantly — see description above)',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    data: {
+                      oneOf: [
+                        { $ref: '#/components/schemas/AdoptionRequest' },
+                        { $ref: '#/components/schemas/Pet' },
+                      ],
+                    },
+                  },
+                },
+              },
+            },
+          },
+          '400': {
+            description: 'The household already has a pet, or a request is already pending',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
+        },
+      },
+      delete: {
+        tags: ['Pet'],
+        summary: 'Cancel the pending adoption request (requester or household admin only)',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          '200': { description: 'Cancelled' },
+          '403': {
+            description: 'Only the requester or a household admin can cancel this adoption',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
+          '404': { description: 'No pending adoption request for this household' },
+        },
+      },
+    },
+    '/households/{householdId}/pet/adopt/confirm': {
+      post: {
+        tags: ['Pet'],
+        summary: 'Confirm a pending adoption',
+        description:
+          'Must be a DIFFERENT member than the one who requested it (cooperative ' +
+          'consensus, PDR-001) — creates the Pet, deletes the request, and grants the ' +
+          'one-time adoption bonus.',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+          idempotencyKeyHeader,
+        ],
+        responses: {
+          '201': {
+            description: 'Pet created',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    data: { $ref: '#/components/schemas/Pet' },
+                  },
+                },
+              },
+            },
+          },
+          '403': {
+            description:
+              'A different household member must confirm the adoption (the requester ' +
+              'tried to confirm their own request)',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
+          '404': { description: 'No pending adoption request for this household (or it expired)' },
+        },
+      },
+    },
+    '/households/{householdId}/pet/feed': {
+      post: {
+        tags: ['Pet'],
+        summary: `Feed the pet: restores ${FEED_AMOUNT} hunger, gated by a ${FEED_COOLDOWN_HOURS}h cooldown`,
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          '200': {
+            description: 'OK',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    data: { $ref: '#/components/schemas/Pet' },
+                  },
+                },
+              },
+            },
+          },
+          '404': { description: 'This household has not adopted a pet yet' },
+          '409': {
+            description: 'The pet was already fed recently — try again later',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
+        },
+      },
+    },
+    '/households/{householdId}/pet/play': {
+      post: {
+        tags: ['Pet'],
+        summary: `Play with the pet: restores ${PLAY_AMOUNT} mood, gated by a ${PLAY_COOLDOWN_HOURS}h cooldown`,
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          '200': {
+            description: 'OK',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    data: { $ref: '#/components/schemas/Pet' },
+                  },
+                },
+              },
+            },
+          },
+          '404': { description: 'This household has not adopted a pet yet' },
+          '409': {
+            description: 'The pet already played recently — try again later',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
+        },
+      },
+    },
+    '/households/{householdId}/pet/cosmetics/buy': {
+      post: {
+        tags: ['Pet'],
+        summary: "Spend coins on a cosmetic and add it to the pet's cosmetics",
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+          idempotencyKeyHeader,
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['cosmeticId'],
+                properties: { cosmeticId: { type: 'string', enum: cosmeticIds } },
+              },
+              example: { cosmeticId: 'hat' },
+            },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'Cosmetic purchased',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    data: { $ref: '#/components/schemas/Pet' },
+                  },
+                },
+              },
+            },
+          },
+          '400': {
+            description: 'Unknown cosmeticId, already owned, or insufficient balance',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
+          '404': { description: 'This household has not adopted a pet yet' },
+          '409': {
+            description:
+              'Race: this cosmetic was already bought by a concurrent request for the ' +
+              'same household (the ledger unique index is the real guard; the 400 above ' +
+              'is the common-case fast path)',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
+        },
+      },
+    },
+    '/households/{householdId}/pet/cosmetics/active': {
+      post: {
+        tags: ['Pet'],
+        summary: "Set the pet's active cosmetic (must already be owned)",
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['cosmeticId'],
+                properties: { cosmeticId: { type: 'string', enum: cosmeticIds } },
+              },
+              example: { cosmeticId: 'hat' },
+            },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'OK',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    data: { $ref: '#/components/schemas/Pet' },
+                  },
+                },
+              },
+            },
+          },
+          '400': {
+            description: 'This household does not own this cosmetic',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
+          '404': { description: 'This household has not adopted a pet yet' },
+        },
+      },
+    },
+    '/households/{householdId}/economy': {
+      get: {
+        tags: ['Economy'],
+        summary: "Household's coin balance, today's earnings, and recent ledger entries",
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          '200': {
+            description: 'OK',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    data: {
+                      type: 'object',
+                      properties: {
+                        balance: { type: 'integer', description: 'All-time balance' },
+                        dailyEarned: {
+                          type: 'integer',
+                          description: 'Coins earned since the start of the current UTC day',
+                        },
+                        recentTransactions: {
+                          type: 'array',
+                          items: { $ref: '#/components/schemas/EconomyTransaction' },
+                          description: 'Most recent ledger entries, newest first (limit 10)',
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
       },
     },
   },
