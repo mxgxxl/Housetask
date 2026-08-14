@@ -38,7 +38,7 @@ export function parseLimit(raw: unknown): number {
   if (!Number.isInteger(parsed) || parsed < MIN_PAGE_LIMIT || parsed > MAX_PAGE_LIMIT) {
     throw new AppError(
       `limit must be an integer between ${MIN_PAGE_LIMIT} and ${MAX_PAGE_LIMIT}`,
-      400
+      400,
     );
   }
   return parsed;

@@ -18,7 +18,11 @@ beforeAll(async () => {
   app = await buildTestApp();
 });
 
-async function setupHousehold(): Promise<{ user: TestUser; household: TestHousehold; url: string }> {
+async function setupHousehold(): Promise<{
+  user: TestUser;
+  household: TestHousehold;
+  url: string;
+}> {
   const user = await createTestUser(app);
   const household = await createTestHousehold(app, user);
   return { user, household, url: `/api/households/${household.id}/tasks` };
@@ -259,9 +263,7 @@ describe('list indexes match the listing sort', () => {
 
     // Same fields AND same directions as { status: -1, dueDate: 1, _id: -1 },
     // otherwise MongoDB sorts in memory (32MB cap) on every page.
-    expect(patterns).toContain(
-      JSON.stringify({ householdId: 1, status: -1, dueDate: 1, _id: -1 })
-    );
+    expect(patterns).toContain(JSON.stringify({ householdId: 1, status: -1, dueDate: 1, _id: -1 }));
     // The superseded index must be gone: keeping it is pure write overhead.
     expect(patterns).not.toContain(JSON.stringify({ householdId: 1, status: 1, dueDate: 1 }));
   });
@@ -281,7 +283,7 @@ describe('list indexes match the listing sort', () => {
 
     expect(patterns).toContain(JSON.stringify({ householdId: 1, isPurchased: 1, _id: -1 }));
     expect(patterns).not.toContain(
-      JSON.stringify({ householdId: 1, isPurchased: 1, createdAt: -1 })
+      JSON.stringify({ householdId: 1, isPurchased: 1, createdAt: -1 }),
     );
   });
 });

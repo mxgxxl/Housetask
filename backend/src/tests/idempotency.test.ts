@@ -9,10 +9,7 @@ import {
   IdempotencyStore,
   RedisIdempotencyStore,
 } from '../services/idempotency.store';
-import {
-  idempotencyMetrics,
-  resetIdempotencyMetrics,
-} from '../middleware/idempotency.middleware';
+import { idempotencyMetrics, resetIdempotencyMetrics } from '../middleware/idempotency.middleware';
 import { resolveCommandTimeoutMs } from '../config/redis';
 import { buildTestApp } from './setup';
 import {
@@ -233,7 +230,6 @@ describe('Idempotency-Key on shopping item creation', () => {
   });
 });
 
-
 /**
  * A store that is always unavailable — models a Redis outage or a timeout
  * exceeding commandTimeout. Every method reports failure instead of throwing,
@@ -262,7 +258,6 @@ class FaultyStore implements IdempotencyStore {
 
 /** A store whose acquire never resolves in time, i.e. a hung Redis command. */
 class SlowStore extends FaultyStore {
-
   async acquire(): Promise<AcquireOutcome> {
     this.acquireCalls++;
     // The real client rejects after commandTimeout; the store's catch turns
@@ -346,7 +341,6 @@ describe('Idempotency-Key when the store is unavailable (TD-031)', () => {
   });
 });
 
-
 describe('RedisIdempotencyStore with an unavailable Redis', () => {
   // Redis is never initialized in this suite, so getRedis() throws — the same
   // shape of failure as an outage or a commandTimeout rejection.
@@ -371,7 +365,6 @@ describe('RedisIdempotencyStore with an unavailable Redis', () => {
     expect(Date.now() - started).toBeLessThan(2000);
   });
 });
-
 
 describe('REDIS_COMMAND_TIMEOUT_MS', () => {
   const original = process.env.REDIS_COMMAND_TIMEOUT_MS;
@@ -436,7 +429,7 @@ describe('fail-open observability (TD-033)', () => {
     // outage cannot bury the signal under identical warnings.
     expect(idempotencyMetrics().failOpenCount).toBe(5);
     const failOpenLogs = calls.filter(
-      ([message]) => message === 'idempotency-store unavailable, fail-open'
+      ([message]) => message === 'idempotency-store unavailable, fail-open',
     );
     expect(failOpenLogs).toHaveLength(1);
     expect(failOpenLogs[0][1]).toMatchObject({ failOpenCount: 1 });

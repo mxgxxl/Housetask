@@ -60,7 +60,7 @@ export async function removeMember(req: AuthenticatedRequest, res: Response): Pr
   const household = await householdService.removeMember(
     req.params.householdId,
     req.member!,
-    req.params.userId
+    req.params.userId,
   );
   sendSuccess(res, householdService.serializeHousehold(household));
 }

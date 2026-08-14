@@ -25,7 +25,7 @@ export async function create(req: AuthenticatedRequest, res: Response): Promise<
   const item = await shoppingService.createItem(
     req.params.householdId,
     req.user!.userId,
-    req.body ?? {}
+    req.body ?? {},
   );
   sendSuccess(res, item, 201);
 }
@@ -39,7 +39,7 @@ export async function update(req: AuthenticatedRequest, res: Response): Promise<
     req.params.householdId,
     req.user!.userId,
     req.params.itemId,
-    req.body ?? {}
+    req.body ?? {},
   );
   sendSuccess(res, item);
 }
@@ -52,7 +52,7 @@ export async function purchase(req: AuthenticatedRequest, res: Response): Promis
   const item = await shoppingService.purchaseItem(
     req.params.householdId,
     req.user!.userId,
-    req.params.itemId
+    req.params.itemId,
   );
   sendSuccess(res, item);
 }

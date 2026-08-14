@@ -118,7 +118,10 @@ describe('GET /api/households/:householdId/shopping — pagination', () => {
       }
     }
 
-    const full = await request(app).get(url).query({ limit: 100 }).set(authHeader(user.accessToken));
+    const full = await request(app)
+      .get(url)
+      .query({ limit: 100 })
+      .set(authHeader(user.accessToken));
     const expected = (full.body.data.items as ShoppingResponse[]).map((i) => i.id);
     expect(expected).toHaveLength(12);
 

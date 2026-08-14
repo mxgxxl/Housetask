@@ -68,7 +68,7 @@ export function createApp(options: CreateAppOptions = {}): Application {
   app.set(
     IDEMPOTENCY_STORE_KEY,
     options.idempotencyStore ??
-      (process.env.NODE_ENV === 'test' ? new InMemoryIdempotencyStore() : null)
+      (process.env.NODE_ENV === 'test' ? new InMemoryIdempotencyStore() : null),
   );
 
   // Behind a proxy (e.g. Railway) so rate-limit sees the real client IP.
@@ -80,7 +80,7 @@ export function createApp(options: CreateAppOptions = {}): Application {
     cors({
       origin: corsOrigins ? corsOrigins.split(',').map((o) => o.trim()) : '*',
       credentials: true,
-    })
+    }),
   );
 
   // Reject non-JSON payloads before parsing so they fail with 415 rather than

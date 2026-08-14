@@ -19,7 +19,7 @@ const refreshTokenSchema = new Schema<IRefreshToken>(
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     expiresAt: { type: Date, required: true },
   },
-  { timestamps: { createdAt: true, updatedAt: false } }
+  { timestamps: { createdAt: true, updatedAt: false } },
 );
 
 // MongoDB TTL index: documents are purged once expiresAt passes.

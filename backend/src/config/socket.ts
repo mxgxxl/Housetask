@@ -115,9 +115,7 @@ export function emitToHousehold(householdId: string, event: string, payload: unk
   if (!io) {
     if (!warnedUninitialized) {
       warnedUninitialized = true;
-      logger.warn(
-        `Socket.io not initialized — skipping realtime emits (first skipped: ${event})`
-      );
+      logger.warn(`Socket.io not initialized — skipping realtime emits (first skipped: ${event})`);
     }
     return;
   }

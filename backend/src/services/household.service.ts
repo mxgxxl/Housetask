@@ -92,7 +92,7 @@ export async function createHousehold(userId: string, name: string): Promise<IHo
 export async function getHousehold(householdId: string): Promise<IHousehold> {
   const household = await HouseholdModel.findById(householdId).populate(
     'members.user',
-    'name email avatarUrl'
+    'name email avatarUrl',
   );
   if (!household) {
     throw new AppError('Household not found', 404);
@@ -138,7 +138,7 @@ export async function joinHousehold(userId: string, inviteCode: string): Promise
 export async function removeMember(
   householdId: string,
   requester: RequesterMembership,
-  targetUserId: string
+  targetUserId: string,
 ): Promise<IHousehold> {
   // Both rejections are answered from what requireMembership already loaded,
   // so an unauthorized or bogus request never costs a second read.

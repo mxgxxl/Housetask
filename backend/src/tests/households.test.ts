@@ -54,7 +54,7 @@ describe('POST /api/households/join', () => {
 
     expect(res.status).toBe(200);
     const joined = res.body.data.members.find(
-      (m: { user: { id: string }; role: string }) => m.user.id === member.id
+      (m: { user: { id: string }; role: string }) => m.user.id === member.id,
     );
     expect(joined.role).toBe('member');
   });

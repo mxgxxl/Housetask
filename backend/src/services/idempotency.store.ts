@@ -212,7 +212,7 @@ export class InMemoryIdempotencyStore implements IdempotencyStore {
 async function pollForResult(
   store: IdempotencyStore,
   key: string,
-  timeoutMs: number
+  timeoutMs: number,
 ): Promise<IdempotencyResult | null> {
   const deadline = Date.now() + timeoutMs;
 

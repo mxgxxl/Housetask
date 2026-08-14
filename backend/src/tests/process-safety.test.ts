@@ -8,7 +8,7 @@ describe('unhandledRejection safety net (TD-032)', () => {
   it('should register exactly one handler', () => {
     expect(process.listeners('unhandledRejection')).toContain(handleUnhandledRejection);
     expect(
-      process.listeners('unhandledRejection').filter((l) => l === handleUnhandledRejection)
+      process.listeners('unhandledRejection').filter((l) => l === handleUnhandledRejection),
     ).toHaveLength(1);
   });
 

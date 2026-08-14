@@ -19,12 +19,12 @@ router.get('/:householdId', requireMembership, asyncHandler(householdController.
 router.get(
   '/:householdId/members',
   requireMembership,
-  asyncHandler(householdController.listMembers)
+  asyncHandler(householdController.listMembers),
 );
 router.delete(
   '/:householdId/members/:userId',
   requireMembership,
-  asyncHandler(householdController.removeMember)
+  asyncHandler(householdController.removeMember),
 );
 
 export default router;

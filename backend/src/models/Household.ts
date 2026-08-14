@@ -28,7 +28,7 @@ const memberSchema = new Schema<IHouseholdMember>(
     role: { type: String, enum: ['admin', 'member'], default: 'member' },
     joinedAt: { type: Date, default: Date.now },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const householdSchema = new Schema<IHousehold>(
@@ -46,7 +46,7 @@ const householdSchema = new Schema<IHousehold>(
     members: { type: [memberSchema], default: [] },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   },
-  { timestamps: true, ...jsonSchemaOptions }
+  { timestamps: true, ...jsonSchemaOptions },
 );
 
 export const HouseholdModel = model<IHousehold>('Household', householdSchema);

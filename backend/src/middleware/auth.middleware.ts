@@ -8,11 +8,7 @@ import { sendError } from '../utils/response';
  * token, and attaches the decoded payload to `req.user`. Responds 401 on
  * any failure.
  */
-export function authMiddleware(
-  req: AuthenticatedRequest,
-  res: Response,
-  next: NextFunction
-): void {
+export function authMiddleware(req: AuthenticatedRequest, res: Response, next: NextFunction): void {
   const header = req.headers.authorization;
 
   if (!header || !header.startsWith('Bearer ')) {

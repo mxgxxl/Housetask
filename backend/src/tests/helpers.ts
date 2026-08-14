@@ -37,7 +37,7 @@ export function authHeader(accessToken: string): Record<string, string> {
  */
 export async function createTestUser(
   app: Server,
-  overrides: Partial<Pick<TestUser, 'email' | 'password' | 'name'>> = {}
+  overrides: Partial<Pick<TestUser, 'email' | 'password' | 'name'>> = {},
 ): Promise<TestUser> {
   userSequence += 1;
   const email = overrides.email ?? `user${userSequence}@test.com`;
@@ -65,7 +65,7 @@ export async function createTestUser(
 export async function createTestHousehold(
   app: Server,
   user: TestUser,
-  name = 'Casa de prueba'
+  name = 'Casa de prueba',
 ): Promise<TestHousehold> {
   const res = await request(app)
     .post('/api/households')
@@ -88,7 +88,7 @@ export async function createTestHousehold(
 export async function joinTestHousehold(
   app: Server,
   user: TestUser,
-  inviteCode: string
+  inviteCode: string,
 ): Promise<void> {
   const res = await request(app)
     .post('/api/households/join')
@@ -104,7 +104,7 @@ export async function joinTestHousehold(
  * a second, non-admin member.
  */
 export async function createHouseholdWithMember(
-  app: Server
+  app: Server,
 ): Promise<{ admin: TestUser; member: TestUser; household: TestHousehold }> {
   const admin = await createTestUser(app);
   const member = await createTestUser(app);

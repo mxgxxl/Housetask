@@ -49,7 +49,7 @@ async function setupHousehold(): Promise<{ user: TestUser; household: TestHouseh
 async function createTask(
   user: TestUser,
   household: TestHousehold,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
 ): Promise<TaskResponse> {
   const res = await request(app)
     .post(await tasksUrl(household))
@@ -166,10 +166,7 @@ describe('GET /api/households/:householdId/tasks — pagination', () => {
    * 12 tasks with deliberately unsorted dueDates and a mix of statuses, so a
    * cursor that only carried _id would visibly skip or repeat rows.
    */
-  async function seedTwelve(
-    user: TestUser,
-    household: TestHousehold
-  ): Promise<void> {
+  async function seedTwelve(user: TestUser, household: TestHousehold): Promise<void> {
     const offsets = [7, 2, 11, 0, 5, 9, 1, 8, 3, 10, 4, 6];
     for (let i = 0; i < offsets.length; i++) {
       const task = await createTask(user, household, {
@@ -299,7 +296,10 @@ describe('GET /api/households/:householdId/tasks — pagination', () => {
 describe('GET /api/households/:householdId/tasks — date-range filtering (PDR-003)', () => {
   it('should return dated tasks within [from, to] and exclude tasks outside the window', async () => {
     const { user, household } = await setupHousehold();
-    const before = await createTask(user, household, { title: 'Before', dueDate: daysFromNow(-10) });
+    const before = await createTask(user, household, {
+      title: 'Before',
+      dueDate: daysFromNow(-10),
+    });
     const within = await createTask(user, household, { title: 'Within', dueDate: daysFromNow(0) });
     const after = await createTask(user, household, { title: 'After', dueDate: daysFromNow(10) });
 
@@ -318,7 +318,10 @@ describe('GET /api/households/:householdId/tasks — date-range filtering (PDR-0
   it('should always include undated tasks in a from/to window (PDR-003 "Sin fecha" bucket)', async () => {
     const { user, household } = await setupHousehold();
     const within = await createTask(user, household, { title: 'Within', dueDate: daysFromNow(0) });
-    const outside = await createTask(user, household, { title: 'Outside', dueDate: daysFromNow(10) });
+    const outside = await createTask(user, household, {
+      title: 'Outside',
+      dueDate: daysFromNow(10),
+    });
     const undated = await createTask(user, household, { title: 'Sin fecha' });
 
     const res = await request(app)
@@ -372,7 +375,7 @@ describe('GET /api/households/:householdId/tasks — date-range filtering (PDR-0
     const created = [];
     for (const offset of offsets) {
       created.push(
-        await createTask(user, household, { title: `Day ${offset}`, dueDate: daysFromNow(offset) })
+        await createTask(user, household, { title: `Day ${offset}`, dueDate: daysFromNow(offset) }),
       );
     }
     // Well outside the window, must never appear in any page.
@@ -666,7 +669,7 @@ describe('PATCH /api/households/:householdId/tasks/:taskId/complete', () => {
       .get(await tasksUrl(household))
       .set(authHeader(user.accessToken));
     const countBefore = (before.body.data.items as TaskResponse[]).filter(
-      (t) => t.title === 'Sacar reciclaje'
+      (t) => t.title === 'Sacar reciclaje',
     ).length;
 
     await request(app)
@@ -677,7 +680,7 @@ describe('PATCH /api/households/:householdId/tasks/:taskId/complete', () => {
       .get(await tasksUrl(household))
       .set(authHeader(user.accessToken));
     const countAfter = (after.body.data.items as TaskResponse[]).filter(
-      (t) => t.title === 'Sacar reciclaje'
+      (t) => t.title === 'Sacar reciclaje',
     ).length;
 
     expect(countBefore).toBe(2);
@@ -755,7 +758,7 @@ describe('POST /api/households/:householdId/tasks/generate-instances', () => {
     user: TestUser,
     household: TestHousehold,
     dueDate: string,
-    intervalDays: number
+    intervalDays: number,
   ): Promise<void> {
     const url = await tasksUrl(household);
     const task = await createTask(user, household, {

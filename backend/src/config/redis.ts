@@ -40,7 +40,7 @@ export function resolveCommandTimeoutMs(): number {
   const parsed = Number.parseInt(raw, 10);
   if (Number.isNaN(parsed) || parsed <= 0) {
     throw new Error(
-      `REDIS_COMMAND_TIMEOUT_MS must be a positive integer in milliseconds, got "${raw}"`
+      `REDIS_COMMAND_TIMEOUT_MS must be a positive integer in milliseconds, got "${raw}"`,
     );
   }
   return parsed;

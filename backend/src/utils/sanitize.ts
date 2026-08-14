@@ -50,7 +50,7 @@ export function sanitizeDate(input: string | Date, field = 'date'): Date {
   if (parsed < MIN_DATE || parsed > maxDate) {
     throw new AppError(
       `${field} must be between ${MIN_DATE.toISOString().slice(0, 10)} and ${MAX_YEARS_AHEAD} years from now`,
-      400
+      400,
     );
   }
 

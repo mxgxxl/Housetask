@@ -9,7 +9,7 @@ async function seedTokens(count: number): Promise<void> {
       token: `token-${i}`,
       userId: new Types.ObjectId(),
       expiresAt: new Date(Date.now() + 60_000),
-    }))
+    })),
   );
 }
 

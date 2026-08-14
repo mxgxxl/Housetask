@@ -68,7 +68,7 @@ async function generateTokens(userId: string, email: string): Promise<TokenPair>
 export async function register(
   email: string,
   password: string,
-  name: string
+  name: string,
 ): Promise<{ user: PublicUser; tokens: TokenPair }> {
   const normalizedEmail = email.toLowerCase().trim();
 
@@ -95,7 +95,7 @@ export async function register(
  */
 export async function login(
   email: string,
-  password: string
+  password: string,
 ): Promise<{ user: PublicUser; tokens: TokenPair }> {
   const normalizedEmail = email.toLowerCase().trim();
 

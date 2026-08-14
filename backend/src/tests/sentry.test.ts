@@ -50,7 +50,7 @@ describe('Sentry no-op fallback (TD-009)', () => {
   it('should no-op captureServerError and captureSecurityWarning without a DSN', () => {
     expect(() => captureServerError(new Error('boom'), { path: '/x' })).not.toThrow();
     expect(() =>
-      captureSecurityWarning('refresh-token replay detected', { userId: 'u1' })
+      captureSecurityWarning('refresh-token replay detected', { userId: 'u1' }),
     ).not.toThrow();
   });
 

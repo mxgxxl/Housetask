@@ -43,7 +43,7 @@ export async function create(req: AuthenticatedRequest, res: Response): Promise<
     req.params.householdId,
     req.user!.userId,
     req.body ?? {},
-    req.member!.memberIds
+    req.member!.memberIds,
   );
   sendSuccess(res, task, 201);
 }
@@ -59,7 +59,7 @@ export async function update(req: AuthenticatedRequest, res: Response): Promise<
     req.params.taskId,
     req.body ?? {},
     req.member!.memberIds,
-    req.member!.role
+    req.member!.role,
   );
   sendSuccess(res, task);
 }
@@ -72,7 +72,7 @@ export async function complete(req: AuthenticatedRequest, res: Response): Promis
   const task = await taskService.completeTask(
     req.params.householdId,
     req.user!.userId,
-    req.params.taskId
+    req.params.taskId,
   );
   sendSuccess(res, task);
 }
@@ -86,7 +86,7 @@ export async function remove(req: AuthenticatedRequest, res: Response): Promise<
     req.params.householdId,
     req.user!.userId,
     req.params.taskId,
-    req.member!.role
+    req.member!.role,
   );
   sendSuccess(res, { message: 'Task deleted' });
 }
@@ -99,7 +99,7 @@ export async function remove(req: AuthenticatedRequest, res: Response): Promise<
  */
 export async function generateRecurringInstances(
   req: AuthenticatedRequest,
-  res: Response
+  res: Response,
 ): Promise<void> {
   const rawUpTo = (req.body ?? {}).upTo;
   const upTo = rawUpTo ? new Date(rawUpTo) : new Date();
@@ -107,10 +107,6 @@ export async function generateRecurringInstances(
     throw new AppError('Invalid upTo date', 400);
   }
 
-  const result = await taskService.catchUpRecurring(
-    req.params.householdId,
-    req.user!.userId,
-    upTo
-  );
+  const result = await taskService.catchUpRecurring(req.params.householdId, req.user!.userId, upTo);
   sendSuccess(res, result);
 }

@@ -27,7 +27,7 @@ export async function migrateRefreshTokens(confirmed: boolean): Promise<number> 
     // mistypes the command gets a count, not a mass logout.
     logger.warn(
       'Dry run — nothing deleted. Re-run with --yes to wipe the collection ' +
-        '(all users will need to log in again).'
+        '(all users will need to log in again).',
     );
     return 0;
   }

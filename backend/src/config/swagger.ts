@@ -283,9 +283,7 @@ export const swaggerSpec: Record<string, unknown> = {
         tags: ['Households'],
         summary: 'Get a household (members only)',
         security: bearerAuth,
-        parameters: [
-          { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
-        ],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
         responses: { '200': { description: 'OK' }, '403': { description: 'Forbidden' } },
       },
     },

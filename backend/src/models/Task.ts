@@ -48,7 +48,7 @@ const recurrenceRuleSchema = new Schema<IRecurrenceRule>(
     daysOfWeek: { type: [{ type: Number, min: 0, max: 6 }], default: undefined },
     dayOfMonth: { type: Number, min: 1, max: 31 },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const taskSchema = new Schema<ITask>(
@@ -86,7 +86,7 @@ const taskSchema = new Schema<ITask>(
       index: true,
     },
   },
-  { timestamps: true, ...jsonSchemaOptions }
+  { timestamps: true, ...jsonSchemaOptions },
 );
 
 // Matches the listing sort EXACTLY (householdId equality, then status desc,

@@ -61,8 +61,8 @@ afterAll(async () => {
       (server) =>
         new Promise<void>((resolve) => {
           server.close(() => resolve());
-        })
-    )
+        }),
+    ),
   );
   await mongoose.disconnect();
 });

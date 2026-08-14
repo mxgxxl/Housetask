@@ -48,5 +48,5 @@ export const requireMembership = asyncHandler(
       memberIds: household.members.map((m) => m.user.toString()),
     };
     next();
-  }
+  },
 );

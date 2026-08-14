@@ -90,13 +90,13 @@ describe('calculateNextDueDate — daily and custom', () => {
   it('should default a missing or invalid interval to 1 day', () => {
     expect(day(calculateNextDueDate(at('2025-03-10'), { type: 'daily' }))).toBe('2025-03-11');
     expect(day(calculateNextDueDate(at('2025-03-10'), { type: 'daily', interval: 0 }))).toBe(
-      '2025-03-11'
+      '2025-03-11',
     );
   });
 
   it('should treat custom as a daily interval', () => {
     expect(day(calculateNextDueDate(at('2025-03-10'), { type: 'custom', interval: 5 }))).toBe(
-      '2025-03-15'
+      '2025-03-15',
     );
   });
 });

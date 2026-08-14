@@ -49,7 +49,7 @@ const shoppingItemSchema = new Schema<IShoppingItem>(
     lastAddedAt: { type: Date },
     estimatedPrice: { type: Number },
   },
-  { timestamps: true, ...jsonSchemaOptions }
+  { timestamps: true, ...jsonSchemaOptions },
 );
 
 // Matches the listing sort EXACTLY: householdId equality, isPurchased asc,

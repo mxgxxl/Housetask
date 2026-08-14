@@ -88,16 +88,13 @@ export interface ListItemsOptions {
 export async function listItems(
   householdId: string,
   userId: string,
-  options: ListItemsOptions
+  options: ListItemsOptions,
 ): Promise<Page<IShoppingItem>> {
   const baseFilter: Record<string, unknown> = { householdId: new Types.ObjectId(householdId) };
 
   const pageFilter = { ...baseFilter };
   if (options.cursor) {
-    Object.assign(
-      pageFilter,
-      shoppingCursorFilter(decodeCursor(options.cursor, isShoppingCursor))
-    );
+    Object.assign(pageFilter, shoppingCursorFilter(decodeCursor(options.cursor, isShoppingCursor)));
   }
 
   // Counted only on the first page: the value is identical for every page of a
@@ -131,7 +128,7 @@ export async function listItems(
 export async function createItem(
   householdId: string,
   userId: string,
-  input: CreateShoppingInput
+  input: CreateShoppingInput,
 ): Promise<IShoppingItem> {
   if (!input.name || input.name.trim() === '') {
     throw new AppError('Item name is required', 400);
@@ -163,7 +160,7 @@ export async function updateItem(
   householdId: string,
   userId: string,
   itemId: string,
-  input: UpdateShoppingInput
+  input: UpdateShoppingInput,
 ): Promise<IShoppingItem> {
   const item = await ShoppingItemModel.findOne({ _id: itemId, householdId });
   if (!item) {
@@ -206,7 +203,7 @@ export async function updateItem(
 export async function purchaseItem(
   householdId: string,
   userId: string,
-  itemId: string
+  itemId: string,
 ): Promise<IShoppingItem> {
   const item = await ShoppingItemModel.findOne({ _id: itemId, householdId });
   if (!item) {
@@ -229,7 +226,7 @@ export async function purchaseItem(
 export async function deleteItem(
   householdId: string,
   userId: string,
-  itemId: string
+  itemId: string,
 ): Promise<void> {
   const item = await ShoppingItemModel.findOneAndDelete({ _id: itemId, householdId });
   if (!item) {

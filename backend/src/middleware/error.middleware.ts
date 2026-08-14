@@ -39,7 +39,7 @@ export function errorHandler(
   req: Request,
   res: Response,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _next: NextFunction
+  _next: NextFunction,
 ): void {
   const respond = (message: string, status: number): void => {
     if (status >= 500) {

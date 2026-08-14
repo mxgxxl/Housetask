@@ -58,7 +58,10 @@ function nextWeekday(base: Date, daysOfWeek: number[]): Date {
   const current = base.getUTCDay();
   const laterThisWeek = days.find((d) => d > current);
 
-  return addDays(base, laterThisWeek !== undefined ? laterThisWeek - current : 7 - current + days[0]);
+  return addDays(
+    base,
+    laterThisWeek !== undefined ? laterThisWeek - current : 7 - current + days[0],
+  );
 }
 
 /**

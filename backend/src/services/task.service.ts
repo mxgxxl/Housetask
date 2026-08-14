@@ -99,7 +99,7 @@ async function populated(task: ITask): Promise<ITask> {
 async function pendingDuplicateExists(
   householdId: Types.ObjectId,
   title: string,
-  dueDate: Date
+  dueDate: Date,
 ): Promise<boolean> {
   const oneDayBefore = new Date(dueDate);
   oneDayBefore.setDate(oneDayBefore.getDate() - 1);
@@ -245,7 +245,7 @@ function dueDateWindowFilter(from?: Date, to?: Date): Record<string, unknown> | 
 export async function listTasks(
   householdId: string,
   userId: string,
-  options: ListTasksOptions
+  options: ListTasksOptions,
 ): Promise<Page<ITask>> {
   const baseFilter: Record<string, unknown> = { householdId: new Types.ObjectId(householdId) };
   if (options.status) baseFilter.status = options.status;
@@ -303,7 +303,7 @@ export async function createTask(
   householdId: string,
   userId: string,
   input: CreateTaskInput,
-  memberIds: string[]
+  memberIds: string[],
 ): Promise<ITask> {
   if (!input.title || input.title.trim() === '') {
     throw new AppError('Task title is required', 400);
@@ -360,7 +360,7 @@ export async function updateTask(
   taskId: string,
   input: UpdateTaskInput,
   memberIds: string[],
-  memberRole: Role
+  memberRole: Role,
 ): Promise<ITask> {
   const task = await TaskModel.findOne({ _id: taskId, householdId });
   if (!task) {
@@ -374,7 +374,11 @@ export async function updateTask(
     task.title = sanitizeString(input.title, MAX_TITLE_LENGTH, 'Task title');
   }
   if (input.description !== undefined) {
-    task.description = sanitizeString(input.description, MAX_DESCRIPTION_LENGTH, 'Task description');
+    task.description = sanitizeString(
+      input.description,
+      MAX_DESCRIPTION_LENGTH,
+      'Task description',
+    );
   }
   if (input.assignedTo !== undefined) {
     assertAssigneesAreMembers(input.assignedTo, memberIds);
@@ -438,7 +442,7 @@ export async function updateTask(
 export async function completeTask(
   householdId: string,
   userId: string,
-  taskId: string
+  taskId: string,
 ): Promise<ITask> {
   const task = await TaskModel.findOne({ _id: taskId, householdId });
   if (!task) {
@@ -474,7 +478,7 @@ export async function deleteTask(
   householdId: string,
   userId: string,
   taskId: string,
-  memberRole: Role
+  memberRole: Role,
 ): Promise<void> {
   const task = await TaskModel.findOne({ _id: taskId, householdId });
   if (!task) {
@@ -499,7 +503,7 @@ const MAX_CATCHUP_ITERATIONS = 52; // cap generation at ~1 year per series
 export async function catchUpRecurring(
   householdId: string,
   userId: string,
-  upTo: Date
+  upTo: Date,
 ): Promise<{ generated: number; tasks: ITask[] }> {
   const completedRecurring = await TaskModel.find({
     householdId: new Types.ObjectId(householdId),
