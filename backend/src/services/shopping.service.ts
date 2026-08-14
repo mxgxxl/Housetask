@@ -170,6 +170,10 @@ export async function updateItem(
     throw new AppError('Shopping item not found', 404);
   }
 
+  // Captured before any field is applied — see task.service.ts:updateTask
+  // for why this must key off the ORIGINAL value.
+  const wasPurchasedBefore = item.isPurchased;
+
   if (input.name !== undefined) {
     item.name = sanitizeString(input.name, MAX_ITEM_NAME_LENGTH, 'Item name');
   }
@@ -194,6 +198,17 @@ export async function updateItem(
   }
 
   await item.save();
+
+  // Economy consistency (PDR-001) — see task.service.ts:updateTask for the
+  // identical pattern and its reasoning.
+  if (input.isPurchased === true && !wasPurchasedBefore) {
+    try {
+      await grantCoins(householdId, PURCHASE_COINS, 'purchase_complete', itemId);
+    } catch (err) {
+      logger.error('Error granting purchase-complete coins', (err as Error).message);
+    }
+  }
+
   await populated(item);
   emitToHousehold(householdId, 'shopping:updated', item.toJSON());
   return item;

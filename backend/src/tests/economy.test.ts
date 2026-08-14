@@ -158,6 +158,134 @@ describe('purchaseItem — coin granting hook', () => {
   });
 });
 
+describe('updateTask PATCH — coin granting hook (generic completion, PDR-001)', () => {
+  async function tasksUrl(household: TestHousehold): Promise<string> {
+    return `/api/households/${household.id}/tasks`;
+  }
+
+  it('should grant TASK_COINS the first time a PATCH sets status to completed', async () => {
+    const { user, household } = await setupHousehold();
+    const created = await request(app)
+      .post(await tasksUrl(household))
+      .set(authHeader(user.accessToken))
+      .send({ title: 'Fregar' });
+
+    const res = await request(app)
+      .patch(`${await tasksUrl(household)}/${created.body.data.id}`)
+      .set(authHeader(user.accessToken))
+      .send({ status: 'completed' });
+
+    expect(res.status).toBe(200);
+    expect(await getBalance(household.id)).toBe(TASK_COINS);
+  });
+
+  it('should not pay again when a PATCH re-sends status:completed on an already-completed task', async () => {
+    const { user, household } = await setupHousehold();
+    const created = await request(app)
+      .post(await tasksUrl(household))
+      .set(authHeader(user.accessToken))
+      .send({ title: 'Aspirar' });
+    const taskUrl = `${await tasksUrl(household)}/${created.body.data.id}`;
+
+    await request(app).patch(taskUrl).set(authHeader(user.accessToken)).send({ status: 'completed' });
+    expect(await getBalance(household.id)).toBe(TASK_COINS);
+
+    await request(app).patch(taskUrl).set(authHeader(user.accessToken)).send({ status: 'completed' });
+    expect(await getBalance(household.id)).toBe(TASK_COINS);
+  });
+
+  it('should not double-pay when completed via the dedicated endpoint and then via a generic PATCH (cross-idempotency)', async () => {
+    const { user, household } = await setupHousehold();
+    const created = await request(app)
+      .post(await tasksUrl(household))
+      .set(authHeader(user.accessToken))
+      .send({ title: 'Tender ropa' });
+    const taskUrl = `${await tasksUrl(household)}/${created.body.data.id}`;
+
+    await request(app).patch(`${taskUrl}/complete`).set(authHeader(user.accessToken));
+    expect(await getBalance(household.id)).toBe(TASK_COINS);
+
+    await request(app).patch(taskUrl).set(authHeader(user.accessToken)).send({ status: 'completed' });
+    expect(await getBalance(household.id)).toBe(TASK_COINS);
+  });
+
+  it('should not pay when a PATCH sets an unrelated field without touching status', async () => {
+    const { user, household } = await setupHousehold();
+    const created = await request(app)
+      .post(await tasksUrl(household))
+      .set(authHeader(user.accessToken))
+      .send({ title: 'Doblar toallas' });
+
+    await request(app)
+      .patch(`${await tasksUrl(household)}/${created.body.data.id}`)
+      .set(authHeader(user.accessToken))
+      .send({ priority: 'high' });
+
+    expect(await getBalance(household.id)).toBe(0);
+  });
+});
+
+describe('updateItem PATCH — coin granting hook (generic purchase, PDR-001)', () => {
+  async function shoppingUrl(household: TestHousehold): Promise<string> {
+    return `/api/households/${household.id}/shopping`;
+  }
+
+  it('should grant PURCHASE_COINS the first time a PATCH sets isPurchased to true', async () => {
+    const { user, household } = await setupHousehold();
+    const created = await request(app)
+      .post(await shoppingUrl(household))
+      .set(authHeader(user.accessToken))
+      .send({ name: 'Pan' });
+
+    const res = await request(app)
+      .patch(`${await shoppingUrl(household)}/${created.body.data.id}`)
+      .set(authHeader(user.accessToken))
+      .send({ isPurchased: true });
+
+    expect(res.status).toBe(200);
+    expect(await getBalance(household.id)).toBe(PURCHASE_COINS);
+  });
+
+  it('should not pay again when a PATCH re-sends isPurchased:true on an already-purchased item', async () => {
+    const { user, household } = await setupHousehold();
+    const created = await request(app)
+      .post(await shoppingUrl(household))
+      .set(authHeader(user.accessToken))
+      .send({ name: 'Huevos' });
+    const itemUrl = `${await shoppingUrl(household)}/${created.body.data.id}`;
+
+    await request(app)
+      .patch(itemUrl)
+      .set(authHeader(user.accessToken))
+      .send({ isPurchased: true });
+    expect(await getBalance(household.id)).toBe(PURCHASE_COINS);
+
+    await request(app)
+      .patch(itemUrl)
+      .set(authHeader(user.accessToken))
+      .send({ isPurchased: true });
+    expect(await getBalance(household.id)).toBe(PURCHASE_COINS);
+  });
+
+  it('should not double-pay when purchased via the dedicated endpoint and then via a generic PATCH (cross-idempotency)', async () => {
+    const { user, household } = await setupHousehold();
+    const created = await request(app)
+      .post(await shoppingUrl(household))
+      .set(authHeader(user.accessToken))
+      .send({ name: 'Queso' });
+    const itemUrl = `${await shoppingUrl(household)}/${created.body.data.id}`;
+
+    await request(app).patch(`${itemUrl}/purchase`).set(authHeader(user.accessToken));
+    expect(await getBalance(household.id)).toBe(PURCHASE_COINS);
+
+    await request(app)
+      .patch(itemUrl)
+      .set(authHeader(user.accessToken))
+      .send({ isPurchased: true });
+    expect(await getBalance(household.id)).toBe(PURCHASE_COINS);
+  });
+});
+
 describe('GET /api/households/:householdId/economy', () => {
   it('should return balance, dailyEarned and recentTransactions for a member', async () => {
     const { user, household } = await setupHousehold();

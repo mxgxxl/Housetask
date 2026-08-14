@@ -372,6 +372,10 @@ export async function updateTask(
     throw new AppError('You do not have permission to modify this task', 403);
   }
 
+  // Captured before any field is applied: the economy hook below (PDR-001)
+  // must key off the ORIGINAL status, not a value this same update sets.
+  const wasCompletedBefore = task.status === 'completed';
+
   if (input.title !== undefined) {
     task.title = sanitizeString(input.title, MAX_TITLE_LENGTH, 'Task title');
   }
@@ -432,6 +436,23 @@ export async function updateTask(
   }
 
   await task.save();
+
+  // Economy consistency (PDR-001): a generic PATCH that transitions status
+  // to 'completed' grants coins exactly like PATCH .../complete does — same
+  // idempotent grantCoins keyed on (householdId, taskId, 'task_complete'),
+  // so completing via one path and then the other never pays out twice
+  // (the ledger's unique index is the actual guard; wasCompletedBefore is
+  // just the cheap short-circuit). Without this hook, a client that only
+  // ever uses the generic PATCH to complete tasks would silently never earn
+  // coins.
+  if (input.status === 'completed' && !wasCompletedBefore) {
+    try {
+      await grantCoins(householdId, TASK_COINS, 'task_complete', taskId);
+    } catch (err) {
+      logger.error('Error granting task-complete coins', (err as Error).message);
+    }
+  }
+
   await populated(task);
   emitToHousehold(householdId, 'task:updated', task.toJSON());
   return task;
