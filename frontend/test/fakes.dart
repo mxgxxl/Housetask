@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:homesync/config/pet_config.dart';
 import 'package:homesync/core/errors/failures.dart';
 import 'package:homesync/data/models/economy.dart';
 import 'package:homesync/data/models/household.dart';
@@ -523,6 +524,15 @@ class FakePetRepository implements PetRepository {
   @override
   Future<Pet> buyCosmetic(String householdId, String cosmeticId) async {
     boughtCosmeticIds.add(cosmeticId);
+    // Mirrors the real backend deducting the price from the balance, so a
+    // widget test asserting "buying decreases the shown balance" observes
+    // the same effect it would against the real API.
+    final price = kCosmeticsCatalog.firstWhere((c) => c.id == cosmeticId).price;
+    economy = Economy(
+      balance: economy.balance - price,
+      dailyEarned: economy.dailyEarned,
+      recentTransactions: economy.recentTransactions,
+    );
     final updated = pet!.copyWith(cosmetics: [...pet!.cosmetics, cosmeticId]);
     pet = updated;
     return updated;

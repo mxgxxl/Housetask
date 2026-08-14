@@ -5,47 +5,54 @@ import '../../config/pet_config.dart';
 import '../../config/theme.dart';
 import '../cubit/pet_cubit.dart';
 import '../widgets/common.dart';
+import 'pet_shop_page.dart';
 
 /// Mascota tab (PDR-001 A3): adoption proposal/confirmation/cancellation,
-/// then the care view (feed/play with cooldown). The cosmetics shop entry
-/// point is added in pet_shop_page.dart / PDR-001 A3's third commit.
+/// the care view (feed/play with cooldown), and an entry point into the
+/// cosmetics shop (pet_shop_page.dart) once the household has a pet.
 class PetPage extends StatelessWidget {
   const PetPage({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Mascota',
-            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 22)),
-      ),
-      body: BlocConsumer<PetCubit, PetState>(
-        listenWhen: (previous, current) =>
-            current.error != null && current.error != previous.error,
-        listener: (context, state) => showSnack(context, state.error!, isError: true),
-        builder: (context, state) {
-          switch (state.status) {
-            case PetStatusUi.initial:
-            case PetStatusUi.loading:
-              return const Center(child: CircularProgressIndicator());
-            case PetStatusUi.error:
-              return EmptyState(
+    return BlocConsumer<PetCubit, PetState>(
+      listenWhen: (previous, current) =>
+          current.error != null && current.error != previous.error,
+      listener: (context, state) => showSnack(context, state.error!, isError: true),
+      builder: (context, state) {
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('Mascota',
+                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 22)),
+            actions: [
+              if (state.status == PetStatusUi.hasPet)
+                IconButton(
+                  icon: const Icon(Icons.storefront_outlined),
+                  tooltip: 'Tienda',
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const PetShopPage()),
+                  ),
+                ),
+            ],
+          ),
+          body: switch (state.status) {
+            PetStatusUi.initial ||
+            PetStatusUi.loading =>
+              const Center(child: CircularProgressIndicator()),
+            PetStatusUi.error => EmptyState(
                 icon: Icons.error_outline,
                 title: state.error ?? 'No se pudo cargar la mascota',
                 action: ElevatedButton(
                   onPressed: () => context.read<PetCubit>().refresh(),
                   child: const Text('Reintentar'),
                 ),
-              );
-            case PetStatusUi.noPet:
-              return const _AdoptionProposalView();
-            case PetStatusUi.pendingRequest:
-              return _PendingRequestView(state: state);
-            case PetStatusUi.hasPet:
-              return _CareView(state: state);
-          }
-        },
-      ),
+              ),
+            PetStatusUi.noPet => const _AdoptionProposalView(),
+            PetStatusUi.pendingRequest => _PendingRequestView(state: state),
+            PetStatusUi.hasPet => _CareView(state: state),
+          },
+        );
+      },
     );
   }
 }
@@ -260,6 +267,15 @@ String? cooldownRemainingLabel(DateTime? lastAt, int cooldownHours) {
   return 'Disponible en $minutes min';
 }
 
+/// Look up a catalog Cosmetic by id, or null (never adopted / unknown id).
+Cosmetic? _cosmeticById(String? id) {
+  if (id == null) return null;
+  for (final cosmetic in kCosmeticsCatalog) {
+    if (cosmetic.id == id) return cosmetic;
+  }
+  return null;
+}
+
 class _StatBar extends StatelessWidget {
   final String label;
   final num value;
@@ -347,6 +363,7 @@ class _CareView extends StatelessWidget {
     final emoji = kSpeciesEmoji[pet.species] ?? '🐾';
     final feedRemaining = cooldownRemainingLabel(pet.lastFedAt, kFeedCooldownHours);
     final playRemaining = cooldownRemainingLabel(pet.lastPlayedAt, kPlayCooldownHours);
+    final activeCosmetic = _cosmeticById(pet.activeCosmetic);
 
     return RefreshIndicator(
       onRefresh: () => context.read<PetCubit>().refresh(),
@@ -354,6 +371,15 @@ class _CareView extends StatelessWidget {
         padding: const EdgeInsets.all(24),
         children: [
           Center(child: Text(emoji, style: const TextStyle(fontSize: 96))),
+          if (activeCosmetic != null) ...[
+            const SizedBox(height: 4),
+            Center(
+              child: Text(
+                '${activeCosmetic.emoji} ${activeCosmetic.name}',
+                style: const TextStyle(color: AppColors.textSecondary, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
           const SizedBox(height: 12),
           Center(
             child: Text(
