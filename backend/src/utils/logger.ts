@@ -15,10 +15,8 @@ function log(level: LogLevel, message: string, meta?: unknown): void {
   const prefix = `[${timestamp}] [${level.toUpperCase()}]`;
 
   if (meta !== undefined) {
-    // eslint-disable-next-line no-console
     console[level === 'debug' ? 'log' : level](prefix, message, meta);
   } else {
-    // eslint-disable-next-line no-console
     console[level === 'debug' ? 'log' : level](prefix, message);
   }
 }

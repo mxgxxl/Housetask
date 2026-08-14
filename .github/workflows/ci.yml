@@ -37,6 +37,8 @@ jobs:
 
       - run: npm run typecheck
 
+      - run: npm run lint
+
       - run: npm run build
 
       # No MongoDB/Redis service container needed: the suite starts its own
