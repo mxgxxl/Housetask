@@ -56,9 +56,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # TD-041: pinned instead of relying on channel:stable alone — the
+      # unpinned channel silently drifts Flutter's own Gradle/AGP/Kotlin
+      # version floors forward, turning routine CI runs into surprise build
+      # failures. Bump deliberately (and re-check those floors) when moving
+      # this pin.
       - uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: '3.44.9'
+          channel: 'stable'
           cache: true # caches the Flutter SDK install itself
 
       - uses: actions/setup-java@v4
@@ -88,6 +94,17 @@ jobs:
             ${{ runner.os }}-gradle-
 
       - run: flutter pub get
+
+      # TD-041: fails in seconds if the pinned Flutter/Gradle/AGP/Kotlin
+      # combination has drifted apart, instead of burning the rest of this
+      # job's minutes on a build that was always going to hit the same
+      # version-floor error. Placed here (not before checkout) because
+      # `./gradlew` needs android/local.properties, which `flutter pub get`
+      # generates — it does not exist yet any earlier in this job.
+      - name: Verify Android build prerequisites
+        run: |
+          flutter --version
+          cd android && ./gradlew --version
 
       # --no-fatal-infos: this Flutter version defaults --fatal-infos to ON,
       # so plain `flutter analyze` exits 1 purely from the repo's 11
@@ -141,7 +158,8 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: '3.44.9' # pinned (TD-041), see frontend job above
+          channel: 'stable'
           cache: true
 
       - name: Cache pub packages

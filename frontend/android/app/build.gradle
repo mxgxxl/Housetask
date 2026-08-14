@@ -33,8 +33,10 @@ android {
     defaultConfig {
         // Phase 3.1: unique application id.
         applicationId = "com.homesync.app"
-        // Phase 3.1: minSdkVersion 21.
-        minSdkVersion 21
+        // PDR-005: minSdkVersion 23 (Android 7.0+). Raised from 21 — Flutter's
+        // DependencyVersionChecker hard-errors below API 23; <5% market loss
+        // accepted for the validation phase.
+        minSdkVersion 23
         targetSdkVersion flutter.targetSdkVersion
         versionCode = flutterVersionCode.toInteger()
         versionName = flutterVersionName
