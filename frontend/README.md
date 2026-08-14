@@ -32,11 +32,42 @@ regenerates a platform file, re-apply the Phase 3 settings below.
 
 ## Configuration
 
-Point the app at your backend in `lib/config/constants.dart`:
+The backend URL and build environment are set via `--dart-define`, not by
+editing source files — `lib/config/constants.dart` reads them through
+`String.fromEnvironment` (TD-017) and is safe to commit as-is on every
+machine, no `git update-index --assume-unchanged` needed.
 
-- Android emulator: `http://10.0.2.2:3000` (default — maps to host localhost)
+### Running
+
+Development (defaults shown are also what you get with no `--dart-define`
+flags at all):
+
+```bash
+flutter run --dart-define=ENVIRONMENT=development --dart-define=API_BASE_URL=http://localhost:3000
+```
+
+Common `API_BASE_URL` values for local development:
+
+- Android emulator: `http://10.0.2.2:3000` (maps to host machine's `localhost`)
 - iOS simulator: `http://localhost:3000`
 - Physical device: `http://<your-machine-LAN-IP>:3000`
+
+Production (Railway backend):
+
+```bash
+flutter run --dart-define=ENVIRONMENT=production --dart-define=API_BASE_URL=https://housetask-production.up.railway.app
+```
+
+### Building releases
+
+```bash
+flutter build apk --release --dart-define=ENVIRONMENT=production --dart-define=API_BASE_URL=https://housetask-production.up.railway.app
+flutter build ios --release --dart-define=ENVIRONMENT=production --dart-define=API_BASE_URL=https://housetask-production.up.railway.app
+```
+
+Sentry (`SENTRY_DSN`) is a separate, independent define — see
+`services/sentry_service.dart` for why it's kept out of `AppConfig`. Append
+`--dart-define=SENTRY_DSN=...` to any command above to enable error tracking.
 
 ## Architecture
 
