@@ -28,6 +28,9 @@ router.post(
 );
 // Creates the Pet itself; no body to validate.
 router.post('/adopt/confirm', idempotency, asyncHandler(petController.confirmAdopt));
+// Deletes the pending request — no new resource, no idempotency needed
+// (a repeat DELETE on an already-cancelled request is just a 404).
+router.delete('/adopt', asyncHandler(petController.cancelAdopt));
 
 // State mutation on an existing pet, not a new resource — same category as
 // PATCH .../complete and .../purchase, which also have no idempotency

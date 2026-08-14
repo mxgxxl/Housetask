@@ -302,6 +302,131 @@ describe('POST /api/households/:householdId/pet/adopt/confirm', () => {
   });
 });
 
+/**
+ * Backdate a request's createdAt to simulate TTL expiry without waiting
+ * real days. Goes through `.collection` (the native MongoDB driver), not
+ * `AdoptionRequestModel.updateOne` — Mongoose's timestamps plugin silently
+ * strips `createdAt` out of a query-based update's `$set` specifically to
+ * stop it from being overwritten this way, so the Mongoose-level call is a
+ * silent no-op here.
+ */
+async function backdateAdoptionRequest(household: TestHousehold, daysAgo: number): Promise<void> {
+  const createdAt = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
+  await AdoptionRequestModel.collection.updateOne(
+    { householdId: new Types.ObjectId(household.id) },
+    { $set: { createdAt } },
+  );
+}
+
+describe('DELETE /api/households/:householdId/pet/adopt (cancel, PDR-001 A3)', () => {
+  it('should let the requester cancel their own request', async () => {
+    const { user, household } = await setupHousehold();
+    await request(app)
+      .post(`${petUrl(household)}/adopt`)
+      .set(authHeader(user.accessToken))
+      .send({ species: 'dog', name: 'Firulais' });
+
+    const res = await request(app)
+      .delete(`${petUrl(household)}/adopt`)
+      .set(authHeader(user.accessToken));
+
+    expect(res.status).toBe(200);
+    expect(await AdoptionRequestModel.countDocuments({ householdId: household.id })).toBe(0);
+  });
+
+  it('should let a household admin cancel a request they did not make', async () => {
+    const { admin, member, household } = await createHouseholdWithMember(app);
+    await request(app)
+      .post(`${petUrl(household)}/adopt`)
+      .set(authHeader(member.accessToken))
+      .send({ species: 'cat', name: 'Michi' });
+
+    const res = await request(app)
+      .delete(`${petUrl(household)}/adopt`)
+      .set(authHeader(admin.accessToken));
+
+    expect(res.status).toBe(200);
+    expect(await AdoptionRequestModel.countDocuments({ householdId: household.id })).toBe(0);
+  });
+
+  it('should reject cancellation by a non-admin member who did not request it', async () => {
+    const { admin, member, household } = await createHouseholdWithMember(app);
+    await request(app)
+      .post(`${petUrl(household)}/adopt`)
+      .set(authHeader(admin.accessToken))
+      .send({ species: 'dog', name: 'Firulais' });
+
+    const res = await request(app)
+      .delete(`${petUrl(household)}/adopt`)
+      .set(authHeader(member.accessToken));
+
+    expect(res.status).toBe(403);
+    expect(await AdoptionRequestModel.countDocuments({ householdId: household.id })).toBe(1);
+  });
+
+  it('should return 404 when there is no pending request', async () => {
+    const { user, household } = await setupHousehold();
+
+    const res = await request(app)
+      .delete(`${petUrl(household)}/adopt`)
+      .set(authHeader(user.accessToken));
+
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('Adoption request TTL (7 days, PDR-001 A3)', () => {
+  it('should reject confirming a request older than the TTL and clean it up', async () => {
+    const { admin, member, household } = await createHouseholdWithMember(app);
+    await request(app)
+      .post(`${petUrl(household)}/adopt`)
+      .set(authHeader(admin.accessToken))
+      .send({ species: 'dog', name: 'Firulais' });
+    await backdateAdoptionRequest(household, 8);
+
+    const res = await request(app)
+      .post(`${petUrl(household)}/adopt/confirm`)
+      .set(authHeader(member.accessToken));
+
+    expect(res.status).toBe(404);
+    expect(await AdoptionRequestModel.countDocuments({ householdId: household.id })).toBe(0);
+    expect(await PetModel.exists({ householdId: household.id })).toBeNull();
+  });
+
+  it('should allow a new adoption request once the old one has expired', async () => {
+    const { user, household } = await setupHousehold();
+    await request(app)
+      .post(`${petUrl(household)}/adopt`)
+      .set(authHeader(user.accessToken))
+      .send({ species: 'dog', name: 'Firulais' });
+    await backdateAdoptionRequest(household, 8);
+
+    const res = await request(app)
+      .post(`${petUrl(household)}/adopt`)
+      .set(authHeader(user.accessToken))
+      .send({ species: 'cat', name: 'Michi' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.name).toBe('Michi');
+    expect(await AdoptionRequestModel.countDocuments({ householdId: household.id })).toBe(1);
+  });
+
+  it('should still allow confirming a request within the TTL window', async () => {
+    const { admin, member, household } = await createHouseholdWithMember(app);
+    await request(app)
+      .post(`${petUrl(household)}/adopt`)
+      .set(authHeader(admin.accessToken))
+      .send({ species: 'dog', name: 'Firulais' });
+    await backdateAdoptionRequest(household, 6);
+
+    const res = await request(app)
+      .post(`${petUrl(household)}/adopt/confirm`)
+      .set(authHeader(member.accessToken));
+
+    expect(res.status).toBe(201);
+  });
+});
+
 describe('POST /api/households/:householdId/pet/feed', () => {
   it('should increase hunger and set lastFedAt', async () => {
     const { user, household } = await setupHousehold();

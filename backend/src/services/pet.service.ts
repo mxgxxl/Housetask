@@ -6,14 +6,37 @@ import { emitToHousehold } from '../config/socket';
 import { logger } from '../utils/logger';
 import { sanitizeString } from '../utils/sanitize';
 import { grantCoins, getBalance, computeDecay } from './economy.service';
+import { Role } from '../types';
 import {
   ADOPTION_BONUS_COINS,
+  ADOPTION_REQUEST_TTL_DAYS,
   COSMETICS,
   FEED_AMOUNT,
   FEED_COOLDOWN_HOURS,
   PLAY_AMOUNT,
   PLAY_COOLDOWN_HOURS,
 } from '../config/economy';
+
+const ADOPTION_REQUEST_TTL_MS = ADOPTION_REQUEST_TTL_DAYS * 24 * 60 * 60 * 1000;
+
+/**
+ * The household's pending adoption request, or null if there is none — OR
+ * if there was one but it is older than ADOPTION_REQUEST_TTL_DAYS (PDR-001
+ * A3), in which case it is deleted here and treated as if it never
+ * existed. Centralizing the TTL check here means request/confirm/cancel
+ * all agree on what "pending" means without duplicating the expiry math.
+ */
+async function getLiveAdoptionRequest(householdId: string): Promise<IAdoptionRequest | null> {
+  const request = await AdoptionRequestModel.findOne({ householdId });
+  if (!request) {
+    return null;
+  }
+  if (Date.now() - request.createdAt.getTime() > ADOPTION_REQUEST_TTL_MS) {
+    await request.deleteOne();
+    return null;
+  }
+  return request;
+}
 
 const MAX_PET_NAME_LENGTH = 50;
 
@@ -43,10 +66,11 @@ export interface RequestAdoptionInput {
 /**
  * Start a household's adoption (PDR-001 A2, step 1 of 2): records a
  * proposal, does not create the Pet. Rejects if the household already has
- * a pet or already has a pending request. Both are unique-per-household by
- * construction (Pet.householdId and AdoptionRequest.householdId are each
- * unique indexes), but checked here first for a clean 400 instead of a raw
- * duplicate-key 409.
+ * a pet or already has a LIVE pending request (getLiveAdoptionRequest —
+ * PDR-001 A3 — silently clears an expired one first, freeing the slot).
+ * Both are unique-per-household by construction (Pet.householdId and
+ * AdoptionRequest.householdId are each unique indexes), but checked here
+ * first for a clean 400 instead of a raw duplicate-key 409.
  */
 export async function requestAdoption(
   householdId: string,
@@ -58,7 +82,7 @@ export async function requestAdoption(
     throw new AppError('This household already has a pet', 400);
   }
 
-  const existingRequest = await AdoptionRequestModel.exists({ householdId });
+  const existingRequest = await getLiveAdoptionRequest(householdId);
   if (existingRequest) {
     throw new AppError('An adoption request is already pending for this household', 400);
   }
@@ -80,13 +104,15 @@ export async function requestAdoption(
  * point of "consenso del hogar" (docs/PRODUCT_DECISIONS.md PDR-001).
  * Creates the Pet, deletes the request, and grants a one-time adoption
  * bonus (best-effort — the bonus is a nice-to-have, never a dependency of
- * the adoption itself succeeding).
+ * the adoption itself succeeding). A request older than
+ * ADOPTION_REQUEST_TTL_DAYS (PDR-001 A3) is treated as if it never existed
+ * — same 404 as no request at all.
  */
 export async function confirmAdoption(
   householdId: string,
   userId: string,
 ): Promise<Record<string, unknown>> {
-  const request = await AdoptionRequestModel.findOne({ householdId });
+  const request = await getLiveAdoptionRequest(householdId);
   if (!request) {
     throw new AppError('No pending adoption request for this household', 404);
   }
@@ -125,6 +151,31 @@ export async function confirmAdoption(
   const result = serializePet(pet);
   emitToHousehold(householdId, 'pet:adopted', result);
   return result;
+}
+
+/**
+ * Cancel a household's pending adoption (PDR-001 A3): only the member who
+ * requested it, or a household admin, may cancel — anyone else has no say
+ * over a proposal they didn't make and isn't running the household. A
+ * request older than ADOPTION_REQUEST_TTL_DAYS is treated as if it never
+ * existed — same 404 as no request at all.
+ */
+export async function cancelAdoption(
+  householdId: string,
+  userId: string,
+  memberRole: Role,
+): Promise<void> {
+  const request = await getLiveAdoptionRequest(householdId);
+  if (!request) {
+    throw new AppError('No pending adoption request for this household', 404);
+  }
+
+  if (request.requestedBy.toString() !== userId && memberRole !== 'admin') {
+    throw new AppError('Only the requester or a household admin can cancel this adoption', 403);
+  }
+
+  await request.deleteOne();
+  emitToHousehold(householdId, 'pet:adopt_cancelled', { householdId });
 }
 
 /**

@@ -37,6 +37,16 @@ export async function confirmAdopt(req: AuthenticatedRequest, res: Response): Pr
 }
 
 /**
+ * DELETE /api/households/:householdId/pet/adopt
+ * Cancels the pending adoption request (requester or admin only);
+ * broadcasts pet:adopt_cancelled.
+ */
+export async function cancelAdopt(req: AuthenticatedRequest, res: Response): Promise<void> {
+  await petService.cancelAdoption(req.params.householdId, req.user!.userId, req.member!.role);
+  sendSuccess(res, { message: 'Adoption request cancelled' });
+}
+
+/**
  * POST /api/households/:householdId/pet/feed
  * Feeds the pet (cooldown-gated); broadcasts pet:updated.
  */

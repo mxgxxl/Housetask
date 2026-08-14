@@ -40,6 +40,15 @@ export const PLAY_COOLDOWN_HOURS = 1;
  */
 export const ADOPTION_BONUS_COINS = 20;
 
+/**
+ * Days a pending AdoptionRequest stays valid before it is treated as
+ * inexistent (PDR-001 A3). Without a TTL, one member proposing and never
+ * getting a confirmation would permanently block the household from ever
+ * adopting — there's a `cancel` endpoint for the deliberate case, but this
+ * covers the abandoned one (partner uninstalled, request forgotten, etc.).
+ */
+export const ADOPTION_REQUEST_TTL_DAYS = 7;
+
 export interface Cosmetic {
   id: string;
   name: string;
