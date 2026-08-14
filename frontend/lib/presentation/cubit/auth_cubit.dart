@@ -4,6 +4,7 @@ import '../../core/errors/failures.dart';
 import '../../data/models/user.dart';
 import '../../data/repositories/auth_repository.dart';
 import '../../services/cache_service.dart';
+import '../../services/sentry_service.dart';
 
 enum AuthStatus { unknown, authenticated, unauthenticated }
 
@@ -76,8 +77,12 @@ class AuthCubit extends Cubit<AuthState> {
     emit(state.copyWith(loading: true, clearError: true));
     try {
       final user = await _repo.login(email: email, password: password);
+      // No email/password in the breadcrumb — just the flow marker; Sentry
+      // breadcrumbs are for tracing what led up to an error, not for PII.
+      SentryService.addBreadcrumb('User logged in', category: 'auth');
       emit(state.copyWith(status: AuthStatus.authenticated, user: user, loading: false));
     } on Failure catch (f) {
+      SentryService.addBreadcrumb('Login failed', category: 'auth', data: {'reason': f.message});
       emit(state.copyWith(loading: false, error: f.message));
     }
   }

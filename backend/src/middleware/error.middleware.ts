@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { logger } from '../utils/logger';
 import { sendError } from '../utils/response';
 import { captureServerError } from '../utils/sentry';
+import { AuthenticatedRequest } from '../types';
 
 /**
  * A typed application error carrying an HTTP status code. Controllers and
@@ -43,7 +44,17 @@ export function errorHandler(
 ): void {
   const respond = (message: string, status: number): void => {
     if (status >= 500) {
-      captureServerError(err, { path: req.path, method: req.method });
+      // req is typed as plain Request (Express's error-middleware signature
+      // is fixed), but auth/membership middleware may have already enriched
+      // it — userId/householdId are attached to the Sentry report whenever
+      // they happen to be known, omitted otherwise (TD-037).
+      const authReq = req as AuthenticatedRequest;
+      captureServerError(err, {
+        category: 'http_5xx',
+        route: req.path,
+        ...(authReq.user?.userId ? { userId: authReq.user.userId } : {}),
+        ...(req.params.householdId ? { householdId: req.params.householdId } : {}),
+      });
     }
     sendError(res, message, status);
   };

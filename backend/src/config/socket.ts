@@ -5,6 +5,7 @@ import { initRedis } from './redis';
 import { verifyAccessToken } from '../utils/jwt';
 import { UserModel } from '../models/User';
 import { logger } from '../utils/logger';
+import { captureServerError } from '../utils/sentry';
 
 let io: SocketIOServer | null = null;
 
@@ -43,8 +44,22 @@ async function authenticateSocket(
     next();
   } catch (err) {
     logger.warn('Socket auth failed', (err as Error).message);
+    // No userId yet — auth hasn't succeeded (TD-037). Expected to have some
+    // background noise (an access token expiring mid-session before the
+    // client refreshes and reconnects is routine); alert on a rate spike,
+    // not on any single occurrence — see CLAUDE.md's TD-037 alert guide.
+    captureServerError(err, { category: 'socket_auth' });
     next(new Error('Authentication failed'));
   }
+}
+
+// Recovers the householdId from a room name (`household_<id>`) for the
+// Sentry householdId tag (TD-037) — joinRoomSafely/leaveRoomSafely only
+// ever get called with household rooms, but this stays defensive (returns
+// undefined, tag omitted) rather than assuming the prefix is always there.
+function householdIdFromRoom(room: string): string | undefined {
+  const prefix = 'household_';
+  return room.startsWith(prefix) ? room.slice(prefix.length) : undefined;
 }
 
 /**
@@ -60,12 +75,24 @@ async function authenticateSocket(
 function joinRoomSafely(socket: Socket, userId: string, room: string): void {
   Promise.resolve(socket.join(room)).catch((err: unknown) => {
     logger.warn(`Socket failed to join room: user=${userId} room=${room}`, err);
+    const householdId = householdIdFromRoom(room);
+    captureServerError(err, {
+      category: 'socket_room',
+      userId,
+      ...(householdId ? { householdId } : {}),
+    });
   });
 }
 
 function leaveRoomSafely(socket: Socket, userId: string, room: string): void {
   Promise.resolve(socket.leave(room)).catch((err: unknown) => {
     logger.warn(`Socket failed to leave room: user=${userId} room=${room}`, err);
+    const householdId = householdIdFromRoom(room);
+    captureServerError(err, {
+      category: 'socket_room',
+      userId,
+      ...(householdId ? { householdId } : {}),
+    });
   });
 }
 

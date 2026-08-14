@@ -5,6 +5,7 @@ import '../../core/errors/failures.dart';
 import '../../data/models/economy.dart';
 import '../../data/models/pet.dart';
 import '../../data/repositories/pet_repository.dart';
+import '../../services/sentry_service.dart';
 
 enum PetStatusUi { initial, loading, noPet, pendingRequest, hasPet, error }
 
@@ -166,6 +167,11 @@ class PetCubit extends Cubit<PetState> {
     emit(state.copyWith(actionInProgress: true, error: null));
     try {
       final request = await _repo.adopt(_householdId!, species: species, name: name);
+      SentryService.addBreadcrumb(
+        'Adoption proposed',
+        category: 'pet',
+        data: {'householdId': _householdId, 'species': species},
+      );
       emit(state.copyWith(
         status: PetStatusUi.pendingRequest,
         pendingRequest: request,
@@ -183,6 +189,11 @@ class PetCubit extends Cubit<PetState> {
     try {
       final pet = await _repo.confirmAdopt(_householdId!);
       final economy = await _repo.getEconomy(_householdId!);
+      SentryService.addBreadcrumb(
+        'Adoption confirmed',
+        category: 'pet',
+        data: {'householdId': _householdId, 'species': pet.species},
+      );
       emit(state.copyWith(
         status: PetStatusUi.hasPet,
         pet: pet,
@@ -215,6 +226,7 @@ class PetCubit extends Cubit<PetState> {
     emit(state.copyWith(actionInProgress: true, error: null));
     try {
       final pet = await _repo.feed(_householdId!);
+      SentryService.addBreadcrumb('Pet fed', category: 'pet', data: {'householdId': _householdId});
       emit(state.copyWith(pet: pet, actionInProgress: false));
     } on Failure catch (f) {
       emit(state.copyWith(actionInProgress: false, error: f.message));
@@ -226,6 +238,11 @@ class PetCubit extends Cubit<PetState> {
     emit(state.copyWith(actionInProgress: true, error: null));
     try {
       final pet = await _repo.play(_householdId!);
+      SentryService.addBreadcrumb(
+        'Played with pet',
+        category: 'pet',
+        data: {'householdId': _householdId},
+      );
       emit(state.copyWith(pet: pet, actionInProgress: false));
     } on Failure catch (f) {
       emit(state.copyWith(actionInProgress: false, error: f.message));
@@ -238,6 +255,11 @@ class PetCubit extends Cubit<PetState> {
     try {
       final pet = await _repo.buyCosmetic(_householdId!, cosmeticId);
       final economy = await _repo.getEconomy(_householdId!);
+      SentryService.addBreadcrumb(
+        'Cosmetic bought',
+        category: 'pet',
+        data: {'householdId': _householdId, 'cosmeticId': cosmeticId},
+      );
       emit(state.copyWith(pet: pet, economy: economy, actionInProgress: false));
     } on Failure catch (f) {
       emit(state.copyWith(actionInProgress: false, error: f.message));

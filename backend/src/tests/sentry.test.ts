@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 
 import { errorHandler } from '../middleware/error.middleware';
+import * as sentryUtils from '../utils/sentry';
 import { captureSecurityWarning, captureServerError, initSentry } from '../utils/sentry';
 import { logger } from '../utils/logger';
 
@@ -48,7 +49,9 @@ describe('Sentry no-op fallback (TD-009)', () => {
   });
 
   it('should no-op captureServerError and captureSecurityWarning without a DSN', () => {
-    expect(() => captureServerError(new Error('boom'), { path: '/x' })).not.toThrow();
+    expect(() =>
+      captureServerError(new Error('boom'), { category: 'http_5xx', route: '/x' }),
+    ).not.toThrow();
     expect(() =>
       captureSecurityWarning('refresh-token replay detected', { userId: 'u1' }),
     ).not.toThrow();
@@ -86,5 +89,44 @@ describe('Sentry no-op fallback (TD-009)', () => {
     errorHandler({ name: 'ValidationError', message: 'bad input' }, req, res, jest.fn());
 
     expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  it('errorHandler should tag the 5xx report with route, userId and householdId when known (TD-037)', () => {
+    const captureSpy = jest.spyOn(sentryUtils, 'captureServerError');
+    const error = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
+    const req = {
+      path: '/api/households/h1/tasks',
+      method: 'POST',
+      params: { householdId: 'h1' },
+      user: { userId: 'u1', email: 'a@b.com' },
+    } as unknown as Request;
+    const res = fakeResponse();
+
+    errorHandler(new Error('unexpected'), req, res, jest.fn());
+    error.mockRestore();
+
+    expect(captureSpy).toHaveBeenCalledWith(expect.any(Error), {
+      category: 'http_5xx',
+      route: '/api/households/h1/tasks',
+      userId: 'u1',
+      householdId: 'h1',
+    });
+    captureSpy.mockRestore();
+  });
+
+  it('errorHandler should tag the 5xx report with just route+category when userId/householdId are unknown', () => {
+    const captureSpy = jest.spyOn(sentryUtils, 'captureServerError');
+    const error = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
+    const req = { path: '/api/auth/login', method: 'POST', params: {} } as unknown as Request;
+    const res = fakeResponse();
+
+    errorHandler(new Error('unexpected'), req, res, jest.fn());
+    error.mockRestore();
+
+    expect(captureSpy).toHaveBeenCalledWith(expect.any(Error), {
+      category: 'http_5xx',
+      route: '/api/auth/login',
+    });
+    captureSpy.mockRestore();
   });
 });

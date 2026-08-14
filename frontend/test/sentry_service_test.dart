@@ -33,6 +33,19 @@ void main() {
         returnsNormally,
       );
     });
+
+    test('addBreadcrumb() is a no-op that never throws (TD-037)', () async {
+      await SentryService.init();
+
+      expect(
+        () => SentryService.addBreadcrumb(
+          'User logged in',
+          category: 'auth',
+          data: {'householdId': 'h1'},
+        ),
+        returnsNormally,
+      );
+    });
   });
 
   testWidgets('the app builds and reaches the splash screen with Sentry inactive',
