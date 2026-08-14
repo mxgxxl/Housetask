@@ -39,8 +39,10 @@ machine, no `git update-index --assume-unchanged` needed.
 
 ### Running
 
-Development (defaults shown are also what you get with no `--dart-define`
-flags at all):
+`API_BASE_URL` defaults to the production Railway backend — running
+`flutter run` with no `--dart-define` flags at all talks to production, not
+to a local server. Local development against a backend on your machine
+requires an explicit override:
 
 ```bash
 flutter run --dart-define=ENVIRONMENT=development --dart-define=API_BASE_URL=http://localhost:3000
@@ -52,7 +54,8 @@ Common `API_BASE_URL` values for local development:
 - iOS simulator: `http://localhost:3000`
 - Physical device: `http://<your-machine-LAN-IP>:3000`
 
-Production (Railway backend):
+Production (Railway backend — same as the zero-flags default, shown
+explicitly here for build scripts that want both defines spelled out):
 
 ```bash
 flutter run --dart-define=ENVIRONMENT=production --dart-define=API_BASE_URL=https://housetask-production.up.railway.app

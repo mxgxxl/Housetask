@@ -78,19 +78,26 @@ export interface RequestAdoptionInput {
 }
 
 /**
- * Start a household's adoption (PDR-001 A2, step 1 of 2): records a
- * proposal, does not create the Pet. Rejects if the household already has
- * a pet or already has a LIVE pending request (getLiveAdoptionRequest —
- * PDR-001 A3 — silently clears an expired one first, freeing the slot).
- * Both are unique-per-household by construction (Pet.householdId and
- * AdoptionRequest.householdId are each unique indexes), but checked here
- * first for a clean 400 instead of a raw duplicate-key 409.
+ * Start a household's adoption (PDR-001 A2, step 1 of 2 for 2+ member
+ * households): records a proposal, does not create the Pet. Rejects if the
+ * household already has a pet or already has a LIVE pending request
+ * (getLiveAdoptionRequest — PDR-001 A3 — silently clears an expired one
+ * first, freeing the slot). Both are unique-per-household by construction
+ * (Pet.householdId and AdoptionRequest.householdId are each unique
+ * indexes), but checked here first for a clean 400 instead of a raw
+ * duplicate-key 409.
+ *
+ * Single-member households adopt instantly instead (PDR-001 follow-up):
+ * cooperative consensus requires a DIFFERENT member to confirm
+ * (confirmAdoption below), which a lone member can never satisfy — without
+ * this branch, a 1-person household could never adopt a pet at all.
  */
 export async function requestAdoption(
   householdId: string,
   userId: string,
   input: RequestAdoptionInput,
-): Promise<IAdoptionRequest> {
+  memberIds: string[],
+): Promise<IAdoptionRequest | Record<string, unknown>> {
   const existingPet = await PetModel.exists({ householdId });
   if (existingPet) {
     throw new AppError('This household already has a pet', 400);
@@ -101,10 +108,36 @@ export async function requestAdoption(
     throw new AppError('An adoption request is already pending for this household', 400);
   }
 
+  const name = sanitizeString(input.name, MAX_PET_NAME_LENGTH, 'Pet name');
+
+  if (memberIds.length === 1) {
+    const pet = await PetModel.create({
+      householdId: new Types.ObjectId(householdId),
+      species: input.species,
+      name,
+      adoptedBy: new Types.ObjectId(userId),
+    });
+
+    try {
+      await grantCoins(
+        householdId,
+        ADOPTION_BONUS_COINS,
+        'adoption_bonus',
+        `adoption-${householdId}`,
+      );
+    } catch (err) {
+      logger.error('Error granting adoption bonus', (err as Error).message);
+    }
+
+    const result = serializePet(pet);
+    emitToHousehold(householdId, 'pet:adopted', result);
+    return result;
+  }
+
   const request = await AdoptionRequestModel.create({
     householdId: new Types.ObjectId(householdId),
     species: input.species,
-    name: sanitizeString(input.name, MAX_PET_NAME_LENGTH, 'Pet name'),
+    name,
     requestedBy: new Types.ObjectId(userId),
   });
 
