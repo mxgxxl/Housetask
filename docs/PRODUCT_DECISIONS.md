@@ -4,6 +4,8 @@ Los PDRs registran decisiones de producto con Context / Decision / Consequences,
 
 ## PDR-001: Monetización F2P + mascota cooperativa del hogar
 
+**Status:** In progress (A1 — commit 1 de este round: modelos Pet/EconomyLedger, economía server-authoritative con anti-farm)
+
 - **Context:** App de gestión doméstica para parejas/hogares. Una suscripción tiene valor percibido bajo para este público y un paywall inicial mataría la adquisición. Se necesita retención más allá de la utilidad diaria y una vía de monetización sin fricción.
 - **Decision:**
   1. Free-to-play sin paywall. Monetización en Fase C mediante cosméticos: moneda ganada jugando + packs de pago único vía IAP (revenue_cat).
@@ -19,6 +21,7 @@ Los PDRs registran decisiones de producto con Context / Decision / Consequences,
   - Requiere arte animado (Rive/Lottie) para 2 mascotas en Fase A.
   - Fase C requiere cuentas de developer (Apple $99/año, Google $25 único), necesarias de todos modos para publicar.
   - La mascota amplifica un hábito existente, no lo crea: si la retención del core es baja, reevaluar antes de invertir en Fase A.
+  - **Nota de economía (A1):** Coins granted server-side on first task/purchase completion (TASK_COINS=5, PURCHASE_COINS=2, DAILY_CAP=50). Idempotent via unique ledger index. Hunger/mood decay lazily on read. Art is placeholder for now (Rive/Lottie later).
 
 ## PDR-002: Visibilidad cooperativa en flujos core
 
