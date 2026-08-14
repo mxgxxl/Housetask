@@ -24,13 +24,16 @@ export async function getAdoptionRequest(req: AuthenticatedRequest, res: Respons
 
 /**
  * POST /api/households/:householdId/pet/adopt
- * Starts a household adoption; broadcasts pet:adopt_requested.
+ * Starts a household adoption; broadcasts pet:adopt_requested. For a
+ * single-member household this adopts instantly instead (no other member
+ * exists to confirm) and broadcasts pet:adopted.
  */
 export async function requestAdopt(req: AuthenticatedRequest, res: Response): Promise<void> {
   const request = await petService.requestAdoption(
     req.params.householdId,
     req.user!.userId,
     req.body ?? {},
+    req.member!.memberIds,
   );
   sendSuccess(res, request, 201);
 }

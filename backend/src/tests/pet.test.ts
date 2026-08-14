@@ -234,18 +234,18 @@ describe('GET /api/households/:householdId/pet/adopt (PDR-001 A3)', () => {
 });
 
 describe('POST /api/households/:householdId/pet/adopt', () => {
-  it('should create a pending adoption request', async () => {
-    const { user, household } = await setupHousehold();
+  it('should create a pending adoption request for a 2+ member household', async () => {
+    const { admin, household } = await createHouseholdWithMember(app);
 
     const res = await request(app)
       .post(`${petUrl(household)}/adopt`)
-      .set(authHeader(user.accessToken))
+      .set(authHeader(admin.accessToken))
       .send({ species: 'dog', name: 'Firulais' });
 
     expect(res.status).toBe(201);
     expect(res.body.data.species).toBe('dog');
     expect(res.body.data.name).toBe('Firulais');
-    expect(res.body.data.requestedBy).toBe(user.id);
+    expect(res.body.data.requestedBy).toBe(admin.id);
     expect(res.body.data.status).toBe('pending');
   });
 
@@ -261,21 +261,49 @@ describe('POST /api/households/:householdId/pet/adopt', () => {
     expect(res.status).toBe(400);
   });
 
-  it('should reject when a request is already pending', async () => {
-    const { user, household } = await setupHousehold();
+  it('should reject when a request is already pending (2+ member household)', async () => {
+    const { admin, household } = await createHouseholdWithMember(app);
     await request(app)
       .post(`${petUrl(household)}/adopt`)
-      .set(authHeader(user.accessToken))
+      .set(authHeader(admin.accessToken))
       .send({ species: 'dog', name: 'Firulais' });
 
     const res = await request(app)
       .post(`${petUrl(household)}/adopt`)
-      .set(authHeader(user.accessToken))
+      .set(authHeader(admin.accessToken))
       .send({ species: 'cat', name: 'Otro' });
 
     expect(res.status).toBe(400);
     const count = await AdoptionRequestModel.countDocuments({ householdId: household.id });
     expect(count).toBe(1);
+  });
+});
+
+describe('POST /api/households/:householdId/pet/adopt — instant adoption for single-member households (PDR-001)', () => {
+  it('should adopt the pet instantly for a 1-member household, with no pending request', async () => {
+    const { user, household } = await setupHousehold();
+
+    const res = await request(app)
+      .post(`${petUrl(household)}/adopt`)
+      .set(authHeader(user.accessToken))
+      .send({ species: 'cat', name: 'Michi' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.species).toBe('cat');
+    expect(res.body.data.name).toBe('Michi');
+    expect(res.body.data.hunger).toBe(80);
+    expect(res.body.data.mood).toBe(80);
+
+    const pet = await PetModel.findOne({ householdId: household.id }).lean();
+    expect(pet).not.toBeNull();
+    expect(pet?.adoptedBy.toString()).toBe(user.id);
+
+    expect(await AdoptionRequestModel.countDocuments({ householdId: household.id })).toBe(0);
+    expect(await getBalance(household.id)).toBe(ADOPTION_BONUS_COINS);
+
+    const getRes = await request(app).get(petUrl(household)).set(authHeader(user.accessToken));
+    expect(getRes.status).toBe(200);
+    expect(getRes.body.data.name).toBe('Michi');
   });
 });
 
@@ -349,15 +377,15 @@ async function backdateAdoptionRequest(household: TestHousehold, daysAgo: number
 
 describe('DELETE /api/households/:householdId/pet/adopt (cancel, PDR-001 A3)', () => {
   it('should let the requester cancel their own request', async () => {
-    const { user, household } = await setupHousehold();
+    const { admin, household } = await createHouseholdWithMember(app);
     await request(app)
       .post(`${petUrl(household)}/adopt`)
-      .set(authHeader(user.accessToken))
+      .set(authHeader(admin.accessToken))
       .send({ species: 'dog', name: 'Firulais' });
 
     const res = await request(app)
       .delete(`${petUrl(household)}/adopt`)
-      .set(authHeader(user.accessToken));
+      .set(authHeader(admin.accessToken));
 
     expect(res.status).toBe(200);
     expect(await AdoptionRequestModel.countDocuments({ householdId: household.id })).toBe(0);
@@ -423,16 +451,16 @@ describe('Adoption request TTL (7 days, PDR-001 A3)', () => {
   });
 
   it('should allow a new adoption request once the old one has expired', async () => {
-    const { user, household } = await setupHousehold();
+    const { admin, household } = await createHouseholdWithMember(app);
     await request(app)
       .post(`${petUrl(household)}/adopt`)
-      .set(authHeader(user.accessToken))
+      .set(authHeader(admin.accessToken))
       .send({ species: 'dog', name: 'Firulais' });
     await backdateAdoptionRequest(household, 8);
 
     const res = await request(app)
       .post(`${petUrl(household)}/adopt`)
-      .set(authHeader(user.accessToken))
+      .set(authHeader(admin.accessToken))
       .send({ species: 'cat', name: 'Michi' });
 
     expect(res.status).toBe(201);
