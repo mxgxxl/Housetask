@@ -484,7 +484,7 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 | TD-014 | No idempotency on write POSTs (retry can duplicate) | High | Idempotency-Key header + Redis dedupe | Resolved (commit 2) | TBD | 2026-08-10 |
 | TD-015 | No express.json payload size limit | Medium | Add limit option | Planned (Phase 1) | TBD | 2026-08-10 |
 | TD-016 | CORS_ORIGINS empty = * allowed in production | High | Fail-fast at startup in production | Planned (Phase 1) | TBD | 2026-08-10 |
-| TD-017 | constants.dart with hardcoded local backend URL | Low | constants.dart uses String.fromEnvironment() with sensible defaults (API_BASE_URL default http://localhost:3000, ENVIRONMENT default development). README.md documents `flutter run`/`build` commands with `--dart-define` flags for dev and production. No more --assume-unchanged hack. (A `scripts:` key in pubspec.yaml was considered but rejected — vanilla `pub`/`flutter pub` has no such feature, so it would be inert YAML; the real commands live in README.md instead.) | Resolved | TBD | 2026-08-10 |
+| TD-017 | constants.dart with hardcoded local backend URL | Low | constants.dart uses String.fromEnvironment() with sensible defaults (API_BASE_URL default https://housetask-production.up.railway.app — production, changed from an initial localhost:3000 default by a same-named follow-up commit; ENVIRONMENT default development). README.md documents `flutter run`/`build` commands with `--dart-define` flags for dev and production. No more --assume-unchanged hack. (A `scripts:` key in pubspec.yaml was considered but rejected — vanilla `pub`/`flutter pub` has no such feature, so it would be inert YAML; the real commands live in README.md instead.) | Resolved | TBD | 2026-08-10 |
 | TD-018 | Member-leave lifecycle not handled (orphaned assignedTo refs, no "Former member" UI) | High | Unassign pending tasks on leave/removal + Former member fallback in UI | Planned (Phase 2 — High severity deliberately deferred from Phase 1: low-frequency edge case; Phase 1 scope is stabilization-critical) | TBD | 2026-08-10 |
 | TD-019 | pubspec.lock ignored in frontend/.gitignore (non-reproducible builds) | High | Remove from .gitignore and commit the lockfile | Resolved (2026-08-10, Parte 0 chore) | TBD | 2026-08-10 |
 | TD-020 | Auth rate limiter had no test (skipped under NODE_ENV=test) | Medium | createApp({ authRateLimit }) opt-in + dedicated 429 test | Resolved (2026-08-10, commit B) | TBD | 2026-08-10 |
@@ -508,7 +508,7 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 | TD-038 | sentry_flutter 8.14.2's Package.swift allows any sentry-cocoa 8.x (`from: "8.46.0"`) while its podspec pins exactly 8.46.0; SPM had resolved 8.58.4, which broke the plugin's Swift build (SentryBinaryImageCache API changed) | High | Pinned both Package.resolved files to 8.46.0 matching the podspec; re-pin on every sentry_flutter upgrade until upstream tightens the SPM constraint. Documented in `frontend/README.md`'s Known Issues. Filing the upstream request (against `getsentry/sentry-cocoa`, to tighten the Package.swift range so it can't drift past the podspec again) is a human action — requires a GitHub account and maintainer engagement — and is not something this pipeline can automate; tracked here as a manual follow-up, not automated work. | Resolved (commit 1); upstream report still open (manual follow-up) | TBD | 2026-08-11 |
 | TD-039 | Offline conflict resolution uses last-write-wins; concurrent edits on multiple devices can overwrite | Low | Evaluate CRDT or OT if user reports lost edits | Deferred (Phase 2, if conflicts become frequent) | TBD | 2026-08-11 |
 | TD-040 | flutter test hangs on loaded hosts — confirmed (2026-08-13) to reproduce even running test/widgets/offline_banner_test.dart alone, not only when combined with the rest of the suite as first documented. `frontend_server_aot`'s CPU time froze completely (observed stuck at a fixed value for 200s+) even after clearing `build/test_cache`'s incremental-compile cache, so it is a toolchain/host-level stall (likely resource pressure — observed alongside load average ~4 and <60MB free pages), not a test-code defect or a stale-cache artifact. task_tile_test.dart and assignee_selector_test.dart both pass cleanly, alone or together; only offline_banner_test.dart triggers it | Low | Investigate with --verbose on idle machine. CI runs Flutter tests sharded (top-level + each widgets file separately); offline_banner_test isolated with allow-failure until root-caused | Mitigated in CI (commit 1, TD-008); root cause still open | TBD | 2026-08-11 |
-| TD-041 | Android minSdk 23+ and Flutter pin in CI — Flutter's DependencyVersionChecker enforces errorMinSdkVersion=23 (build-breaking). Project minSdk raised from 21 to 23 (Android 7.0+), accepting <5% market loss for cleaner builds. CI pins Flutter version (not channel: stable) to prevent surprise floor bumps when Flutter stable advances | Low | When upgrading Flutter, check minSdk/Gradle/AGP/Kotlin floors and bump deliberately, not reactively | Resolved | TBD | 2026-08-14 |
+| TD-041 | Android minSdk 23+ and Flutter pin in CI — Flutter's DependencyVersionChecker enforces errorMinSdkVersion=23 (build-breaking). Project minSdk raised from 21 to 23 (Android 7.0+), accepting <5% market loss for cleaner builds. CI pins Flutter version (not channel: stable) to prevent surprise floor bumps when Flutter stable advances. Toolchain matrix (read from source, 2026-08-14): Flutter pinned `3.44.9` in CI (`.github/workflows/ci.yml`) against a pubspec floor of `>=3.27.0`; Dart SDK `>=3.6.0 <4.0.0`; Gradle `9.1.0` (`frontend/android/gradle/wrapper/gradle-wrapper.properties`); AGP `9.0.1` and Kotlin `2.3.20` (both `frontend/android/settings.gradle`); `minSdkVersion 23` hardcoded in `frontend/android/app/build.gradle` (PDR-005), while `compileSdk`/`targetSdk`/`ndkVersion` stay dynamic via `flutter.*` rather than hardcoded | Low | When upgrading Flutter, check minSdk/Gradle/AGP/Kotlin floors and bump deliberately, not reactively | Resolved | TBD | 2026-08-14 |
 | TD-042 | Flutter Built-in Kotlin migration — Flutter 3.44+ is migrating to Built-in Kotlin. Plugins that apply Kotlin Gradle Plugin classically (like sentry_flutter 8.x) fail with "Language version 1.6 is no longer supported" when Kotlin is 2.3.20+. sentry_flutter upgraded 8.14.2 → 9.27.0, which drops the hardcoded languageVersion="1.6" override (still applies classic KGP unconditionally, unlike package_info_plus's AGP-major-version guard — residual, not eliminated). No other project dependency (flutter_local_notifications, connectivity_plus, package_info_plus, shared_preferences_android) applies classic KGP | Low | Keep sentry_flutter and other Kotlin-using plugins updated to versions that support Built-in Kotlin or Kotlin 2.x with language version 2.0+ | Resolved | TBD | 2026-08-14 |
 
 ---
@@ -569,7 +569,7 @@ flutter pub get
 flutter run
 ```
 
-**Backend URL config** in `frontend/lib/config/constants.dart`:
+**Backend URL config** in `frontend/lib/config/constants.dart` — `API_BASE_URL` defaults to the production Railway backend; `flutter run` with no flags talks to production, not to a local server. Local development requires an explicit `--dart-define=API_BASE_URL=...` override:
 - Android emulator: `http://10.0.2.2:3000`
 - iOS simulator: `http://localhost:3000`
 - Physical device: `http://<your-LAN-IP>:3000`
@@ -640,7 +640,7 @@ Publishing the app first would make every list break for users until the backend
 ## 🌍 Environments
 
 Frontend uses `String.fromEnvironment()` for configuration (TD-017), read in `frontend/lib/config/constants.dart`:
-- `API_BASE_URL`: backend host, no path suffix (default: `http://localhost:3000`)
+- `API_BASE_URL`: backend host, no path suffix (default: `https://housetask-production.up.railway.app` — production; local development requires an explicit `--dart-define=API_BASE_URL=http://localhost:3000` override)
 - `ENVIRONMENT`: `development` / `production` flag (default: `development`)
 - `SENTRY_DSN`: error tracking, independent define read directly in `services/sentry_service.dart` — see that file's doc comment for why it is deliberately not part of `AppConfig` (default: empty, no-op)
 
@@ -760,8 +760,18 @@ Las decisiones de producto (monetización, gamificación, UX de alto nivel) vive
 | `backend/src/schemas/` | Zod request-validation schemas, one file per domain (task/household/auth.schema.ts), applied to routes via validate() (TD-028) |
 | `backend/src/utils/response.ts` | `sendSuccess` / `sendError` helpers |
 | `backend/src/services/task.service.ts` | Task business logic + recurrence |
+| `backend/src/config/economy.ts` | Tunable economy constants (coin amounts, cooldowns, cosmetics catalog) — PDR-001 |
+| `backend/src/config/swagger.ts` | OpenAPI spec served at `/api/docs` |
+| `backend/src/models/Pet.ts` | Household pet schema (hunger/mood decay, cosmetics) — PDR-001 |
+| `backend/src/models/AdoptionRequest.ts` | Pending 2+ member adoption proposal, deleted on confirm/cancel/expiry — PDR-001 |
+| `backend/src/models/EconomyLedger.ts` | Append-only coin ledger; balance is always `sum(amount)` — PDR-001 |
+| `backend/src/services/pet.service.ts` | Pet/adoption business logic + socket emissions |
+| `backend/src/services/economy.service.ts` | Coin balance, lazy hunger/mood decay, grantCoins anti-farm rules |
 | `frontend/lib/config/constants.dart` | API URLs and app config — set via `--dart-define` (API_BASE_URL/ENVIRONMENT), see README.md; no longer protected with --assume-unchanged (TD-017) |
 | `frontend/lib/data/datasources/remote/api_service.dart` | Dio client with auth interceptors |
 | `frontend/lib/services/socket_service.dart` | Socket.io singleton |
 | `frontend/lib/presentation/cubit/task_cubit.dart` | Task state management |
+| `frontend/lib/presentation/cubit/pet_cubit.dart` | Pet/adoption/economy state management |
+| `frontend/lib/presentation/pages/pet_page.dart` | Pet tab: adoption flow, care view (feed/play) |
+| `frontend/lib/presentation/pages/pet_shop_page.dart` | Cosmetics shop UI |
 | `frontend/lib/presentation/pages/calendar_page.dart` | Mes/Semana selector; week view reuses spanning bars logic from month view |

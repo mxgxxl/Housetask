@@ -4,7 +4,7 @@ Los PDRs registran decisiones de producto con Context / Decision / Consequences,
 
 ## PDR-001: Monetización F2P + mascota cooperativa del hogar
 
-**Status:** In progress (A3 — commits 2-3 de este round: pestaña Mascota en frontend, adopción con cancelación/TTL, tienda de cosméticos)
+**Status:** In progress (A1–A3 completos: economía base, adopción cooperativa + instantánea, pestaña Mascota en frontend, tienda de cosméticos; A4 pendiente: realtime SocketCubit + countdown en vivo)
 
 - **Context:** App de gestión doméstica para parejas/hogares. Una suscripción tiene valor percibido bajo para este público y un paywall inicial mataría la adquisición. Se necesita retención más allá de la utilidad diaria y una vía de monetización sin fricción.
 - **Decision:**
