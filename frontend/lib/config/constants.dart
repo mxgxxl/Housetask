@@ -2,17 +2,20 @@
 ///
 /// `host` and `environment` are set via `--dart-define` (see
 /// `frontend/README.md`), so this file needs no machine-local edits and is
-/// safe to commit as-is (TD-017). For local development on the Android
-/// emulator, `10.0.2.2` maps to the host machine's `localhost`. For a
-/// physical device use your machine's LAN IP (e.g. `http://192.168.1.20:3000`).
-/// iOS simulator can use `localhost`.
+/// safe to commit as-is (TD-017). The default `host` points at the
+/// production Railway backend; local development against `localhost` (or a
+/// LAN IP / Android emulator alias) requires an explicit
+/// `--dart-define=API_BASE_URL=...` override — see `frontend/README.md`.
 class AppConfig {
   AppConfig._();
 
-  /// Host of the backend. Override with `--dart-define=API_BASE_URL=...`.
+  /// Host of the backend. Defaults to production; override with
+  /// `--dart-define=API_BASE_URL=...` for local development (e.g.
+  /// `http://localhost:3000`, or `http://10.0.2.2:3000` on the Android
+  /// emulator).
   static const String host = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://localhost:3000',
+    defaultValue: 'https://housetask-production.up.railway.app',
   );
 
   /// REST API base URL.
