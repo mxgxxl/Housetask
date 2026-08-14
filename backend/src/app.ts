@@ -17,6 +17,8 @@ import householdRoutes from './routes/household.routes';
 import taskRoutes from './routes/task.routes';
 import shoppingRoutes from './routes/shopping.routes';
 import userRoutes from './routes/user.routes';
+import petRoutes from './routes/pet.routes';
+import economyRoutes from './routes/economy.routes';
 
 export interface CreateAppOptions {
   /**
@@ -121,6 +123,12 @@ export function createApp(options: CreateAppOptions = {}): Application {
   // Nested, household-scoped resources.
   app.use('/api/households/:householdId/tasks', taskRoutes);
   app.use('/api/households/:householdId/shopping', shoppingRoutes);
+  // PDR-001 A1: household pet + economy. Nested rather than the flat
+  // /api/pets and /api/economy sketched in the spec, to reuse requireMembership
+  // as the single membership checkpoint (Hard Rule 8) instead of inventing a
+  // second way to resolve "which household" from query params.
+  app.use('/api/households/:householdId/pet', petRoutes);
+  app.use('/api/households/:householdId/economy', economyRoutes);
 
   // 404 + centralized error handling (must be last).
   app.use(notFoundHandler);

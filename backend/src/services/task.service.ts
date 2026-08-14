@@ -7,6 +7,8 @@ import { logger } from '../utils/logger';
 import { sanitizeDate, sanitizeString } from '../utils/sanitize';
 import { Page, decodeCursor, encodeCursor } from '../utils/pagination';
 import { TaskStatus, TaskPriority, TaskCategory, Role } from '../types';
+import { grantCoins } from './economy.service';
+import { TASK_COINS } from '../config/economy';
 
 const POPULATE_FIELDS = 'name email avatarUrl';
 
@@ -449,6 +451,11 @@ export async function completeTask(
     throw new AppError('Task not found', 404);
   }
 
+  // Captured before mutation: only the FIRST completion grants coins
+  // (PDR-001 anti-farm). Re-completing an already-completed task — e.g. a
+  // duplicate PATCH — must not pay out twice.
+  const isFirstCompletion = task.status !== 'completed';
+
   task.status = 'completed';
   task.completedAt = new Date();
   task.completedBy = new Types.ObjectId(userId);
@@ -460,6 +467,18 @@ export async function completeTask(
     await generateNextInstance(task);
   } catch (err) {
     logger.error('Error generating next recurrence', (err as Error).message);
+  }
+
+  // Best-effort: the ledger's unique index is the real anti-double-grant
+  // guard (isFirstCompletion is a cheap short-circuit that also skips a
+  // redundant query on every recompletion), so a coin-granting failure here
+  // must never fail the completion itself.
+  if (isFirstCompletion) {
+    try {
+      await grantCoins(householdId, TASK_COINS, 'task_complete', taskId);
+    } catch (err) {
+      logger.error('Error granting task-complete coins', (err as Error).message);
+    }
   }
 
   await populated(task);

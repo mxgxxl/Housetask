@@ -5,6 +5,9 @@ import { emitToHousehold } from '../config/socket';
 import { ShoppingCategory } from '../types';
 import { Page, decodeCursor, encodeCursor } from '../utils/pagination';
 import { sanitizeString } from '../utils/sanitize';
+import { logger } from '../utils/logger';
+import { grantCoins } from './economy.service';
+import { PURCHASE_COINS } from '../config/economy';
 
 const POPULATE_FIELDS = 'name email avatarUrl';
 
@@ -210,10 +213,26 @@ export async function purchaseItem(
     throw new AppError('Shopping item not found', 404);
   }
 
+  // Captured before mutation: only the FIRST purchase grants coins
+  // (PDR-001 anti-farm) — see task.service.ts:completeTask for the same
+  // pattern.
+  const isFirstPurchase = !item.isPurchased;
+
   item.isPurchased = true;
   item.purchasedAt = new Date();
   item.purchasedBy = new Types.ObjectId(userId);
   await item.save();
+
+  // Best-effort: must never fail the purchase itself. See
+  // task.service.ts:completeTask for why isFirstPurchase is only a
+  // short-circuit, not the actual anti-double-grant guard.
+  if (isFirstPurchase) {
+    try {
+      await grantCoins(householdId, PURCHASE_COINS, 'purchase_complete', itemId);
+    } catch (err) {
+      logger.error('Error granting purchase-complete coins', (err as Error).message);
+    }
+  }
 
   await populated(item);
   emitToHousehold(householdId, 'shopping:purchased', item.toJSON());
