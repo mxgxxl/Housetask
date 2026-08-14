@@ -145,7 +145,7 @@ Document key architectural decisions here. Format: Context → Decision → Cons
 ### ADR-009: Edge validation, raw storage, escape at render
 - **Context:** The first sanitization batch HTML-escaped text at storage time; Flutter renders user text with Text(), which does not interpret markup, so storage escaping degraded UX (users saw "Tom &amp; Jerry") without adding mobile security.
 - **Decision:** Store user text raw after trim + length limits; NoSQL injection is blocked by express-mongo-sanitize at the edge; HTML escaping is a presentation concern to be applied at render time, only if a web client ever ships.
-- **Consequences:** Correct UX on mobile today; a future web frontend MUST escape at render; Zod edge validation (TD-028) will centralize and strengthen edge validation and replace the global mongo-sanitize middleware for Express 5 compatibility.
+- **Consequences:** Correct UX on mobile today; a future web frontend MUST escape at render; Zod edge validation (TD-028, resolved) centralizes and strengthens shape/format validation for tasks, households, and auth. It does NOT replace `express-mongo-sanitize` (still active in `app.ts`) or require an Express 5 migration (still on Express 4) — that part of the original plan is unimplemented; Zod and mongo-sanitize currently run as complementary layers (shape/format vs. NoSQL-operator stripping).
 
 ### ADR-010: Offline-first with last-write-wins conflict resolution
 - **Context:** TD-003 — mobile connectivity in the field is unreliable (elevators, subways, poor rural coverage). Users need to keep creating/editing tasks and shopping items while offline and have those changes reconciled once the device reconnects, without a second backend contract just for offline sync.
@@ -491,7 +491,7 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 | TD-025 | Monthly recurrence anchor bug: dayOfMonth 31 clamps to Feb 28 and never recovers because the next occurrence is computed from the clamped date instead of the rule anchor | High | Anchor monthly computation to rule.dayOfMonth; add weekly/monthly/clamp unit tests | Resolved (commit 1) | TBD | 2026-08-10 |
 | TD-026 | List sort not backed by a matching compound index (in-memory sort per page) | High | Add sort-exact compound indexes on Task and ShoppingItem | Resolved (commit 3) | TBD | 2026-08-10 |
 | TD-027 | Frontend repositories broken against paginated backend (data array → object) | Medium | Paginated envelope + per-tab filtering (?status= query param) + per-tab ScrollController + total visible in header. Home and Calendar read the unfiltered allTasks bucket; per-tab totals adjusted optimistically on mutations | UX polish completed (commit 1) | TBD | 2026-08-10 |
-| TD-028 | Validation scattered across controllers/services; express-mongo-sanitize incompatible with Express 5 | Medium | Zod schemas per endpoint as middleware; explicit body sanitization replaces global middleware | Planned (Phase 2) | TBD | 2026-08-10 |
+| TD-028 | Validation scattered across controllers/services; express-mongo-sanitize incompatible with Express 5 | Medium | All endpoints validate input with Zod schemas in backend/src/schemas/. validate() middleware in backend/src/middleware/validate.ts returns 400 with formatted details on ZodError. Controllers receive parsed/typed req.body. (express-mongo-sanitize/Express 5 migration is out of scope — see ADR-009; mongo-sanitize is still active, unchanged) | Resolved | TBD | 2026-08-10 |
 | TD-029 | Text persisted HTML-escaped during the escaping window remains escaped | Low | Won't fix: pre-production, only local test data affected; re-seed if cosmetic noise bothers; a one-off unescape pass would only be justified if a real household existed in the window | Won't fix | TBD | 2026-08-10 |
 | TD-030 | Index tests were temporarily downgraded to schema-declaration level while host disk had <500 MB free | Low | Host disk freed; listIndexes() built-index assertions restored | Resolved (commit 1) | TBD | 2026-08-10 |
 | TD-031 | POSTs carrying Idempotency-Key hang forever when Redis is unreachable (ioredis maxRetriesPerRequest:null queues commands indefinitely) | High | commandTimeout configurable (default 2500ms, env REDIS_COMMAND_TIMEOUT_MS) on a dedicated app-only Redis connection; pub/sub connections stay timeout-free to preserve Socket.io adapter stability; fail-open in middleware | Resolved (commit 1) | TBD | 2026-08-10 |
@@ -730,7 +730,6 @@ As of this commit, Phase 1 (Stabilization) is COMPLETE. All TD items in Phase 1 
 - TD-011: Granular task permissions
 - TD-013: Household-timezone-aware recurrence
 - TD-018: Member-leave lifecycle
-- TD-028: Zod edge validation
 - TD-034: Deploy-order safety net
 - TD-035: Server-side isRecurring filter
 - TD-037: Sentry hardening bundle
@@ -753,6 +752,8 @@ Las decisiones de producto (monetización, gamificación, UX de alto nivel) vive
 | `backend/src/config/socket.ts` | Socket.io setup with Redis adapter |
 | `backend/src/middleware/auth.middleware.ts` | JWT verification |
 | `backend/src/middleware/error.middleware.ts` | Centralized error handling |
+| `backend/src/middleware/validate.ts` | Generic Zod validate(schema) middleware (TD-028) — safeParse's req.body, 400 with `{ error, details }` on failure, replaces req.body with parsed/coerced output on success |
+| `backend/src/schemas/` | Zod request-validation schemas, one file per domain (task/household/auth.schema.ts), applied to routes via validate() (TD-028) |
 | `backend/src/utils/response.ts` | `sendSuccess` / `sendError` helpers |
 | `backend/src/services/task.service.ts` | Task business logic + recurrence |
 | `frontend/lib/config/constants.dart` | API URLs and app config — set via `--dart-define` (API_BASE_URL/ENVIRONMENT), see README.md; no longer protected with --assume-unchanged (TD-017) |
