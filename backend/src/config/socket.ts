@@ -1,5 +1,5 @@
 import { Server as HttpServer } from 'http';
-import { Server as SocketIOServer, Socket } from 'socket.io';
+import { Server as SocketIOServer, Socket, ExtendedError } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
 import { initRedis } from './redis';
 import { verifyAccessToken } from '../utils/jwt';
@@ -13,6 +13,60 @@ let io: SocketIOServer | null = null;
  */
 export function householdRoom(householdId: string): string {
   return `household_${householdId}`;
+}
+
+/**
+ * Socket.io handshake middleware logic, extracted so it can be invoked as
+ * `void authenticateSocket(...)` from the void-returning io.use() callback.
+ */
+async function authenticateSocket(
+  socket: Socket,
+  next: (err?: ExtendedError) => void,
+): Promise<void> {
+  try {
+    const token =
+      (socket.handshake.auth?.token as string | undefined) ||
+      (socket.handshake.headers?.authorization?.replace('Bearer ', '') as string | undefined);
+
+    if (!token) {
+      return next(new Error('Authentication token missing'));
+    }
+
+    const payload = verifyAccessToken(token);
+    const user = await UserModel.findById(payload.userId).select('households').lean();
+    if (!user) {
+      return next(new Error('User not found'));
+    }
+
+    socket.data.userId = payload.userId;
+    socket.data.households = (user.households || []).map((h) => h.toString());
+    next();
+  } catch (err) {
+    logger.warn('Socket auth failed', (err as Error).message);
+    next(new Error('Authentication failed'));
+  }
+}
+
+/**
+ * `Socket.join`/`leave` are typed `Promise<void> | void` because a custom
+ * adapter (this app uses `@socket.io/redis-adapter`, ADR-002) can make room
+ * membership a real cross-instance Redis operation that can reject — the
+ * built-in in-memory adapter resolves synchronously (`void`). Wrapping in
+ * `Promise.resolve()` handles both without a runtime type check, and
+ * `.catch()` logs with the socket/room context a bare `void` would discard,
+ * rather than relying solely on the generic unhandledRejection handler
+ * (TD-032) that has none.
+ */
+function joinRoomSafely(socket: Socket, userId: string, room: string): void {
+  Promise.resolve(socket.join(room)).catch((err: unknown) => {
+    logger.warn(`Socket failed to join room: user=${userId} room=${room}`, err);
+  });
+}
+
+function leaveRoomSafely(socket: Socket, userId: string, room: string): void {
+  Promise.resolve(socket.leave(room)).catch((err: unknown) => {
+    logger.warn(`Socket failed to leave room: user=${userId} room=${room}`, err);
+  });
 }
 
 /**
@@ -33,30 +87,15 @@ export async function initSocket(httpServer: HttpServer): Promise<SocketIOServer
   const { pubClient, subClient } = await initRedis();
   io.adapter(createAdapter(pubClient, subClient));
 
-  // Authenticate each socket handshake with the access token.
-  io.use(async (socket, next) => {
-    try {
-      const token =
-        (socket.handshake.auth?.token as string | undefined) ||
-        (socket.handshake.headers?.authorization?.replace('Bearer ', '') as string | undefined);
-
-      if (!token) {
-        return next(new Error('Authentication token missing'));
-      }
-
-      const payload = verifyAccessToken(token);
-      const user = await UserModel.findById(payload.userId).select('households').lean();
-      if (!user) {
-        return next(new Error('User not found'));
-      }
-
-      socket.data.userId = payload.userId;
-      socket.data.households = (user.households || []).map((h) => h.toString());
-      next();
-    } catch (err) {
-      logger.warn('Socket auth failed', (err as Error).message);
-      next(new Error('Authentication failed'));
-    }
+  // Authenticate each socket handshake with the access token. io.use()'s
+  // middleware type is void-returning (socket, next) => void, so the async
+  // logic lives in a named function and is invoked with `void` below —
+  // fire-and-forget: authenticateSocket's own try/catch always resolves
+  // (never rejects) since every failure path calls next(new Error(...))
+  // instead of throwing past the catch, so there is nothing an unhandled
+  // rejection could hide here.
+  io.use((socket, next) => {
+    void authenticateSocket(socket, next);
   });
 
   io.on('connection', (socket: Socket) => {
@@ -64,19 +103,19 @@ export async function initSocket(httpServer: HttpServer): Promise<SocketIOServer
     const households = (socket.data.households as string[]) || [];
 
     // Join a room per household so household-scoped events reach this user.
-    households.forEach((id) => socket.join(householdRoom(id)));
+    households.forEach((id) => joinRoomSafely(socket, userId, householdRoom(id)));
     logger.debug(`Socket connected: user=${userId} rooms=${households.length}`);
 
     // Allow the client to (re)join a household room after joining/creating one.
     socket.on('household:join', (householdId: string) => {
       if (typeof householdId === 'string' && householdId.length > 0) {
-        socket.join(householdRoom(householdId));
+        joinRoomSafely(socket, userId, householdRoom(householdId));
       }
     });
 
     socket.on('household:leave', (householdId: string) => {
       if (typeof householdId === 'string' && householdId.length > 0) {
-        socket.leave(householdRoom(householdId));
+        leaveRoomSafely(socket, userId, householdRoom(householdId));
       }
     });
 
