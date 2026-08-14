@@ -760,3 +760,4 @@ Las decisiones de producto (monetización, gamificación, UX de alto nivel) vive
 | `frontend/lib/data/datasources/remote/api_service.dart` | Dio client with auth interceptors |
 | `frontend/lib/services/socket_service.dart` | Socket.io singleton |
 | `frontend/lib/presentation/cubit/task_cubit.dart` | Task state management |
+| `frontend/lib/presentation/pages/calendar_page.dart` | Mes/Semana selector; week view reuses spanning bars logic from month view |
