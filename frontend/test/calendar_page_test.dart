@@ -295,4 +295,105 @@ void main() {
       expect(find.byKey(const Key('dayDetailContinuing')), findsNothing);
     });
   });
+
+  group('CalendarPage Mes/Semana selector and week view (PDR-004)', () {
+    testWidgets('the selector shows both Mes and Semana segments, starting on Mes',
+        (tester) async {
+      await pumpCalendarPage(tester, []);
+
+      expect(find.byKey(const Key('calendarViewSelector')), findsOneWidget);
+      expect(find.text('Mes'), findsOneWidget);
+      expect(find.text('Semana'), findsOneWidget);
+      // Month grid visible by default: today's cell is present, no week header.
+      expect(find.byKey(Key('monthDay-${_isoTestDate(DateTime.now())}')), findsOneWidget);
+      expect(find.byKey(const Key('weekHeaderTitle')), findsNothing);
+    });
+
+    testWidgets('tapping Semana shows a 7-day grid for the week containing the selected day',
+        (tester) async {
+      final monday = _safeMonday();
+      await pumpCalendarPage(tester, []);
+
+      // Anchor on a known day first so the resulting week is deterministic,
+      // then switch views — mirrors "was on Aug 15 in Mes, see its week".
+      await tester.tap(find.byKey(Key('monthDay-${_isoTestDate(monday)}')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Semana'));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('weekHeaderTitle')), findsOneWidget);
+      for (var i = 0; i < 7; i++) {
+        final day = monday.add(Duration(days: i));
+        expect(find.byKey(Key('monthDay-${_isoTestDate(day)}')), findsOneWidget,
+            reason: '${_isoTestDate(day)} should be in the week grid');
+      }
+      // The month grid's own header/leading-days are gone.
+      final prevWeekDay = monday.subtract(const Duration(days: 1));
+      expect(find.byKey(Key('monthDay-${_isoTestDate(prevWeekDay)}')), findsNothing);
+    });
+
+    testWidgets('a multi-day task spanning the selected week renders as a spanning bar reusing month-grid logic',
+        (tester) async {
+      final monday = _safeMonday();
+      final day1 = monday;
+      final day3 = monday.add(const Duration(days: 2));
+      final spanning = buildTask(
+        'wspan1',
+        title: 'Mudanza semanal',
+        startsAt: DateTime(day1.year, day1.month, day1.day, 9),
+        endsAt: DateTime(day3.year, day3.month, day3.day, 18),
+      );
+
+      await pumpCalendarPage(tester, [spanning]);
+      await tester.tap(find.byKey(Key('monthDay-${_isoTestDate(monday)}')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Semana'));
+      await tester.pumpAndSettle();
+
+      final bar = _monthBarFinder('wspan1');
+      expect(bar, findsOneWidget);
+
+      final barRect = tester.getRect(bar);
+      for (final day in [day1, monday.add(const Duration(days: 1)), day3]) {
+        final dayRect = tester.getRect(find.byKey(Key('monthDay-${_isoTestDate(day)}')));
+        expect(barRect.left, lessThanOrEqualTo(dayRect.center.dx),
+            reason: '${_isoTestDate(day)} should be under the bar');
+        expect(barRect.right, greaterThanOrEqualTo(dayRect.center.dx),
+            reason: '${_isoTestDate(day)} should be under the bar');
+      }
+    });
+
+    testWidgets('the < > buttons in week view advance/retreat by full weeks, not months',
+        (tester) async {
+      final monday = _safeMonday();
+      await pumpCalendarPage(tester, []);
+
+      await tester.tap(find.byKey(Key('monthDay-${_isoTestDate(monday)}')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Semana'));
+      await tester.pumpAndSettle();
+
+      final nextWeekMonday = monday.add(const Duration(days: 7));
+      await tester.tap(find.byIcon(Icons.chevron_right));
+      await tester.pumpAndSettle();
+      for (var i = 0; i < 7; i++) {
+        final day = nextWeekMonday.add(Duration(days: i));
+        expect(find.byKey(Key('monthDay-${_isoTestDate(day)}')), findsOneWidget,
+            reason: '${_isoTestDate(day)} should be in the next week');
+      }
+      expect(find.byKey(Key('monthDay-${_isoTestDate(monday)}')), findsNothing);
+
+      // Back twice: once to undo, once more into the previous week.
+      final prevWeekMonday = monday.subtract(const Duration(days: 7));
+      await tester.tap(find.byIcon(Icons.chevron_left));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.chevron_left));
+      await tester.pumpAndSettle();
+      for (var i = 0; i < 7; i++) {
+        final day = prevWeekMonday.add(Duration(days: i));
+        expect(find.byKey(Key('monthDay-${_isoTestDate(day)}')), findsOneWidget,
+            reason: '${_isoTestDate(day)} should be in the previous week');
+      }
+    });
+  });
 }

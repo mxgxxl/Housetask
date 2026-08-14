@@ -9,10 +9,27 @@ import '../widgets/common.dart';
 import '../widgets/task_tile.dart';
 import 'task_form_page.dart';
 
+/// Which grid the calendar page currently renders (PDR-004 Mes/Semana
+/// selector). Both views share the same spanning-bar/lane/chip rendering
+/// (`_WeekRow` and friends) — only the set of days and the header differ.
+enum CalendarView { month, week }
+
 /// Local-day key (time-of-day stripped) used throughout this file for day
 /// comparisons/grouping — startsAt/endsAt/dueDate are device-local already
 /// (see task_form_page.dart), so no timezone conversion belongs here.
 DateTime _localDayKey(DateTime d) => DateTime(d.year, d.month, d.day);
+
+/// The Monday that starts the Monday-start week containing [day].
+DateTime _mondayOf(DateTime day) {
+  final key = _localDayKey(day);
+  return key.subtract(Duration(days: key.weekday - DateTime.monday));
+}
+
+/// The 7 consecutive days (Monday..Sunday) of the week containing [anchor].
+List<DateTime> _weekDaysFor(DateTime anchor) {
+  final monday = _mondayOf(anchor);
+  return List.generate(7, (i) => monday.add(Duration(days: i)));
+}
 
 String _isoDate(DateTime d) =>
     '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
@@ -48,6 +65,7 @@ class CalendarPage extends StatefulWidget {
 class _CalendarPageState extends State<CalendarPage> {
   DateTime _focusedMonth = _localDayKey(DateTime.now());
   DateTime _selectedDay = _localDayKey(DateTime.now());
+  CalendarView _view = CalendarView.month;
 
   @override
   Widget build(BuildContext context) {
@@ -58,31 +76,57 @@ class _CalendarPageState extends State<CalendarPage> {
       ),
       body: BlocBuilder<TaskCubit, TaskState>(
         builder: (context, state) {
-          // Unfiltered bucket: the calendar shows the whole month regardless
-          // of which tab the tasks page is on.
+          // Unfiltered bucket: the calendar shows the whole month/week
+          // regardless of which tab the tasks page is on.
           final allTasks = state.allTasks;
           final dayTasks = _tasksForDay(allTasks, _selectedDay);
 
           return Column(
             children: [
+              _ViewSelector(
+                view: _view,
+                onChanged: (v) => setState(() => _view = v),
+              ),
               Card(
-                margin: const EdgeInsets.all(12),
+                margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
                 child: Padding(
                   padding: const EdgeInsets.all(8),
-                  child: _MonthGrid(
-                    focusedMonth: _focusedMonth,
-                    selectedDay: _selectedDay,
-                    tasks: allTasks,
-                    onPrevMonth: () => setState(() {
-                      _focusedMonth =
-                          DateTime(_focusedMonth.year, _focusedMonth.month - 1, 1);
-                    }),
-                    onNextMonth: () => setState(() {
-                      _focusedMonth =
-                          DateTime(_focusedMonth.year, _focusedMonth.month + 1, 1);
-                    }),
-                    onDaySelected: (day) => setState(() => _selectedDay = day),
-                  ),
+                  child: _view == CalendarView.month
+                      ? _MonthGrid(
+                          focusedMonth: _focusedMonth,
+                          selectedDay: _selectedDay,
+                          tasks: allTasks,
+                          onPrevMonth: () => setState(() {
+                            _focusedMonth = DateTime(
+                                _focusedMonth.year, _focusedMonth.month - 1, 1);
+                          }),
+                          onNextMonth: () => setState(() {
+                            _focusedMonth = DateTime(
+                                _focusedMonth.year, _focusedMonth.month + 1, 1);
+                          }),
+                          onDaySelected: (day) => setState(() => _selectedDay = day),
+                        )
+                      : _WeekGrid(
+                          anchorDay: _selectedDay,
+                          selectedDay: _selectedDay,
+                          tasks: allTasks,
+                          // Week nav keeps _selectedDay as the anchor (it
+                          // doubles as the day the detail pane below shows),
+                          // shifting it a full 7 days so the same weekday
+                          // stays selected — and keeps _focusedMonth in sync
+                          // so switching back to Mes lands on the right month.
+                          onPrevWeek: () => setState(() {
+                            _selectedDay = _selectedDay.subtract(const Duration(days: 7));
+                            _focusedMonth =
+                                DateTime(_selectedDay.year, _selectedDay.month, 1);
+                          }),
+                          onNextWeek: () => setState(() {
+                            _selectedDay = _selectedDay.add(const Duration(days: 7));
+                            _focusedMonth =
+                                DateTime(_selectedDay.year, _selectedDay.month, 1);
+                          }),
+                          onDaySelected: (day) => setState(() => _selectedDay = day),
+                        ),
                 ),
               ),
               const Divider(height: 1),
@@ -102,6 +146,42 @@ class _CalendarPageState extends State<CalendarPage> {
   }
 }
 
+/// Mes/Semana selector (PDR-004) — switches [CalendarView] without touching
+/// `_selectedDay`, which both grids and the day-detail pane share as anchor.
+class _ViewSelector extends StatelessWidget {
+  final CalendarView view;
+  final ValueChanged<CalendarView> onChanged;
+
+  const _ViewSelector({required this.view, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: SegmentedButton<CalendarView>(
+          key: const Key('calendarViewSelector'),
+          segments: const [
+            ButtonSegment(
+              value: CalendarView.month,
+              label: Text('Mes'),
+              icon: Icon(Icons.calendar_view_month),
+            ),
+            ButtonSegment(
+              value: CalendarView.week,
+              label: Text('Semana'),
+              icon: Icon(Icons.calendar_view_week),
+            ),
+          ],
+          selected: {view},
+          onSelectionChanged: (selection) => onChanged(selection.first),
+        ),
+      ),
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Month grid (PARTE B1)
 // ---------------------------------------------------------------------------
@@ -116,20 +196,22 @@ class _SpanningTask {
   const _SpanningTask(this.task, this.startDay, this.endDay);
 }
 
-class _MonthClassification {
+class _GridClassification {
   final List<Task> instant;
   final List<Task> singleDayRanged;
   final List<_SpanningTask> spanning;
 
-  const _MonthClassification(this.instant, this.singleDayRanged, this.spanning);
+  const _GridClassification(this.instant, this.singleDayRanged, this.spanning);
 }
 
-/// Splits the household's tasks into the three month-grid treatments
-/// (PDR-004): instant/start-only tasks keep their pre-existing marker (no
-/// distinct treatment is specified for start-only, so it is grouped with
-/// instant); a ranged task starting and ending on the same day is a time
-/// chip; a ranged task crossing a day boundary is a spanning bar.
-_MonthClassification _classifyForMonth(List<Task> tasks) {
+/// Splits the household's tasks into the three grid treatments (PDR-004):
+/// instant/start-only tasks keep their pre-existing marker (no distinct
+/// treatment is specified for start-only, so it is grouped with instant); a
+/// ranged task starting and ending on the same day is a time chip; a ranged
+/// task crossing a day boundary is a spanning bar. Shared by both the month
+/// grid and the week grid — it does no month/week filtering itself, each
+/// `_WeekRow` clips `spanning` to its own 7-day range in `_barsForRow`.
+_GridClassification _classifyTasksForGrid(List<Task> tasks) {
   final instant = <Task>[];
   final singleDayRanged = <Task>[];
   final spanning = <_SpanningTask>[];
@@ -146,7 +228,7 @@ _MonthClassification _classifyForMonth(List<Task> tasks) {
       instant.add(t);
     }
   }
-  return _MonthClassification(instant, singleDayRanged, spanning);
+  return _GridClassification(instant, singleDayRanged, spanning);
 }
 
 class _DayChip {
@@ -210,7 +292,7 @@ class _MonthGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final weeks = _weeksFor(focusedMonth);
-    final classification = _classifyForMonth(tasks);
+    final classification = _classifyTasksForGrid(tasks);
     final cellChips = _cellChipsFor(classification.instant, classification.singleDayRanged);
 
     return Column(
@@ -227,6 +309,91 @@ class _MonthGrid extends StatelessWidget {
             spanningTasks: classification.spanning,
             onDaySelected: onDaySelected,
           ),
+      ],
+    );
+  }
+}
+
+/// Single-week calendar (PDR-004 Semana view). Reuses `_WeekRow` verbatim —
+/// same spanning bars, lanes, and day chips as the month grid — so a
+/// multi-day task looks identical whether the household is looking at Mes or
+/// Semana; only the header and the set of days differ.
+class _WeekGrid extends StatelessWidget {
+  final DateTime anchorDay;
+  final DateTime selectedDay;
+  final List<Task> tasks;
+  final VoidCallback onPrevWeek;
+  final VoidCallback onNextWeek;
+  final ValueChanged<DateTime> onDaySelected;
+
+  const _WeekGrid({
+    required this.anchorDay,
+    required this.selectedDay,
+    required this.tasks,
+    required this.onPrevWeek,
+    required this.onNextWeek,
+    required this.onDaySelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final week = _weekDaysFor(anchorDay);
+    final classification = _classifyTasksForGrid(tasks);
+    final cellChips = _cellChipsFor(classification.instant, classification.singleDayRanged);
+
+    return Column(
+      children: [
+        _WeekHeader(week: week, onPrev: onPrevWeek, onNext: onNextWeek),
+        const _WeekdayHeader(),
+        _WeekRow(
+          week: week,
+          rowIndex: 0,
+          // null = no adjacent-month dimming: every day in a single week is
+          // "in view", unlike the month grid's leading/trailing padding days.
+          focusedMonth: null,
+          selectedDay: selectedDay,
+          cellChips: cellChips,
+          spanningTasks: classification.spanning,
+          onDaySelected: onDaySelected,
+        ),
+      ],
+    );
+  }
+}
+
+class _WeekHeader extends StatelessWidget {
+  final List<DateTime> week;
+  final VoidCallback onPrev;
+  final VoidCallback onNext;
+
+  const _WeekHeader({required this.week, required this.onPrev, required this.onNext});
+
+  @override
+  Widget build(BuildContext context) {
+    String cap(String s) => s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+
+    final start = week.first;
+    final end = week.last;
+    final dayFmt = DateFormat('d', 'es');
+    final monthFmt = DateFormat('MMMM', 'es');
+    final title = start.month == end.month
+        ? 'Semana del ${dayFmt.format(start)} al ${dayFmt.format(end)} de ${cap(monthFmt.format(end))}'
+        : 'Semana del ${dayFmt.format(start)} de ${cap(monthFmt.format(start))} '
+            'al ${dayFmt.format(end)} de ${cap(monthFmt.format(end))}';
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        IconButton(icon: const Icon(Icons.chevron_left), onPressed: onPrev),
+        Expanded(
+          child: Text(
+            title,
+            key: const Key('weekHeaderTitle'),
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+          ),
+        ),
+        IconButton(icon: const Icon(Icons.chevron_right), onPressed: onNext),
       ],
     );
   }
@@ -350,7 +517,11 @@ class _WeekRow extends StatelessWidget {
 
   final List<DateTime> week;
   final int rowIndex;
-  final DateTime focusedMonth;
+  /// The month grid passes its focused month so leading/trailing
+  /// adjacent-month days render dimmed. The week grid passes null — a
+  /// single week has no "adjacent month" concept, so every day renders as
+  /// current.
+  final DateTime? focusedMonth;
   final DateTime selectedDay;
   final Map<DateTime, List<_DayChip>> cellChips;
   final List<_SpanningTask> spanningTasks;
@@ -407,7 +578,7 @@ class _WeekRow extends StatelessWidget {
                   Expanded(
                     child: _DayNumberCell(
                       day: day,
-                      isCurrentMonth: day.month == focusedMonth.month,
+                      isCurrentMonth: focusedMonth == null || day.month == focusedMonth!.month,
                       isSelected: _localDayKey(day) == _localDayKey(selectedDay),
                       onTap: () => onDaySelected(day),
                     ),
