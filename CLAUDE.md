@@ -480,7 +480,7 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 | TD-014 | No idempotency on write POSTs (retry can duplicate) | High | Idempotency-Key header + Redis dedupe | Resolved (commit 2) | TBD | 2026-08-10 |
 | TD-015 | No express.json payload size limit | Medium | Add limit option | Planned (Phase 1) | TBD | 2026-08-10 |
 | TD-016 | CORS_ORIGINS empty = * allowed in production | High | Fail-fast at startup in production | Planned (Phase 1) | TBD | 2026-08-10 |
-| TD-017 | constants.dart with hardcoded local backend URL | Low | Migrate to --dart-define / env-based config | Planned (Phase 2) | TBD | 2026-08-10 |
+| TD-017 | constants.dart with hardcoded local backend URL | Low | constants.dart uses String.fromEnvironment() with sensible defaults (API_BASE_URL default http://localhost:3000, ENVIRONMENT default development). README.md documents `flutter run`/`build` commands with `--dart-define` flags for dev and production. No more --assume-unchanged hack. (A `scripts:` key in pubspec.yaml was considered but rejected — vanilla `pub`/`flutter pub` has no such feature, so it would be inert YAML; the real commands live in README.md instead.) | Resolved | TBD | 2026-08-10 |
 | TD-018 | Member-leave lifecycle not handled (orphaned assignedTo refs, no "Former member" UI) | High | Unassign pending tasks on leave/removal + Former member fallback in UI | Planned (Phase 2 — High severity deliberately deferred from Phase 1: low-frequency edge case; Phase 1 scope is stabilization-critical) | TBD | 2026-08-10 |
 | TD-019 | pubspec.lock ignored in frontend/.gitignore (non-reproducible builds) | High | Remove from .gitignore and commit the lockfile | Resolved (2026-08-10, Parte 0 chore) | TBD | 2026-08-10 |
 | TD-020 | Auth rate limiter had no test (skipped under NODE_ENV=test) | Medium | createApp({ authRateLimit }) opt-in + dedicated 429 test | Resolved (2026-08-10, commit B) | TBD | 2026-08-10 |
@@ -517,7 +517,7 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
   - `fix(frontend): fix socket reconnection on token refresh`
   - `refactor(backend): extract membership check to helper`
   - `chore: update dependencies`
-- NEVER use bulk git add on frontend/ or frontend/lib; always explicit file paths. frontend/lib/config/constants.dart carries a local URL override that must NEVER be committed (TD-017 covers making it env-based)
+- NEVER use bulk git add on frontend/ or frontend/lib; always explicit file paths — avoids accidentally sweeping in generated/build artifacts or the uncommitted local override on `project.pbxproj`. `frontend/lib/config/constants.dart` no longer carries a local override (TD-017 resolved via `--dart-define`)
 - **PR requirements:**
   - All tests pass
   - TypeScript typecheck passes (`npm run typecheck`)
@@ -529,15 +529,14 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 
 ### Local-only configuration (NEVER commit)
 
-Two files carry local overrides that must NEVER be committed:
-- `frontend/lib/config/constants.dart`: local URL override pointing to Railway or localhost for development
+One file carries a local override that must NEVER be committed:
 - `ios/Runner.xcodeproj/project.pbxproj`: Bundle Identifier changed to avoid Personal Team conflicts
 
-These files are protected with `git update-index --assume-unchanged`. To verify:
+This file is protected with `git update-index --assume-unchanged`. To verify:
 ```bash
 git ls-files -v | grep '^h'
 ```
-Should show both files with lowercase 'h' prefix (assume-unchanged flag).
+Should show only `project.pbxproj` with a lowercase 'h' prefix (assume-unchanged flag). `frontend/lib/config/constants.dart` no longer needs this protection — it reads its config via `--dart-define` instead of a hardcoded local value (TD-017).
 
 To temporarily allow commits (rare, only for legitimate changes):
 ```bash
@@ -634,6 +633,17 @@ Publishing the app first would make every list break for users until the backend
 
 ---
 
+## 🌍 Environments
+
+Frontend uses `String.fromEnvironment()` for configuration (TD-017), read in `frontend/lib/config/constants.dart`:
+- `API_BASE_URL`: backend host, no path suffix (default: `http://localhost:3000`)
+- `ENVIRONMENT`: `development` / `production` flag (default: `development`)
+- `SENTRY_DSN`: error tracking, independent define read directly in `services/sentry_service.dart` — see that file's doc comment for why it is deliberately not part of `AppConfig` (default: empty, no-op)
+
+Set via `--dart-define=KEY=value` flags on `flutter run` / `flutter build`. See `frontend/README.md` for the full commands. `constants.dart` needs no machine-local edits and carries no `--assume-unchanged` protection.
+
+---
+
 ## 🔄 CI/CD
 
 Two separate systems, deliberately not coupled by a branch-protection gate (see TD-034):
@@ -720,7 +730,6 @@ As of this commit, Phase 1 (Stabilization) is COMPLETE. All TD items in Phase 1 
 - TD-011: Granular task permissions
 - TD-012: ESLint + Prettier + no-floating-promises
 - TD-013: Household-timezone-aware recurrence
-- TD-017: Env-based frontend config via --dart-define
 - TD-018: Member-leave lifecycle
 - TD-028: Zod edge validation
 - TD-034: Deploy-order safety net
@@ -747,7 +756,7 @@ Las decisiones de producto (monetización, gamificación, UX de alto nivel) vive
 | `backend/src/middleware/error.middleware.ts` | Centralized error handling |
 | `backend/src/utils/response.ts` | `sendSuccess` / `sendError` helpers |
 | `backend/src/services/task.service.ts` | Task business logic + recurrence |
-| `frontend/lib/config/constants.dart` | API URLs and app config |
+| `frontend/lib/config/constants.dart` | API URLs and app config — set via `--dart-define` (API_BASE_URL/ENVIRONMENT), see README.md; no longer protected with --assume-unchanged (TD-017) |
 | `frontend/lib/data/datasources/remote/api_service.dart` | Dio client with auth interceptors |
 | `frontend/lib/services/socket_service.dart` | Socket.io singleton |
 | `frontend/lib/presentation/cubit/task_cubit.dart` | Task state management |
