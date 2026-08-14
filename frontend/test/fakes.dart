@@ -1,12 +1,15 @@
 import 'dart:async';
 
 import 'package:homesync/core/errors/failures.dart';
+import 'package:homesync/data/models/economy.dart';
 import 'package:homesync/data/models/household.dart';
 import 'package:homesync/data/models/member.dart';
 import 'package:homesync/data/models/paginated_response.dart';
+import 'package:homesync/data/models/pet.dart';
 import 'package:homesync/data/models/shopping_item.dart';
 import 'package:homesync/data/models/task.dart';
 import 'package:homesync/data/repositories/household_repository.dart';
+import 'package:homesync/data/repositories/pet_repository.dart';
 import 'package:homesync/data/repositories/shopping_repository.dart';
 import 'package:homesync/data/repositories/task_repository.dart';
 import 'package:homesync/services/cache_service.dart';
@@ -378,4 +381,158 @@ class FakeCacheService implements CacheService {
 
   @override
   dynamic noSuchMethod(Invocation invocation) => Future<void>.value();
+}
+
+Pet buildPet(
+  String id, {
+  String species = 'cat',
+  String name = 'Michi',
+  num hunger = 80,
+  num mood = 80,
+  DateTime? lastFedAt,
+  DateTime? lastPlayedAt,
+  List<String> cosmetics = const [],
+  String? activeCosmetic,
+}) {
+  return Pet(
+    id: id,
+    householdId: 'h1',
+    species: species,
+    name: name,
+    hunger: hunger,
+    mood: mood,
+    lastFedAt: lastFedAt,
+    lastPlayedAt: lastPlayedAt,
+    cosmetics: cosmetics,
+    activeCosmetic: activeCosmetic,
+  );
+}
+
+AdoptionRequest buildAdoptionRequest(
+  String id, {
+  String species = 'dog',
+  String name = 'Firulais',
+  String requestedBy = 'other-user',
+}) {
+  return AdoptionRequest(
+    id: id,
+    householdId: 'h1',
+    species: species,
+    name: name,
+    requestedBy: requestedBy,
+  );
+}
+
+/// Scriptable PetRepository (PDR-001 A3) — same hand-written-fake rationale
+/// as FakeShoppingRepository/FakeTaskRepository: a single-collaborator
+/// concrete class is clearer to implement directly than to mock.
+class FakePetRepository implements PetRepository {
+  Pet? pet;
+  AdoptionRequest? pendingRequest;
+  Economy economy;
+  final Failure? failFeedWith;
+  final Failure? failPlayWith;
+  final Failure? failGetPetWith;
+
+  int getPetCalls = 0;
+  int getPendingAdoptionCalls = 0;
+  int getEconomyCalls = 0;
+  int feedCalls = 0;
+  int playCalls = 0;
+  int confirmCalls = 0;
+  int cancelCalls = 0;
+  final List<Map<String, String>> adoptCalls = [];
+  final List<String> boughtCosmeticIds = [];
+  final List<String> activeCosmeticCalls = [];
+
+  FakePetRepository({
+    this.pet,
+    this.pendingRequest,
+    this.economy = const Economy(),
+    this.failFeedWith,
+    this.failPlayWith,
+    this.failGetPetWith,
+  });
+
+  @override
+  Future<Pet?> getPet(String householdId) async {
+    getPetCalls++;
+    if (failGetPetWith != null) throw failGetPetWith!;
+    return pet;
+  }
+
+  @override
+  Future<AdoptionRequest?> getPendingAdoption(String householdId) async {
+    getPendingAdoptionCalls++;
+    return pendingRequest;
+  }
+
+  @override
+  Future<Economy> getEconomy(String householdId) async {
+    getEconomyCalls++;
+    return economy;
+  }
+
+  @override
+  Future<AdoptionRequest> adopt(
+    String householdId, {
+    required String species,
+    required String name,
+  }) async {
+    adoptCalls.add({'species': species, 'name': name});
+    final request = buildAdoptionRequest('req1', species: species, name: name, requestedBy: 'me');
+    pendingRequest = request;
+    return request;
+  }
+
+  @override
+  Future<Pet> confirmAdopt(String householdId) async {
+    confirmCalls++;
+    final created = pet ??
+        buildPet('pet1',
+            species: pendingRequest?.species ?? 'cat', name: pendingRequest?.name ?? 'Mascota');
+    pet = created;
+    pendingRequest = null;
+    return created;
+  }
+
+  @override
+  Future<void> cancelAdopt(String householdId) async {
+    cancelCalls++;
+    pendingRequest = null;
+  }
+
+  @override
+  Future<Pet> feed(String householdId) async {
+    feedCalls++;
+    if (failFeedWith != null) throw failFeedWith!;
+    final fed = pet!.copyWith(hunger: 100, lastFedAt: DateTime.now());
+    pet = fed;
+    return fed;
+  }
+
+  @override
+  Future<Pet> play(String householdId) async {
+    playCalls++;
+    if (failPlayWith != null) throw failPlayWith!;
+    final played = pet!.copyWith(mood: 100, lastPlayedAt: DateTime.now());
+    pet = played;
+    return played;
+  }
+
+  @override
+  Future<Pet> buyCosmetic(String householdId, String cosmeticId) async {
+    boughtCosmeticIds.add(cosmeticId);
+    final updated = pet!.copyWith(cosmetics: [...pet!.cosmetics, cosmeticId]);
+    pet = updated;
+    return updated;
+  }
+
+  @override
+  Future<Pet> setActiveCosmetic(String householdId, String cosmeticId) async {
+    activeCosmeticCalls.add(cosmeticId);
+    final updated = pet!.copyWith(activeCosmetic: cosmeticId);
+    pet = updated;
+    return updated;
+  }
 }

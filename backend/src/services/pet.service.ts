@@ -58,6 +58,20 @@ export async function getPet(householdId: string): Promise<Record<string, unknow
   return serializePet(pet);
 }
 
+/**
+ * The household's pending adoption request (PDR-001 A3). Without this,
+ * nothing lets the OTHER member discover that a proposal exists at all —
+ * confirm/adopt would have to be attempted blind. 404 when there is none
+ * (or it expired), same convention as getPet.
+ */
+export async function getAdoptionRequest(householdId: string): Promise<IAdoptionRequest> {
+  const request = await getLiveAdoptionRequest(householdId);
+  if (!request) {
+    throw new AppError('No pending adoption request for this household', 404);
+  }
+  return request;
+}
+
 export interface RequestAdoptionInput {
   species: PetSpecies;
   name: string;

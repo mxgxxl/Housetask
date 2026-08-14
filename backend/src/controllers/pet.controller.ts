@@ -14,6 +14,15 @@ export async function get(req: AuthenticatedRequest, res: Response): Promise<voi
 }
 
 /**
+ * GET /api/households/:householdId/pet/adopt
+ * Returns the pending adoption request, if any. 404 when there is none.
+ */
+export async function getAdoptionRequest(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const request = await petService.getAdoptionRequest(req.params.householdId);
+  sendSuccess(res, request);
+}
+
+/**
  * POST /api/households/:householdId/pet/adopt
  * Starts a household adoption; broadcasts pet:adopt_requested.
  */

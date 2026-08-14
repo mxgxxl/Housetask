@@ -204,6 +204,35 @@ function petUrl(household: TestHousehold): string {
   return `/api/households/${household.id}/pet`;
 }
 
+describe('GET /api/households/:householdId/pet/adopt (PDR-001 A3)', () => {
+  it('should return 404 when there is no pending request', async () => {
+    const { user, household } = await setupHousehold();
+
+    const res = await request(app)
+      .get(`${petUrl(household)}/adopt`)
+      .set(authHeader(user.accessToken));
+
+    expect(res.status).toBe(404);
+  });
+
+  it('should let a DIFFERENT member see the pending request so they can decide whether to confirm', async () => {
+    const { admin, member, household } = await createHouseholdWithMember(app);
+    await request(app)
+      .post(`${petUrl(household)}/adopt`)
+      .set(authHeader(admin.accessToken))
+      .send({ species: 'dog', name: 'Firulais' });
+
+    const res = await request(app)
+      .get(`${petUrl(household)}/adopt`)
+      .set(authHeader(member.accessToken));
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.species).toBe('dog');
+    expect(res.body.data.name).toBe('Firulais');
+    expect(res.body.data.requestedBy).toBe(admin.id);
+  });
+});
+
 describe('POST /api/households/:householdId/pet/adopt', () => {
   it('should create a pending adoption request', async () => {
     const { user, household } = await setupHousehold();

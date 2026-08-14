@@ -15,6 +15,7 @@ router.use(authMiddleware);
 router.use(requireMembership);
 
 router.get('/', asyncHandler(petController.get));
+router.get('/adopt', asyncHandler(petController.getAdoptionRequest));
 
 // Resource-creating (Hard Rule 13): adopt creates an AdoptionRequest, confirm
 // creates the Pet — both get Idempotency-Key support like task/household

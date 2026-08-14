@@ -7,10 +7,12 @@ import 'data/datasources/local/auth_local_datasource.dart';
 import 'data/datasources/remote/api_service.dart';
 import 'data/repositories/auth_repository.dart';
 import 'data/repositories/household_repository.dart';
+import 'data/repositories/pet_repository.dart';
 import 'data/repositories/shopping_repository.dart';
 import 'data/repositories/task_repository.dart';
 import 'presentation/cubit/auth_cubit.dart';
 import 'presentation/cubit/household_cubit.dart';
+import 'presentation/cubit/pet_cubit.dart';
 import 'presentation/cubit/shopping_cubit.dart';
 import 'presentation/cubit/socket_cubit.dart';
 import 'presentation/cubit/task_cubit.dart';
@@ -32,6 +34,7 @@ class HomeSyncApp extends StatelessWidget {
     final householdRepo = HouseholdRepository(api, local);
     final taskRepo = TaskRepository(api);
     final shoppingRepo = ShoppingRepository(api);
+    final petRepo = PetRepository(api);
 
     final notifications = NotificationService();
     final socketService = SocketService();
@@ -42,6 +45,7 @@ class HomeSyncApp extends StatelessWidget {
         RepositoryProvider.value(value: householdRepo),
         RepositoryProvider.value(value: taskRepo),
         RepositoryProvider.value(value: shoppingRepo),
+        RepositoryProvider.value(value: petRepo),
       ],
       child: MultiBlocProvider(
         providers: [
@@ -54,6 +58,7 @@ class HomeSyncApp extends StatelessWidget {
           BlocProvider(create: (_) => HouseholdCubit(householdRepo)),
           BlocProvider(create: (_) => TaskCubit(taskRepo, notifications)),
           BlocProvider(create: (_) => ShoppingCubit(shoppingRepo)),
+          BlocProvider(create: (_) => PetCubit(petRepo)),
           BlocProvider(
             create: (ctx) => SocketCubit(
               socketService,

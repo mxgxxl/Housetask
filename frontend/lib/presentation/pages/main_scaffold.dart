@@ -2,13 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../config/theme.dart';
 import '../../services/cache_service.dart';
+import '../cubit/auth_cubit.dart';
 import '../cubit/household_cubit.dart';
+import '../cubit/pet_cubit.dart';
 import '../cubit/shopping_cubit.dart';
 import '../cubit/socket_cubit.dart';
 import '../cubit/task_cubit.dart';
 import 'calendar_page.dart';
 import 'home_page.dart';
 import 'household_setup_page.dart';
+import 'pet_page.dart';
 import 'profile_page.dart';
 import 'shopping_page.dart';
 import 'tasks_page.dart';
@@ -31,6 +34,7 @@ class _MainScaffoldState extends State<MainScaffold> {
     TasksPage(),
     CalendarPage(),
     ShoppingPage(),
+    PetPage(),
     ProfilePage(),
   ];
 
@@ -59,6 +63,15 @@ class _MainScaffoldState extends State<MainScaffold> {
     context.read<SocketCubit>().joinHousehold(householdId);
     // Generate any missed recurring occurrences for this household.
     context.read<TaskCubit>().catchUpRecurringTasks(householdId);
+
+    // PetCubit needs the current user id to tell "I proposed this
+    // adoption" apart from "someone else did" (PDR-001 A3) — it's read
+    // here rather than made a PetCubit dependency, keeping it independent
+    // like TaskCubit/ShoppingCubit.
+    final userId = context.read<AuthCubit>().state.user?.id;
+    if (userId != null) {
+      context.read<PetCubit>().load(householdId, userId);
+    }
   }
 
   @override
@@ -111,6 +124,13 @@ class _MainScaffoldState extends State<MainScaffold> {
                 icon: Icon(Icons.shopping_cart_outlined),
                 selectedIcon: Icon(Icons.shopping_cart),
                 label: 'Compras',
+              ),
+              NavigationDestination(
+                // PDR-001 A3: emoji placeholder art, same as the pet views
+                // themselves — no icon font glyph fits "our pet" as well as
+                // the literal paw.
+                icon: Text('🐾', style: TextStyle(fontSize: 22)),
+                label: 'Mascota',
               ),
               NavigationDestination(
                 icon: Icon(Icons.person_outline),
