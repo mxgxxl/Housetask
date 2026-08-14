@@ -475,7 +475,7 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 | TD-009 | No error tracking (Sentry not installed) | Medium | Integrate Sentry backend + frontend; backend + frontend with no-op fallback; security warnings (refresh replay) routed to Sentry as alert channel | Resolved (commits 1-2) | TBD | 2026-08-08 |
 | TD-010 | No database backups | Medium | Configure MongoDB Atlas backups | Planned (Phase 3) | TBD | 2026-08-08 |
 | TD-011 | No resource-level authorization on tasks (any member can delete) | High | Creator-or-admin rule for edit/delete; any member can complete tasks and purchase shopping items | Resolved (commit 1) | TBD | 2026-08-10 |
-| TD-012 | No ESLint/Prettier with no-console rule | Medium | Add lint config + pre-commit hook | Planned (Phase 2) | TBD | 2026-08-10 |
+| TD-012 | No ESLint/Prettier with no-console rule | Medium | ESLint 9 flat config with @typescript-eslint/no-floating-promises and no-misused-promises as error; Prettier for formatting; npm run lint runs in CI backend job. | Resolved | TBD | 2026-08-10 |
 | TD-013 | Recurrence computed in UTC without household timezone | Medium | Add household.timeZone + TZ-aware recurrence | Planned (Phase 2) | TBD | 2026-08-10 |
 | TD-014 | No idempotency on write POSTs (retry can duplicate) | High | Idempotency-Key header + Redis dedupe | Resolved (commit 2) | TBD | 2026-08-10 |
 | TD-015 | No express.json payload size limit | Medium | Add limit option | Planned (Phase 1) | TBD | 2026-08-10 |
@@ -728,7 +728,6 @@ As of this commit, Phase 1 (Stabilization) is COMPLETE. All TD items in Phase 1 
 - TD-007: Optimistic updates
 - TD-008: CI/CD with GitHub Actions
 - TD-011: Granular task permissions
-- TD-012: ESLint + Prettier + no-floating-promises
 - TD-013: Household-timezone-aware recurrence
 - TD-018: Member-leave lifecycle
 - TD-028: Zod edge validation
