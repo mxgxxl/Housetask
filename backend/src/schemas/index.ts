@@ -3,4 +3,4 @@
  * (task.schema.ts, household.schema.ts, auth.schema.ts), applied to routes
  * via `middleware/validate.ts`.
  */
-export {};
+export * from './task.schema';

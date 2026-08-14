@@ -608,6 +608,146 @@ describe('startsAt/endsAt — optional task duration (PDR-004)', () => {
   });
 });
 
+describe('Zod edge validation on task endpoints (TD-028)', () => {
+  it('should accept a fully-valid create payload with 201 (regression)', async () => {
+    const { user, household } = await setupHousehold();
+
+    const res = await request(app)
+      .post(await tasksUrl(household))
+      .set(authHeader(user.accessToken))
+      .send({
+        title: 'Regar las plantas',
+        description: 'Todas las macetas del balcón',
+        dueDate: daysFromNow(1),
+        priority: 'medium',
+        category: 'other',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.title).toBe('Regar las plantas');
+  });
+
+  it('should return 400 with a clear message when title is missing entirely', async () => {
+    const { user, household } = await setupHousehold();
+
+    const res = await request(app)
+      .post(await tasksUrl(household))
+      .set(authHeader(user.accessToken))
+      .send({ description: 'Sin título' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toBe('Task title is required');
+  });
+
+  it('should return 400 (not a 500 crash) when title is not a string', async () => {
+    // Before TD-028, the service called title.trim() directly — a number
+    // here would throw a TypeError past every AppError/Mongoose branch in
+    // errorHandler, surfacing as an uncaught 500. Zod now rejects the wrong
+    // type at the edge with a clean 400 before the service ever runs.
+    const { user, household } = await setupHousehold();
+
+    const res = await request(app)
+      .post(await tasksUrl(household))
+      .set(authHeader(user.accessToken))
+      .send({ title: 12345 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('should reject endsAt <= startsAt on create with a clear message (regression)', async () => {
+    const { user, household } = await setupHousehold();
+    const sameInstant = hoursFromNow(2);
+
+    const res = await request(app)
+      .post(await tasksUrl(household))
+      .set(authHeader(user.accessToken))
+      .send({ title: 'Rango inválido', startsAt: sameInstant, endsAt: sameInstant });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('endsAt must be after startsAt');
+    expect(res.body.details.fieldErrors.endsAt).toContain('endsAt must be after startsAt');
+  });
+
+  it('should reject isRecurring:true without a recurrenceRule', async () => {
+    const { user, household } = await setupHousehold();
+
+    const res = await request(app)
+      .post(await tasksUrl(household))
+      .set(authHeader(user.accessToken))
+      .send({ title: 'Serie sin regla', isRecurring: true });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('recurrenceRule is required when isRecurring is true');
+  });
+
+  it('should ignore startsAt/endsAt on a recurring task even when the range itself is backwards (regression: PDR-004 ignore, not reject)', async () => {
+    const { user, household } = await setupHousehold();
+    const sameInstant = hoursFromNow(2);
+
+    const res = await request(app)
+      .post(await tasksUrl(household))
+      .set(authHeader(user.accessToken))
+      .send({
+        title: 'Recurrente con rango invertido',
+        isRecurring: true,
+        recurrenceRule: { type: 'daily', interval: 1 },
+        startsAt: sameInstant,
+        endsAt: sameInstant,
+      });
+
+    // A backwards range is never even evaluated for a recurring task — the
+    // service clears startsAt/endsAt unconditionally (PDR-004) — so this
+    // must NOT be a 400, matching task.service.ts's existing behavior.
+    expect(res.status).toBe(201);
+    expect(res.body.data.startsAt).toBeUndefined();
+    expect(res.body.data.endsAt).toBeUndefined();
+  });
+
+  it('should return 400 for an invalid priority enum value', async () => {
+    const { user, household } = await setupHousehold();
+
+    const res = await request(app)
+      .post(await tasksUrl(household))
+      .set(authHeader(user.accessToken))
+      .send({ title: 'Prioridad inválida', priority: 'urgent' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('should return 400 when a PATCH sets title to an empty string (closes a pre-Zod gap)', async () => {
+    // Before TD-028, updateTask's sanitizeString call trimmed but never
+    // rejected an empty title on PATCH (only create did) — so this used to
+    // silently succeed and blank the title. Zod now applies the same
+    // non-empty rule to both endpoints.
+    const { user, household } = await setupHousehold();
+    const task = await createTask(user, household, { title: 'Título original' });
+
+    const res = await request(app)
+      .patch(`${await tasksUrl(household)}/${task.id}`)
+      .set(authHeader(user.accessToken))
+      .send({ title: '   ' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Task title is required');
+  });
+
+  it('should accept a valid partial PATCH with 200 (regression)', async () => {
+    const { user, household } = await setupHousehold();
+    const task = await createTask(user, household, { title: 'Tarea parcial' });
+
+    const res = await request(app)
+      .patch(`${await tasksUrl(household)}/${task.id}`)
+      .set(authHeader(user.accessToken))
+      .send({ priority: 'high' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.priority).toBe('high');
+  });
+});
+
 describe('PATCH /api/households/:householdId/tasks/:taskId/complete', () => {
   it('should set completedAt and completedBy when a task is completed', async () => {
     const { user, household } = await setupHousehold();
