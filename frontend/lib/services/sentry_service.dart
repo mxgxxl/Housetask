@@ -57,4 +57,23 @@ class SentryService {
       ),
     );
   }
+
+  /// Record a breadcrumb for a key user flow (login, completing a task,
+  /// adopting/feeding/buying for the pet — TD-037) — part of the timeline
+  /// Sentry attaches to whatever error is captured next, even when the flow
+  /// itself succeeds. No-op when [init] never activated Sentry, same as
+  /// [captureException].
+  static void addBreadcrumb(
+    String message, {
+    required String category,
+    Map<String, dynamic>? data,
+  }) {
+    if (!_initialized) return;
+
+    unawaited(
+      Sentry.addBreadcrumb(
+        Breadcrumb(message: message, category: category, data: data, level: SentryLevel.info),
+      ),
+    );
+  }
 }

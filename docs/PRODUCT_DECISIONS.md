@@ -4,7 +4,7 @@ Los PDRs registran decisiones de producto con Context / Decision / Consequences,
 
 ## PDR-001: Monetización F2P + mascota cooperativa del hogar
 
-**Status:** In progress (A1–A3 completos: economía base, adopción cooperativa + instantánea, pestaña Mascota en frontend, tienda de cosméticos; A4 pendiente: realtime SocketCubit + countdown en vivo)
+**Status:** Fase A complete (A1–A4): economía base, adopción cooperativa + instantánea, pestaña Mascota en frontend, tienda de cosméticos, y A4 complete: realtime pet updates via SocketCubit + live cooldown countdown
 
 - **Context:** App de gestión doméstica para parejas/hogares. Una suscripción tiene valor percibido bajo para este público y un paywall inicial mataría la adquisición. Se necesita retención más allá de la utilidad diaria y una vía de monetización sin fricción.
 - **Decision:**
@@ -25,6 +25,7 @@ Los PDRs registran decisiones de producto con Context / Decision / Consequences,
   - **Nota de economía (A2):** Adoption is two-step (request by member A, confirm by member B). Feed/play free with 1h cooldown (anti-farm of states, no coins). Cosmetics bought with coins (ledger negative), unique per household. Generic PATCH completion now grants coins (economy consistency).
   - **Nota A3:** Frontend pet tab with adoption (propose/confirm/cancel), care view (feed/play with cooldown), cosmetics shop. Art is emoji placeholder; Rive/Lottie deferred. Realtime socket refresh deferred to A4.
   - **Nota (adopción instantánea, hogares de 1 miembro):** Adoption is cooperative for 2+ member households (propose + confirm by a different member). Single-member households adopt instantly on propose (no confirmation step).
+  - **Nota A4 (complete):** SocketCubit forwards pet:adopt_requested/pet:adopted/pet:adopt_cancelled/pet:updated to PetCubit.applyRealtime (same wiring pattern as Task/Shopping), which reloads pet + economy — no manual pull-to-refresh needed. pet_page's care view ticks hunger/mood decay and the feed/play cooldown countdown once a second (Timer.periodic in a dedicated stateful subtree, disposed on unmount, no full-page rebuilds).
 
 ## PDR-002: Visibilidad cooperativa en flujos core
 

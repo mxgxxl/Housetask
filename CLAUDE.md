@@ -504,7 +504,8 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 | TD-034 | No deploy-order safety net between backend and Flutter app (versioned /health check). CI verification mitigates broken-push risk; deploy-order safety net still pending — CI (TD-008) surfaces a broken backend/frontend push before or alongside Railway's auto-deploy (which triggers on push regardless of CI outcome; no branch-protection gate ties the two together), it does not itself prevent an already-deployed backend from being incompatible with the app version still in users' hands | Medium | Add API version to /health and a client-side check that shows "update the app" when incompatible; requires API versioning (Phase 3) | Planned (Phase 3) | TBD | 2026-08-10 |
 | TD-035 | No server-side isRecurring filter; Recurrentes tab removed to avoid local filtering over paginated data | Medium | Add ?isRecurring=true backend filter and restore the tab | Planned (Phase 2) | TBD | 2026-08-11 |
 | TD-036 | Native scaffolding (gradlew, Runner.xcodeproj, res/, Assets.xcassets, etc.) was hand-curated and incomplete — the repo could not build without running flutter create manually first | High | Version the full native scaffolding, reconciled against the already-tracked com.homesync.app package/bundle id; template xcconfig files (Debug/Release) tracked so fresh clones build without flutter create; generated artifacts ignored | Resolved (commit 1) | TBD | 2026-08-11 |
-| TD-037 | Sentry hardening bundle: configurable tracesSampleRate via env, Idempotency-Key in frontend 5xx context for TD-033 correlation, AppError-500 and concurrent-request context tests | Low | Apply when enabling Sentry with a real DSN in production | Deferred (until Sentry goes live) | TBD | 2026-08-11 |
+| TD-037 | Sentry hardening: structured captureException tags (category/route/userId/householdId, see 🔔 Sentry Error Tracking & Alerts) on the backend 5xx handler, Mongo connection errors, socket auth/room failures, and economy grant failures; frontend breadcrumbs on login/task-complete/pet flows; dashboard alert-configuration guide | Medium | Configure the 2-3 alert rules documented in the guide once a real SENTRY_DSN is set in production | Resolved (commit 3) | TBD | 2026-08-15 |
+| TD-043 | Sentry hardening leftovers from TD-037's original scope, not covered by the TD-037 resolution above: configurable tracesSampleRate via env (still hardcoded 0.2 on both backend and frontend), Idempotency-Key in frontend 5xx context for TD-033 correlation, AppError-500 and concurrent-request context tests | Low | Apply when enabling Sentry with a real DSN in production | Deferred (until Sentry goes live) | TBD | 2026-08-15 |
 | TD-038 | sentry_flutter 8.14.2's Package.swift allows any sentry-cocoa 8.x (`from: "8.46.0"`) while its podspec pins exactly 8.46.0; SPM had resolved 8.58.4, which broke the plugin's Swift build (SentryBinaryImageCache API changed) | High | Pinned both Package.resolved files to 8.46.0 matching the podspec; re-pin on every sentry_flutter upgrade until upstream tightens the SPM constraint. Documented in `frontend/README.md`'s Known Issues. Filing the upstream request (against `getsentry/sentry-cocoa`, to tighten the Package.swift range so it can't drift past the podspec again) is a human action — requires a GitHub account and maintainer engagement — and is not something this pipeline can automate; tracked here as a manual follow-up, not automated work. | Resolved (commit 1); upstream report still open (manual follow-up) | TBD | 2026-08-11 |
 | TD-039 | Offline conflict resolution uses last-write-wins; concurrent edits on multiple devices can overwrite | Low | Evaluate CRDT or OT if user reports lost edits | Deferred (Phase 2, if conflicts become frequent) | TBD | 2026-08-11 |
 | TD-040 | flutter test hangs on loaded hosts — confirmed (2026-08-13) to reproduce even running test/widgets/offline_banner_test.dart alone, not only when combined with the rest of the suite as first documented. `frontend_server_aot`'s CPU time froze completely (observed stuck at a fixed value for 200s+) even after clearing `build/test_cache`'s incremental-compile cache, so it is a toolchain/host-level stall (likely resource pressure — observed alongside load average ~4 and <60MB free pages), not a test-code defect or a stale-cache artifact. task_tile_test.dart and assignee_selector_test.dart both pass cleanly, alone or together; only offline_banner_test.dart triggers it | Low | Investigate with --verbose on idle machine. CI runs Flutter tests sharded (top-level + each widgets file separately); offline_banner_test isolated with allow-failure until root-caused | Mitigated in CI (commit 1, TD-008); root cause still open | TBD | 2026-08-11 |
@@ -601,6 +602,31 @@ Swagger UI available at: `http://localhost:3000/api/docs`
 | SENTRY_DSN | Sentry error tracking DSN; empty or absent disables Sentry (no-op) | No |
 | CORS_ORIGINS | Comma-separated allowed origins (empty = allow *) | No |
 | NODE_ENV | development / production | No |
+
+---
+
+## 🔔 Sentry Error Tracking & Alerts (TD-037)
+
+Backend and frontend both report through the no-op-when-no-DSN pattern (SENTRY_DSN above). Every `captureServerError` call on the backend carries **structured tags** — indexed by Sentry, unlike free-form `extra` context, so they're what dashboard alert rules and issue filtering actually key off:
+
+| Tag | Meaning | Present when |
+|-----|---------|---------------|
+| `category` | Which hardened call site reported the error: `http_5xx`, `mongo_connection`, `socket_auth`, `socket_room`, or `economy_grant` | Always |
+| `route` | Express route path | `http_5xx` only |
+| `userId` | Authenticated user id | Known at the call site (e.g. not yet known on a failed socket handshake auth) |
+| `householdId` | Household id | Known at the call site (household-scoped HTTP routes/socket rooms) |
+
+Backend call sites: `middleware/error.middleware.ts` (the 5xx catch-all), `config/database.ts` (Mongo connection `error` event), `config/socket.ts` (handshake auth failure, `joinRoomSafely`/`leaveRoomSafely`), `services/economy.service.ts` (`grantCoins`'s unexpected-error path only — a duplicate-key or daily-cap outcome is expected, not reported).
+
+Frontend breadcrumbs (`SentryService.addBreadcrumb`, categories `auth`/`task`/`pet`) mark key flows — login, task completion, pet adopt/confirm/feed/play/cosmetic-buy — in the timeline attached to whatever error Sentry captures next, even when the flow itself succeeded.
+
+**Configuring alerts** (Sentry dashboard, not code — there is no alert-as-code API in use here): Project Settings → Alerts → Create Alert Rule, filtering on the tags above.
+
+1. **Mongo connection instability** — condition: `category` equals `mongo_connection`; action: notify when count > 3 in 5 minutes. A single blip is Mongoose retrying; a burst means the database is genuinely unreachable.
+2. **Socket auth failure spike** — condition: `category` equals `socket_auth`; action: notify when count > 20 in 15 minutes. Some background rate is normal (an access token expiring mid-session before the client refreshes and reconnects); a spike suggests a client-side token-refresh regression — a stolen/replayed *refresh* token is a different signal, already covered by `captureSecurityWarning` (see Authentication Flow).
+3. **5xx on a household-scoped route** — condition: `category` equals `http_5xx` AND `route` contains `/households/`; action: notify on any occurrence. This is the app's core surface; a 5xx there is never expected, unlike a best-effort background failure.
+
+`userId`/`householdId` are deliberately not alert *conditions* (too high-cardinality — one rule per household doesn't scale) but are useful for triaging an already-fired alert: search Sentry issues by `userId:<id>` to see everything one user hit.
 
 ---
 
@@ -736,7 +762,7 @@ As of this commit, Phase 1 (Stabilization) is COMPLETE. All TD items in Phase 1 
 - TD-018: Member-leave lifecycle
 - TD-034: Deploy-order safety net
 - TD-035: Server-side isRecurring filter
-- TD-037: Sentry hardening bundle
+- TD-043: Sentry hardening leftovers (tracesSampleRate via env, Idempotency-Key 5xx context, AppError-500 tests)
 - TD-038: sentry-cocoa upstream fix
 - TD-039: Per-field conflict resolution
 

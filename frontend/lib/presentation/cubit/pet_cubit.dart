@@ -5,6 +5,7 @@ import '../../core/errors/failures.dart';
 import '../../data/models/economy.dart';
 import '../../data/models/pet.dart';
 import '../../data/repositories/pet_repository.dart';
+import '../../services/sentry_service.dart';
 
 enum PetStatusUi { initial, loading, noPet, pendingRequest, hasPet, error }
 
@@ -135,11 +136,42 @@ class PetCubit extends Cubit<PetState> {
     await load(_householdId!, _currentUserId!);
   }
 
+  /// Apply an incoming realtime pet/adoption/economy socket event (PDR-001
+  /// A4: pet:adopt_requested, pet:adopted, pet:adopt_cancelled, pet:updated).
+  /// Pet/AdoptionRequest/Economy are each a single value per household — no
+  /// list to merge into like Task/ShoppingItem's applyRealtime — so every
+  /// pet:* event just means "reload", the same pattern SocketCubit already
+  /// uses for tasks:batch_created -> TaskCubit.refresh(). Returns a Future
+  /// (rather than fire-and-forget) so callers/tests can await completion;
+  /// SocketService's callback type is void, so the socket wiring itself
+  /// simply discards it, same as any other Dart void callback backed by an
+  /// async method.
+  ///
+  /// Same household guard as TaskCubit/ShoppingCubit.applyRealtime: a user
+  /// can belong to more than one household, so an event for a household
+  /// other than the one currently loaded is ignored.
+  Future<void> applyRealtime(String event, dynamic data) async {
+    if (data is Map) {
+      final map = Map<String, dynamic>.from(data);
+      if (_householdId != null &&
+          map['householdId'] != null &&
+          map['householdId'].toString() != _householdId) {
+        return;
+      }
+    }
+    await refresh();
+  }
+
   Future<void> proposeAdoption({required String species, required String name}) async {
     if (_householdId == null) return;
     emit(state.copyWith(actionInProgress: true, error: null));
     try {
       final request = await _repo.adopt(_householdId!, species: species, name: name);
+      SentryService.addBreadcrumb(
+        'Adoption proposed',
+        category: 'pet',
+        data: {'householdId': _householdId, 'species': species},
+      );
       emit(state.copyWith(
         status: PetStatusUi.pendingRequest,
         pendingRequest: request,
@@ -157,6 +189,11 @@ class PetCubit extends Cubit<PetState> {
     try {
       final pet = await _repo.confirmAdopt(_householdId!);
       final economy = await _repo.getEconomy(_householdId!);
+      SentryService.addBreadcrumb(
+        'Adoption confirmed',
+        category: 'pet',
+        data: {'householdId': _householdId, 'species': pet.species},
+      );
       emit(state.copyWith(
         status: PetStatusUi.hasPet,
         pet: pet,
@@ -189,6 +226,7 @@ class PetCubit extends Cubit<PetState> {
     emit(state.copyWith(actionInProgress: true, error: null));
     try {
       final pet = await _repo.feed(_householdId!);
+      SentryService.addBreadcrumb('Pet fed', category: 'pet', data: {'householdId': _householdId});
       emit(state.copyWith(pet: pet, actionInProgress: false));
     } on Failure catch (f) {
       emit(state.copyWith(actionInProgress: false, error: f.message));
@@ -200,6 +238,11 @@ class PetCubit extends Cubit<PetState> {
     emit(state.copyWith(actionInProgress: true, error: null));
     try {
       final pet = await _repo.play(_householdId!);
+      SentryService.addBreadcrumb(
+        'Played with pet',
+        category: 'pet',
+        data: {'householdId': _householdId},
+      );
       emit(state.copyWith(pet: pet, actionInProgress: false));
     } on Failure catch (f) {
       emit(state.copyWith(actionInProgress: false, error: f.message));
@@ -212,6 +255,11 @@ class PetCubit extends Cubit<PetState> {
     try {
       final pet = await _repo.buyCosmetic(_householdId!, cosmeticId);
       final economy = await _repo.getEconomy(_householdId!);
+      SentryService.addBreadcrumb(
+        'Cosmetic bought',
+        category: 'pet',
+        data: {'householdId': _householdId, 'cosmeticId': cosmeticId},
+      );
       emit(state.copyWith(pet: pet, economy: economy, actionInProgress: false));
     } on Failure catch (f) {
       emit(state.copyWith(actionInProgress: false, error: f.message));

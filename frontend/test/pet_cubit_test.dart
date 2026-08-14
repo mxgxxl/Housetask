@@ -158,4 +158,52 @@ void main() {
       expect(cubit.state.actionInProgress, isFalse);
     });
   });
+
+  // PDR-001 A4: SocketCubit wires each pet:* event straight to this method
+  // (mirroring TaskCubit/ShoppingCubit.applyRealtime's wiring), so these
+  // test it the same way task_cubit_test.dart/shopping_cubit_test.dart test
+  // applyRealtime — calling it directly with an event name + payload, no
+  // socket mock needed.
+  group('PetCubit.applyRealtime', () {
+    for (final event in [
+      'pet:adopt_requested',
+      'pet:adopted',
+      'pet:adopt_cancelled',
+      'pet:updated',
+    ]) {
+      test('$event refreshes pet + economy for the current household', () async {
+        final repo = FakePetRepository(pet: buildPet('p1', hunger: 60));
+        final cubit = PetCubit(repo);
+        await cubit.load('h1', 'me');
+        expect(repo.getPetCalls, 1);
+        expect(repo.getEconomyCalls, 1);
+
+        await cubit.applyRealtime(event, {'householdId': 'h1'});
+
+        expect(repo.getPetCalls, 2);
+        expect(repo.getEconomyCalls, 2);
+      });
+    }
+
+    test('ignores an event for a different household', () async {
+      final repo = FakePetRepository(pet: buildPet('p1'));
+      final cubit = PetCubit(repo);
+      await cubit.load('h1', 'me');
+      expect(repo.getPetCalls, 1);
+
+      await cubit.applyRealtime('pet:updated', {'householdId': 'some-other-household'});
+
+      expect(repo.getPetCalls, 1);
+    });
+
+    test('refreshes when the payload has no householdId at all', () async {
+      final repo = FakePetRepository(pet: buildPet('p1'));
+      final cubit = PetCubit(repo);
+      await cubit.load('h1', 'me');
+
+      await cubit.applyRealtime('pet:updated', <String, dynamic>{});
+
+      expect(repo.getPetCalls, 2);
+    });
+  });
 }

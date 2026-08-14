@@ -27,13 +27,35 @@ export function initSentry(): void {
 }
 
 /**
- * Report an unexpected server error (5xx). No-op when Sentry was never
- * initialized, so call sites never need to guard on whether a DSN is set.
+ * Structured tags attached to every captureServerError report (TD-037).
+ * Tags — unlike free-form `extra` context — are indexed by Sentry, so they
+ * are what dashboard alert rules (e.g. "category:mongo_connection count >
+ * N in 5m") and issue grouping/filtering actually key off. `category`
+ * discriminates which of the hardened call sites reported the error;
+ * `route`/`userId`/`householdId` are attached whenever known at the call
+ * site, omitted otherwise (e.g. a Mongo connection error has none of the
+ * three — it isn't tied to a single request).
  */
-export function captureServerError(error: unknown, context?: Record<string, unknown>): void {
+export interface ServerErrorTags {
+  category: 'http_5xx' | 'mongo_connection' | 'socket_auth' | 'socket_room' | 'economy_grant';
+  route?: string;
+  userId?: string;
+  householdId?: string;
+  // Sentry's own tags type is an index signature (Record<string, Primitive>);
+  // matched here so passing a ServerErrorTags value through structurally
+  // satisfies it without a cast at the call site.
+  [key: string]: string | undefined;
+}
+
+/**
+ * Report an unexpected server error with structured tags. No-op when
+ * Sentry was never initialized, so call sites never need to guard on
+ * whether a DSN is set.
+ */
+export function captureServerError(error: unknown, tags: ServerErrorTags): void {
   if (!Sentry.isInitialized()) return;
 
-  Sentry.captureException(error, context ? { extra: context } : undefined);
+  Sentry.captureException(error, { tags });
 }
 
 /**

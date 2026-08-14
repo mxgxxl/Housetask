@@ -66,6 +66,7 @@ class HomeSyncApp extends StatelessWidget {
               ctx.read<TaskCubit>(),
               ctx.read<ShoppingCubit>(),
               ctx.read<HouseholdCubit>(),
+              ctx.read<PetCubit>(),
             ),
           ),
         ],

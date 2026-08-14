@@ -7,6 +7,7 @@ import '../../data/models/task.dart';
 import '../../data/repositories/task_repository.dart';
 import '../../services/connectivity_service.dart';
 import '../../services/notification_service.dart';
+import '../../services/sentry_service.dart';
 
 /// Shown once (via BlocListener) after a mutation the repository could only
 /// perform optimistically, offline (TD-003).
@@ -544,6 +545,11 @@ class TaskCubit extends Cubit<TaskState> {
     if (_householdId == null) return;
     try {
       final task = await _repo.complete(_householdId!, taskId);
+      SentryService.addBreadcrumb(
+        'Task completed',
+        category: 'task',
+        data: {'householdId': _householdId, 'synced': task.isSynced},
+      );
       _upsert(task, offlineNotice: task.isSynced ? null : kOfflineNoticeMessage);
       await _notifications.cancelTaskReminder(taskId);
       await _notifications.cancelTaskStartReminder(taskId);

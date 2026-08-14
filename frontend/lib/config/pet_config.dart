@@ -39,6 +39,13 @@ const int kFeedCooldownHours = 1;
 /// Mirrors backend PLAY_COOLDOWN_HOURS.
 const int kPlayCooldownHours = 1;
 
+/// Mirrors backend HUNGER_DECAY_PER_HOUR — used for the live countdown's
+/// client-side decay extrapolation (PDR-001 A4, see pet_page.dart).
+const int kHungerDecayPerHour = 2;
+
+/// Mirrors backend MOOD_DECAY_PER_HOUR.
+const int kMoodDecayPerHour = 2;
+
 /// Species → placeholder emoji (PDR-001 A3: art is emoji, Rive/Lottie later).
 const Map<String, String> kSpeciesEmoji = {
   'cat': '🐱',

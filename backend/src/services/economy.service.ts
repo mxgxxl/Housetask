@@ -3,6 +3,7 @@ import { EconomyLedgerModel, EconomyReason, IEconomyLedgerEntry } from '../model
 import { IPet } from '../models/Pet';
 import { DAILY_CAP, HUNGER_DECAY_PER_HOUR, MOOD_DECAY_PER_HOUR } from '../config/economy';
 import { logger } from '../utils/logger';
+import { captureServerError } from '../utils/sentry';
 
 function isDuplicateKeyError(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { code?: number }).code === 11000;
@@ -111,6 +112,11 @@ export async function grantCoins(
       return 0;
     }
     logger.error('grantCoins failed (best-effort, not rethrown)', (err as Error).message);
+    // A duplicate key (above) is the expected "already granted" outcome,
+    // not a failure — only genuinely unexpected errors reach Sentry here
+    // (TD-037). Best-effort: grantCoins never rethrows, so a silent Sentry
+    // failure must not either.
+    captureServerError(err, { category: 'economy_grant', householdId });
     return 0;
   }
 }
