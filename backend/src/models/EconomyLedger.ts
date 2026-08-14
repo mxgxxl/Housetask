@@ -15,19 +15,24 @@ export type EconomyReason =
  * source of truth and can't drift out of sync with a cached total.
  *
  * The unique (householdId, refId, reason) index is what makes granting
- * idempotent: a second `grantCoins` call for the same task/purchase and
- * reason hits a duplicate-key error instead of a second row (PDR-001).
- * This currently only covers `task_complete`/`purchase_complete`, the only
- * reasons wired to a `refId` this round — see economy.service.ts's
- * `grantCoins` doc comment for what a future refId-less reason (feed/play/
- * cosmetic_buy/adoption_bonus) will need before it can reuse this index.
+ * idempotent: a second `grantCoins` call for the same task/purchase/
+ * cosmetic/etc. and reason hits a duplicate-key error instead of a second
+ * row (PDR-001).
+ *
+ * `refId` is a plain string, not an ObjectId reference: `task_complete`/
+ * `purchase_complete` pass a real Task/ShoppingItem id, but
+ * `cosmetic_buy` passes a catalog id (e.g. `"hat"`, config/economy.ts's
+ * COSMETICS) and `adoption_bonus` passes a synthesized
+ * `adoption-<householdId>` key (PDR-001 A2) — neither is a valid ObjectId
+ * hex string, so a strict ObjectId type would throw a cast error on every
+ * A2 grant. String is the common type that fits every reason.
  */
 export interface IEconomyLedgerEntry extends Document {
   _id: Types.ObjectId;
   householdId: Types.ObjectId;
   amount: number;
   reason: EconomyReason;
-  refId?: Types.ObjectId;
+  refId?: string;
   createdAt: Date;
 }
 
@@ -45,7 +50,7 @@ const economyLedgerSchema = new Schema<IEconomyLedgerEntry>(
       enum: ['task_complete', 'purchase_complete', 'feed', 'play', 'cosmetic_buy', 'adoption_bonus'],
       required: true,
     },
-    refId: { type: Schema.Types.ObjectId },
+    refId: { type: String },
   },
   { timestamps: { createdAt: true, updatedAt: false } },
 );

@@ -6,3 +6,4 @@
 export * from './task.schema';
 export * from './household.schema';
 export * from './auth.schema';
+export * from './pet.schema';

@@ -65,14 +65,16 @@ export async function getBalance(householdId: string): Promise<number> {
  * a reward is a bonus, not a dependency). Every failure path — duplicate
  * key, cap reached, unexpected error — returns 0.
  *
- * @param refId The task or purchase id this grant is tied to. Required in
- *   practice today: only `task_complete`/`purchase_complete` are granted
- *   (task.service.ts/shopping.service.ts), and both always pass one. A
- *   future `feed`/`play`/`cosmetic_buy`/`adoption_bonus` grant with no
- *   natural refId will need one synthesized (e.g. a UTC-day bucket key) —
- *   the unique index requires refId+reason together to be unique, not
- *   reason alone, so omitting it would let only one such grant ever happen
- *   per household.
+ * @param refId The task/purchase/cosmetic id this entry is tied to (PDR-001
+ *   A1 used it only for `task_complete`/`purchase_complete`; A2 adds
+ *   `adoption_bonus` with a synthetic `adoption-<householdId>` key and
+ *   `cosmetic_buy` with the cosmetic's id — both always pass one). A future
+ *   `feed`/`play` grant with no natural refId will need one synthesized
+ *   too — the unique index requires refId+reason together to be unique,
+ *   not reason alone, so omitting it would let only one such grant ever
+ *   happen per household.
+ * @param amount Positive to earn, negative to spend (e.g. `cosmetic_buy`).
+ *   A spend is never blocked by the daily cap — see below.
  * @returns The amount actually granted (0 if capped, duplicate, or failed).
  */
 export async function grantCoins(
@@ -82,9 +84,15 @@ export async function grantCoins(
   refId?: string,
 ): Promise<number> {
   try {
-    const dailyEarned = await getDailyEarned(householdId);
-    if (dailyEarned >= DAILY_CAP) {
-      return 0;
+    // The daily cap only throttles EARNING. A spend (negative amount, e.g.
+    // cosmetic_buy) must always be allowed regardless of today's earned
+    // total — otherwise a household that hit its cap could never spend
+    // coins it already has, which isn't anti-farm, just a broken shop.
+    if (amount > 0) {
+      const dailyEarned = await getDailyEarned(householdId);
+      if (dailyEarned >= DAILY_CAP) {
+        return 0;
+      }
     }
 
     const entry: Partial<IEconomyLedgerEntry> = {
@@ -93,7 +101,7 @@ export async function grantCoins(
       reason,
     };
     if (refId) {
-      entry.refId = new Types.ObjectId(refId);
+      entry.refId = refId;
     }
 
     await EconomyLedgerModel.create(entry);
@@ -155,7 +163,7 @@ export async function getRecentTransactions(householdId: string): Promise<Recent
   return entries.map((entry) => ({
     amount: entry.amount,
     reason: entry.reason,
-    refId: entry.refId ? entry.refId.toString() : null,
+    refId: entry.refId ?? null,
     createdAt: entry.createdAt,
   }));
 }
