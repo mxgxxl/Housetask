@@ -189,10 +189,20 @@ class ApiService {
     // conflict) and reporting every one would bury genuine server failures
     // under client noise — the same rule the backend applies in reverse.
     if (status != null && status >= 500) {
+      // Same header the repositories set (a uuid v4, see e.g.
+      // task_repository.dart's _uuid.v4()) — when present, it lets a 5xx in
+      // Sentry be correlated with the exact write that failed and with the
+      // backend's own idempotency-store logs for TD-033 (fail-open metrics).
+      // Not every request carries one (GET/DELETE never do).
+      final idempotencyKey = e.requestOptions.headers['Idempotency-Key'] as String?;
       SentryService.captureException(
         e,
         stackTrace: e.stackTrace,
-        context: {'status': status, 'path': e.requestOptions.path},
+        context: {
+          'status': status,
+          'path': e.requestOptions.path,
+          if (idempotencyKey != null) 'idempotencyKey': idempotencyKey,
+        },
       );
     }
 

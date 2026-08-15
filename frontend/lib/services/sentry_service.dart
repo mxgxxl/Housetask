@@ -25,13 +25,16 @@ class SentryService {
       return;
     }
 
+    const environment = String.fromEnvironment('ENVIRONMENT', defaultValue: 'development');
+
     await SentryFlutter.init((options) {
       options.dsn = dsn;
-      options.environment = const String.fromEnvironment(
-        'ENVIRONMENT',
-        defaultValue: 'development',
-      );
-      options.tracesSampleRate = 0.2;
+      options.environment = environment;
+      // TD-043: performance tracing is production-only — sampling in
+      // development would trace local noise a shared Sentry project should
+      // never see. 0.2 in production matches the backend's rate
+      // (backend/src/utils/sentry.ts).
+      options.tracesSampleRate = environment == 'production' ? 0.2 : 0.0;
     });
     _initialized = true;
   }
