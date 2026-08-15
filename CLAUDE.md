@@ -331,6 +331,8 @@ RefreshToken spread `jsonSchemaOptions` from `utils/toJSON.ts`, which exposes a 
 | isRecurring | Boolean | default false |
 | recurrenceRule | IRecurrenceRule | embedded subdocument, default `undefined` |
 | parentTaskId | ObjectId | ref Task, default `null`, indexed — links generated occurrences to their series |
+| isDeleted | Boolean | default `false`, indexed — soft delete (TD-046); DELETE sets this instead of removing the document |
+| deletedAt | Date | set when `isDeleted` is set true, cleared on restore |
 | createdAt / updatedAt | Date | from `timestamps: true` |
 
 **Embedded `IRecurrenceRule`** (`_id: false`):
@@ -342,7 +344,7 @@ RefreshToken spread `jsonSchemaOptions` from `utils/toJSON.ts`, which exposes a 
 | dayOfMonth | Number | 1–31 |
 
 **Indexes:** `{ householdId: 1, status: 1, dueDate: 1 }` (compound), plus the single-field
-indexes on `householdId`, `status` and `parentTaskId`.
+indexes on `householdId`, `status`, `parentTaskId` and `isDeleted` (TD-046).
 
 ### ShoppingItem (`shoppingitems`)
 | Field | Type | Notes |
@@ -513,6 +515,7 @@ Track all identified technical debt here. Format: ID | Description | Severity | 
 | TD-042 | Flutter Built-in Kotlin migration — Flutter 3.44+ is migrating to Built-in Kotlin. Plugins that apply Kotlin Gradle Plugin classically (like sentry_flutter 8.x) fail with "Language version 1.6 is no longer supported" when Kotlin is 2.3.20+. sentry_flutter upgraded 8.14.2 → 9.27.0, which drops the hardcoded languageVersion="1.6" override (still applies classic KGP unconditionally, unlike package_info_plus's AGP-major-version guard — residual, not eliminated). No other project dependency (flutter_local_notifications, connectivity_plus, package_info_plus, shared_preferences_android) applies classic KGP | Low | Keep sentry_flutter and other Kotlin-using plugins updated to versions that support Built-in Kotlin or Kotlin 2.x with language version 2.0+ | Resolved | TBD | 2026-08-14 |
 | TD-044 | CI only ran test/ (top-level) plus 2 hand-picked test/widgets/ files — new widget test files (e.g. pet_page_test.dart, pet_shop_page_test.dart) silently got no CI coverage at all unless someone remembered to add a shard step for them | Medium | Single blocking step runs every `*_test.dart` under test/ and test/widgets/ found via `find`, except offline_banner_test.dart (kept isolated with continue-on-error, TD-040); new test files are covered automatically, no workflow edit needed | Resolved (commit 1) | TBD | 2026-08-15 |
 | TD-045 | CacheService.saveTasks reemplaza en vez de mergear la caché offline; una carga con filtro de estado puede evictar tareas de otros estados. Descubierto en round TD-035; el código nuevo lo evita usando fetch sin filtro, pero el comportamiento del repository queda pendiente de fix. | Medium | Merge cached tasks by id per household instead of replacing the whole set on every `cursor == null` response, so a status-filtered first page (Pendientes/Completadas) stops evicting other statuses from the offline cache | Open | TBD | 2026-08-15 |
+| TD-046 | Tasks were hard-deleted: DELETE /tasks/:id removed the document outright, so an accidental (or malicious) delete was unrecoverable. Filed as TD-046, not "TD-009" — the originating task/branch referred to this as TD-009, but that id already denotes the resolved Sentry integration above; reusing it here would have overwritten that entry instead of adding a new one. | High | Soft delete: Task gains `isDeleted` (indexed, default `false`) + `deletedAt`. `listTasks` excludes `isDeleted:true` by default with an opt-in `includeDeleted` param for the trash view; `updateTask`/`completeTask` 404 on a deleted task. DELETE sets `isDeleted`/`deletedAt` instead of removing the document (idempotent no-op on a retry against an already-deleted task); new `POST /tasks/:id/restore` clears both, restricted to the task's creator or a household admin (TD-011's rule). Frontend: `Task.deletedAt` added alongside the pre-existing `isDeleted` (which already covered the offline-pending-delete case — now doubles as the server's real soft-delete flag on an `includeDeleted=true` fetch); new Papelera view reached from an AppBar action on Tareas, listing deleted tasks with a Restaurar button, walking the paginated list client-side and filtering to `isDeleted` rows — same pattern TD-035's Recurrentes tab established, instead of a dedicated backend endpoint. Compound sort indexes (TD-026) were deliberately left unchanged (no `isDeleted` in their key) to keep this change minimal; worth revisiting if a household accumulates enough deleted tasks to matter. | Resolved (commits 1-2) | TBD | 2026-08-15 |
 
 ---
 
