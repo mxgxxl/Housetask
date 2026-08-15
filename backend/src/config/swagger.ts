@@ -121,6 +121,8 @@ export const swaggerSpec: Record<string, unknown> = {
           dueDate: { type: 'string', format: 'date-time', nullable: true },
           isRecurring: { type: 'boolean' },
           parentTaskId: { type: 'string', nullable: true },
+          isDeleted: { type: 'boolean' },
+          deletedAt: { type: 'string', format: 'date-time', nullable: true },
         },
       },
       ShoppingItem: {
@@ -386,6 +388,14 @@ export const swaggerSpec: Record<string, unknown> = {
             description: 'Opaque cursor from a previous nextCursor; malformed responds 400',
             schema: { type: 'string' },
           },
+          {
+            name: 'includeDeleted',
+            in: 'query',
+            required: false,
+            description:
+              'When "true" (TD-009), includes soft-deleted tasks in the page instead of excluding them. Used by the trash view.',
+            schema: { type: 'boolean', default: false },
+          },
         ],
         responses: {
           '200': {
@@ -442,6 +452,22 @@ export const swaggerSpec: Record<string, unknown> = {
           { name: 'taskId', in: 'path', required: true, schema: { type: 'string' } },
         ],
         responses: { '200': { description: 'Completed' } },
+      },
+    },
+    '/households/{householdId}/tasks/{taskId}/restore': {
+      post: {
+        tags: ['Tasks'],
+        summary: 'Restore a soft-deleted task (TD-009; creator or admin only)',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'taskId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          '200': { description: 'Restored (or already-active — idempotent no-op)' },
+          '403': { description: 'Not the task creator or a household admin' },
+          '404': { description: 'Task not found' },
+        },
       },
     },
     '/households/{householdId}/tasks/generate-instances': {

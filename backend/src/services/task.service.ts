@@ -217,6 +217,14 @@ export interface ListTasksOptions {
   cursor?: string;
   from?: Date;
   to?: Date;
+  /**
+   * When true, does NOT filter out soft-deleted tasks (TD-009) — the page
+   * comes back with both active and deleted tasks mixed in, sorted the same
+   * as always. Used by the frontend's trash view, which walks the full list
+   * client-side and keeps only isDeleted:true rows (same pattern as TD-035's
+   * Recurrentes tab), rather than a dedicated backend endpoint.
+   */
+  includeDeleted?: boolean;
 }
 
 /**
@@ -251,6 +259,9 @@ export async function listTasks(
 ): Promise<Page<ITask>> {
   const baseFilter: Record<string, unknown> = { householdId: new Types.ObjectId(householdId) };
   if (options.status) baseFilter.status = options.status;
+  // $ne (rather than `false`) also matches documents from before this field
+  // existed, which have no isDeleted key at all.
+  if (!options.includeDeleted) baseFilter.isDeleted = { $ne: true };
 
   const dateFilter = dueDateWindowFilter(options.from, options.to);
   const countFilter = dateFilter ? { ...baseFilter, ...dateFilter } : baseFilter;
@@ -364,7 +375,9 @@ export async function updateTask(
   memberIds: string[],
   memberRole: Role,
 ): Promise<ITask> {
-  const task = await TaskModel.findOne({ _id: taskId, householdId });
+  // Excludes soft-deleted tasks (TD-009): a deleted task is not editable —
+  // restore it first via POST .../restore.
+  const task = await TaskModel.findOne({ _id: taskId, householdId, isDeleted: { $ne: true } });
   if (!task) {
     throw new AppError('Task not found', 404);
   }
@@ -467,7 +480,8 @@ export async function completeTask(
   userId: string,
   taskId: string,
 ): Promise<ITask> {
-  const task = await TaskModel.findOne({ _id: taskId, householdId });
+  // Excludes soft-deleted tasks (TD-009), same as updateTask.
+  const task = await TaskModel.findOne({ _id: taskId, householdId, isDeleted: { $ne: true } });
   if (!task) {
     throw new AppError('Task not found', 404);
   }
@@ -508,11 +522,14 @@ export async function completeTask(
 }
 
 /**
- * Hard-delete a task and broadcast `task:deleted`.
+ * Soft-delete a task (TD-009) and broadcast `task:deleted`.
  *
  * Restricted to the task's creator or a household admin (TD-011, Hard Rule
- * 17) — fetches the task first (rather than delete-by-filter) so the
- * permission check runs before anything is removed.
+ * 17) — fetches the task first (rather than update-by-filter) so the
+ * permission check runs before anything is mutated. The lookup deliberately
+ * does NOT exclude already-deleted tasks (unlike updateTask/completeTask):
+ * deleting an already-deleted task must be a safe no-op, not a 404, so a
+ * retried/duplicate DELETE request behaves identically to the first one.
  */
 export async function deleteTask(
   householdId: string,
@@ -528,8 +545,52 @@ export async function deleteTask(
     throw new AppError('You do not have permission to modify this task', 403);
   }
 
-  await task.deleteOne();
+  // Idempotent no-op: already deleted, nothing changes and no duplicate
+  // event is broadcast (matches the "don't re-emit on replay" spirit of
+  // ADR-007's idempotency handling).
+  if (task.isDeleted) {
+    return;
+  }
+
+  task.isDeleted = true;
+  task.deletedAt = new Date();
+  await task.save();
   emitToHousehold(householdId, 'task:deleted', { id: taskId, householdId });
+}
+
+/**
+ * Restore a soft-deleted task (TD-009) and broadcast `task:updated`.
+ *
+ * Restricted to the task's creator or a household admin, same rule as
+ * edit/delete (TD-011, Hard Rule 17). Restoring a task that is not
+ * (or no longer) deleted is a safe no-op rather than an error, for the same
+ * retry-safety reason as deleteTask's no-op branch.
+ */
+export async function restoreTask(
+  householdId: string,
+  userId: string,
+  taskId: string,
+  memberRole: Role,
+): Promise<ITask> {
+  const task = await TaskModel.findOne({ _id: taskId, householdId });
+  if (!task) {
+    throw new AppError('Task not found', 404);
+  }
+  if (!canModifyTask(task, userId, memberRole)) {
+    throw new AppError('You do not have permission to modify this task', 403);
+  }
+
+  if (task.isDeleted) {
+    task.isDeleted = false;
+    task.deletedAt = undefined;
+    await task.save();
+    await populated(task);
+    emitToHousehold(householdId, 'task:updated', task.toJSON());
+    return task;
+  }
+
+  await populated(task);
+  return task;
 }
 
 const MAX_CATCHUP_ITERATIONS = 52; // cap generation at ~1 year per series

@@ -34,6 +34,8 @@ interface TaskResponse {
   completedBy?: { id: string; name?: string };
   isRecurring: boolean;
   parentTaskId?: string | null;
+  isDeleted?: boolean;
+  deletedAt?: string;
 }
 
 async function tasksUrl(household: TestHousehold): Promise<string> {
@@ -1000,6 +1002,171 @@ describe('DELETE /api/households/:householdId/tasks/:taskId', () => {
       .get(await tasksUrl(household))
       .set(authHeader(user.accessToken));
     expect(list.body.data.items).toEqual([]);
+  });
+});
+
+describe('Soft delete (TD-009)', () => {
+  it('should mark the task deleted instead of removing it, and exclude it from listings by default', async () => {
+    const { user, household } = await setupHousehold();
+    const task = await createTask(user, household, { title: 'Se va a borrar' });
+
+    const del = await request(app)
+      .delete(`${await tasksUrl(household)}/${task.id}`)
+      .set(authHeader(user.accessToken));
+    expect(del.status).toBe(200);
+
+    const defaultList = await request(app)
+      .get(await tasksUrl(household))
+      .set(authHeader(user.accessToken));
+    expect(defaultList.body.data.items).toEqual([]);
+
+    // The document still exists — includeDeleted=true surfaces it, marked.
+    const withDeleted = await request(app)
+      .get(await tasksUrl(household))
+      .query({ includeDeleted: 'true' })
+      .set(authHeader(user.accessToken));
+    expect(withDeleted.status).toBe(200);
+    const found = (withDeleted.body.data.items as TaskResponse[]).find((t) => t.id === task.id);
+    expect(found).toBeDefined();
+    expect(found?.isDeleted).toBe(true);
+    expect(found?.deletedAt).toBeDefined();
+  });
+
+  it('should also exclude soft-deleted tasks from a status-filtered listing', async () => {
+    const { user, household } = await setupHousehold();
+    const task = await createTask(user, household, { title: 'Pendiente borrada' });
+    await request(app)
+      .delete(`${await tasksUrl(household)}/${task.id}`)
+      .set(authHeader(user.accessToken));
+
+    const res = await request(app)
+      .get(await tasksUrl(household))
+      .query({ status: 'pending' })
+      .set(authHeader(user.accessToken));
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.items).toEqual([]);
+  });
+
+  it('should be a no-op (still 200, unchanged deletedAt) when deleting an already-deleted task', async () => {
+    const { user, household } = await setupHousehold();
+    const task = await createTask(user, household, { title: 'Doble borrado' });
+
+    const first = await request(app)
+      .delete(`${await tasksUrl(household)}/${task.id}`)
+      .set(authHeader(user.accessToken));
+    expect(first.status).toBe(200);
+
+    const afterFirst = await request(app)
+      .get(await tasksUrl(household))
+      .query({ includeDeleted: 'true' })
+      .set(authHeader(user.accessToken));
+    const deletedAtFirst = (afterFirst.body.data.items as TaskResponse[]).find(
+      (t) => t.id === task.id,
+    )?.deletedAt;
+    expect(deletedAtFirst).toBeDefined();
+
+    const second = await request(app)
+      .delete(`${await tasksUrl(household)}/${task.id}`)
+      .set(authHeader(user.accessToken));
+    expect(second.status).toBe(200);
+
+    const afterSecond = await request(app)
+      .get(await tasksUrl(household))
+      .query({ includeDeleted: 'true' })
+      .set(authHeader(user.accessToken));
+    const items = afterSecond.body.data.items as TaskResponse[];
+    // No duplicate row, and the original deletedAt is untouched.
+    expect(items.filter((t) => t.id === task.id)).toHaveLength(1);
+    expect(items.find((t) => t.id === task.id)?.deletedAt).toBe(deletedAtFirst);
+  });
+
+  it('should return 404 for PATCH/complete on a soft-deleted task', async () => {
+    const { user, household } = await setupHousehold();
+    const task = await createTask(user, household, { title: 'Borrada' });
+    await request(app)
+      .delete(`${await tasksUrl(household)}/${task.id}`)
+      .set(authHeader(user.accessToken));
+
+    const patch = await request(app)
+      .patch(`${await tasksUrl(household)}/${task.id}`)
+      .set(authHeader(user.accessToken))
+      .send({ title: 'Intento de editar' });
+    expect(patch.status).toBe(404);
+
+    const complete = await request(app)
+      .patch(`${await tasksUrl(household)}/${task.id}/complete`)
+      .set(authHeader(user.accessToken));
+    expect(complete.status).toBe(404);
+  });
+});
+
+describe('POST /api/households/:householdId/tasks/:taskId/restore (TD-009)', () => {
+  it('should return 404 for a task id that does not exist', async () => {
+    const { user, household } = await setupHousehold();
+    const missingId = new Types.ObjectId().toString();
+
+    const res = await request(app)
+      .post(`${await tasksUrl(household)}/${missingId}/restore`)
+      .set(authHeader(user.accessToken));
+
+    expect(res.status).toBe(404);
+  });
+
+  it('should restore a deleted task so it reappears in the default listing', async () => {
+    const { user, household } = await setupHousehold();
+    const task = await createTask(user, household, { title: 'Resucitar' });
+    await request(app)
+      .delete(`${await tasksUrl(household)}/${task.id}`)
+      .set(authHeader(user.accessToken));
+
+    const restore = await request(app)
+      .post(`${await tasksUrl(household)}/${task.id}/restore`)
+      .set(authHeader(user.accessToken));
+    expect(restore.status).toBe(200);
+    expect(restore.body.data.isDeleted).toBe(false);
+
+    const list = await request(app)
+      .get(await tasksUrl(household))
+      .set(authHeader(user.accessToken));
+    expect((list.body.data.items as TaskResponse[]).map((t) => t.id)).toContain(task.id);
+  });
+
+  it('should be a no-op (200) when restoring a task that is not deleted', async () => {
+    const { user, household } = await setupHousehold();
+    const task = await createTask(user, household, { title: 'Nunca borrada' });
+
+    const res = await request(app)
+      .post(`${await tasksUrl(household)}/${task.id}/restore`)
+      .set(authHeader(user.accessToken));
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.isDeleted).toBe(false);
+  });
+
+  it('should return 403 when a non-creator, non-admin member tries to restore, and let an admin restore it', async () => {
+    const admin = await createTestUser(app);
+    const userA = await createTestUser(app);
+    const userB = await createTestUser(app);
+    const household = await createTestHousehold(app, admin);
+    await joinTestHousehold(app, userA, household.inviteCode);
+    await joinTestHousehold(app, userB, household.inviteCode);
+
+    const task = await createTask(userA, household, { title: 'De A' });
+    await request(app)
+      .delete(`${await tasksUrl(household)}/${task.id}`)
+      .set(authHeader(userA.accessToken));
+
+    const forbidden = await request(app)
+      .post(`${await tasksUrl(household)}/${task.id}/restore`)
+      .set(authHeader(userB.accessToken));
+    expect(forbidden.status).toBe(403);
+
+    const allowed = await request(app)
+      .post(`${await tasksUrl(household)}/${task.id}/restore`)
+      .set(authHeader(admin.accessToken));
+    expect(allowed.status).toBe(200);
+    expect(allowed.body.data.isDeleted).toBe(false);
   });
 });
 
