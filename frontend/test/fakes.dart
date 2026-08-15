@@ -29,6 +29,10 @@ Task buildTask(
   DateTime? startsAt,
   DateTime? endsAt,
   Map<String, dynamic>? completedBy,
+  bool isRecurring = false,
+  Map<String, dynamic>? recurrenceRule,
+  List<Map<String, dynamic>>? assignedTo,
+  String? parentTaskId,
 }) {
   return Task.fromJson({
     'id': id,
@@ -37,8 +41,10 @@ Task buildTask(
     'status': completed ? 'completed' : 'pending',
     'priority': 'medium',
     'category': 'other',
-    'assignedTo': const <dynamic>[],
-    'isRecurring': false,
+    'assignedTo': assignedTo ?? const <dynamic>[],
+    'isRecurring': isRecurring,
+    if (recurrenceRule != null) 'recurrenceRule': recurrenceRule,
+    if (parentTaskId != null) 'parentTaskId': parentTaskId,
     if (dueDate != null) 'dueDate': dueDate.toIso8601String(),
     if (startsAt != null) 'startsAt': startsAt.toIso8601String(),
     if (endsAt != null) 'endsAt': endsAt.toIso8601String(),
