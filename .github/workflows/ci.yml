@@ -116,20 +116,17 @@ jobs:
       # blocking for anything that actually matters.
       - run: flutter analyze --no-fatal-infos
 
-      # TD-040: never run flutter test monolithically — a combined run hangs
-      # on loaded hosts. Each shard below is its own step so a failure in one
-      # doesn't hide the others' results, and every one of them (except the
-      # explicitly-quarantined step further down) is blocking.
-      - name: Test — test/ (top-level)
+      # TD-044: runs the full suite (test/ + test/widgets/) in one blocking
+      # step, except offline_banner_test.dart — TD-040's hang is specific to
+      # that one file (confirmed to reproduce even in complete isolation);
+      # every other file here already ran clustered together without issue,
+      # so there's no reason left to shard them into separate steps. find
+      # picks up new *_test.dart files automatically, so a future addition
+      # under test/ or test/widgets/ needs no workflow edit to be covered.
+      - name: Test — test/ and test/widgets/ (except offline_banner_test.dart)
         run: |
-          mapfile -t files < <(find test -maxdepth 1 -name "*_test.dart")
+          mapfile -t files < <(find test -name "*_test.dart" ! -name "offline_banner_test.dart")
           flutter test "${files[@]}"
-
-      - name: Test — test/widgets/task_tile_test.dart
-        run: flutter test test/widgets/task_tile_test.dart
-
-      - name: Test — test/widgets/assignee_selector_test.dart
-        run: flutter test test/widgets/assignee_selector_test.dart
 
       - name: Test — test/widgets/offline_banner_test.dart (TD-040 known issue, allow-failure)
         # TD-040: this specific file hangs on loaded hosts even in complete
