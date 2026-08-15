@@ -16,10 +16,16 @@ export function initSentry(): void {
     return;
   }
 
+  const environment = process.env.NODE_ENV || 'development';
+
   Sentry.init({
     dsn,
-    environment: process.env.NODE_ENV || 'development',
-    tracesSampleRate: 0.2,
+    environment,
+    // TD-043: performance tracing is production-only — sampling in
+    // development would trace local noise a shared Sentry project should
+    // never see, the same reasoning beforeSend already applies to errors.
+    // 0.2 in production matches the frontend's rate (sentry_service.dart).
+    tracesSampleRate: environment === 'production' ? 0.2 : 0,
     beforeSend(event) {
       return process.env.NODE_ENV === 'development' ? null : event;
     },

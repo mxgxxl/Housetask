@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 
-import { errorHandler } from '../middleware/error.middleware';
+import { AppError, errorHandler } from '../middleware/error.middleware';
 import * as sentryUtils from '../utils/sentry';
 import { captureSecurityWarning, captureServerError, initSentry } from '../utils/sentry';
 import { logger } from '../utils/logger';
@@ -126,6 +126,37 @@ describe('Sentry no-op fallback (TD-009)', () => {
     expect(captureSpy).toHaveBeenCalledWith(expect.any(Error), {
       category: 'http_5xx',
       route: '/api/auth/login',
+    });
+    captureSpy.mockRestore();
+  });
+
+  it('errorHandler should capture an explicit AppError(status: 500) the same way as an unhandled error (TD-043)', () => {
+    // AppError takes its own branch in errorHandler (respond(err.message,
+    // err.status) before ever reaching the generic catch-all) — a service
+    // deliberately throwing AppError(msg, 500) must still be tagged and
+    // reported, not just the "unrecognized error" fallback path above.
+    const captureSpy = jest.spyOn(sentryUtils, 'captureServerError');
+    const req = {
+      path: '/api/households/h1/pet',
+      method: 'GET',
+      params: { householdId: 'h1' },
+      user: { userId: 'u1', email: 'a@b.com' },
+    } as unknown as Request;
+    const res = fakeResponse();
+
+    const err = new AppError('Unexpected downstream failure', 500);
+    expect(() => errorHandler(err, req, res, jest.fn())).not.toThrow();
+
+    expect(captureSpy).toHaveBeenCalledWith(err, {
+      category: 'http_5xx',
+      route: '/api/households/h1/pet',
+      userId: 'u1',
+      householdId: 'h1',
+    });
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'Unexpected downstream failure',
     });
     captureSpy.mockRestore();
   });
