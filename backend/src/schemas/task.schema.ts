@@ -50,6 +50,18 @@ const recurrenceRule = z.object({
 // verified against zod's actual union-resolution order, not assumed.
 const nullableCoercedDate = z.union([z.null(), z.coerce.date()]);
 
+// Same z.null()-before-z.coerce.date() union as nullableCoercedDate, but for
+// createTaskSchema: a brand-new task has no existing value to "clear", so
+// `null` here means "no date at all" and is mapped to `undefined` — the same
+// shape `.optional()` alone already produces when the key is omitted, and
+// what task.service.ts's `input.dueDate ? sanitizeDate(...) : undefined`
+// already expects. Without this, TaskFormPage._save's own payload shape
+// (`dueDate` always present, `null` when the user picked no date — see
+// task_form_page.dart) coerced to epoch 1970 via plain z.coerce.date(), which
+// then failed sanitizeDate's [2020-01-01, +10y] range guard with a 400 on
+// the form's default, most common case.
+const nullableCoercedDateOrUndefined = nullableCoercedDate.transform((v) => v ?? undefined);
+
 /**
  * POST /api/tasks body. `endsAt > startsAt` is enforced here only when
  * !isRecurring, matching task.service.ts's assertValidDuration exactly: a
@@ -62,7 +74,7 @@ export const createTaskSchema = z
   .object({
     title,
     description: description.optional(),
-    dueDate: z.coerce.date().optional(),
+    dueDate: nullableCoercedDateOrUndefined.optional(),
     assignedTo: z.array(z.string()).optional(),
     priority: priority.optional(),
     category: category.optional(),

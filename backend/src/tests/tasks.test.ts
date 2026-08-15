@@ -748,6 +748,93 @@ describe('Zod edge validation on task endpoints (TD-028)', () => {
     expect(res.status).toBe(200);
     expect(res.body.data.priority).toBe('high');
   });
+
+  it('should accept the exact TaskFormPage._save payload with dueDate:null (regression)', async () => {
+    // TaskFormPage._save always sends the `dueDate` key, as `null` when the
+    // user picked no due date — createTaskSchema's dueDate was plain
+    // `z.coerce.date().optional()`: `.optional()` only intercepts `undefined`,
+    // so `null` fell through to `z.coerce.date()`, and `new Date(null)` is
+    // JS's own epoch (1970-01-01), not an error. That epoch Date then hit
+    // task.service.ts's sanitizeDate() range guard ([2020-01-01, +10y]) and
+    // was rejected with a 400 — the form's default, most common payload never
+    // successfully created a task.
+    const { user, household } = await setupHousehold();
+
+    const res = await request(app)
+      .post(await tasksUrl(household))
+      .set(authHeader(user.accessToken))
+      .send({
+        title: 'Prueba',
+        description: '',
+        assignedTo: [],
+        priority: 'medium',
+        category: 'other',
+        dueDate: null,
+        isRecurring: false,
+      });
+
+    expect(res.status).toBe(201);
+    // Absent, not silently coerced to the epoch — the exact data corruption
+    // sanitizeDate's own doc comment warns about ("or to 1970, which
+    // pollutes every overdue view").
+    expect(res.body.data.dueDate).toBeUndefined();
+  });
+
+  it('should accept the exact TaskFormPage._save recurring payload with dueDate:null (regression)', async () => {
+    const { user, household } = await setupHousehold();
+
+    const res = await request(app)
+      .post(await tasksUrl(household))
+      .set(authHeader(user.accessToken))
+      .send({
+        title: 'Prueba rec',
+        description: '',
+        assignedTo: [],
+        priority: 'medium',
+        category: 'other',
+        dueDate: null,
+        isRecurring: true,
+        recurrenceRule: { type: 'weekly', interval: 1 },
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.dueDate).toBeUndefined();
+    expect(res.body.data.isRecurring).toBe(true);
+  });
+
+  it('a task created with dueDate:null appears as undated, not stuck at epoch, in a from/to window query (PDR-003 timeline)', async () => {
+    // Regression for the data-corruption angle, not just the 400: before the
+    // fix, this same task would (if the schema hadn't already rejected it)
+    // have persisted dueDate: 1970-01-01, which sorts before every from/to
+    // window a timeline could ever request — the task would never appear
+    // again in the app's main "Todas" view. Confirms it lands in the
+    // undated bucket instead, exactly like a task genuinely created with no
+    // due date at all.
+    const { user, household } = await setupHousehold();
+    await request(app)
+      .post(await tasksUrl(household))
+      .set(authHeader(user.accessToken))
+      .send({
+        title: 'Sin fecha',
+        description: '',
+        assignedTo: [],
+        priority: 'medium',
+        category: 'other',
+        dueDate: null,
+        isRecurring: false,
+      });
+
+    const res = await request(app)
+      .get(await tasksUrl(household))
+      .query({ from: daysFromNow(-1), to: daysFromNow(6) })
+      .set(authHeader(user.accessToken));
+
+    expect(res.status).toBe(200);
+    const items = res.body.data.items as TaskResponse[];
+    expect(items).toHaveLength(1);
+    expect(items[0].title).toBe('Sin fecha');
+    expect(items[0].dueDate).toBeUndefined();
+  });
 });
 
 describe('PATCH /api/households/:householdId/tasks/:taskId/complete', () => {
