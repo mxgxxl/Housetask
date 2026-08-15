@@ -170,6 +170,16 @@ class TaskState extends Equatable {
   final bool recurringLoaded;
   final String? recurringError;
 
+  /// Soft-deleted tasks for the Papelera/trash view (TD-009), most recently
+  /// deleted first. Populated by [TaskCubit.loadTrashTasks] — same
+  /// walk-the-full-list-then-filter-client-side approach as [recurringTasks]
+  /// (TD-035), deliberately not derived from [buckets]/[allTasks], which the
+  /// backend never returns deleted rows into in the first place.
+  final List<Task> trashTasks;
+  final bool trashLoading;
+  final bool trashLoaded;
+  final String? trashError;
+
   const TaskState({
     this.status = TaskStatusUi.initial,
     this.error,
@@ -191,6 +201,10 @@ class TaskState extends Equatable {
     this.recurringLoading = false,
     this.recurringLoaded = false,
     this.recurringError,
+    this.trashTasks = const [],
+    this.trashLoading = false,
+    this.trashLoaded = false,
+    this.trashError,
   });
 
   /// Pagination state for [filter], empty if it has never been loaded.
@@ -233,6 +247,10 @@ class TaskState extends Equatable {
     bool? recurringLoading,
     bool? recurringLoaded,
     String? recurringError,
+    List<Task>? trashTasks,
+    bool? trashLoading,
+    bool? trashLoaded,
+    String? trashError,
   }) {
     return TaskState(
       status: status ?? this.status,
@@ -258,6 +276,11 @@ class TaskState extends Equatable {
       recurringLoaded: recurringLoaded ?? this.recurringLoaded,
       // Explicitly nullable, like timelineError/error: must clear on success.
       recurringError: recurringError,
+      trashTasks: trashTasks ?? this.trashTasks,
+      trashLoading: trashLoading ?? this.trashLoading,
+      trashLoaded: trashLoaded ?? this.trashLoaded,
+      // Explicitly nullable, like recurringError: must clear on success.
+      trashError: trashError,
     );
   }
 
@@ -283,6 +306,10 @@ class TaskState extends Equatable {
         recurringLoading,
         recurringLoaded,
         recurringError,
+        trashTasks,
+        trashLoading,
+        trashLoaded,
+        trashError,
       ];
 }
 
@@ -575,6 +602,58 @@ class TaskCubit extends Cubit<TaskState> {
       ));
     } on Failure catch (f) {
       emit(state.copyWith(recurringLoading: false, recurringError: f.message));
+    }
+  }
+
+  /// Fetch every soft-deleted task for the Papelera/trash view (TD-009),
+  /// most recently deleted first. Exhaustively drains the `includeDeleted`
+  /// list (same reasoning as [loadRecurringTasks]: filtering a partially
+  /// loaded paginated list would randomly miss deleted rows depending on
+  /// where they happen to sort by status/dueDate) rather than adding a
+  /// dedicated backend endpoint — `?includeDeleted=true` already returns
+  /// everything needed, just mixed with active tasks.
+  Future<void> loadTrashTasks(String householdId) async {
+    _householdId = householdId;
+    emit(state.copyWith(trashLoading: true, trashError: null));
+    try {
+      final all = <Task>[];
+      String? cursor;
+      while (true) {
+        final page = await _repo.list(householdId, cursor: cursor, includeDeleted: true);
+        all.addAll(page.items);
+        if (!page.hasMore || page.nextCursor == null) break;
+        cursor = page.nextCursor;
+      }
+      final trashed = all.where((t) => t.isDeleted).toList()
+        ..sort((a, b) {
+          final ad = a.deletedAt;
+          final bd = b.deletedAt;
+          if (ad == null && bd == null) return 0;
+          if (ad == null) return 1;
+          if (bd == null) return -1;
+          return bd.compareTo(ad); // most recently deleted first
+        });
+      emit(state.copyWith(trashLoading: false, trashLoaded: true, trashTasks: trashed));
+    } on Failure catch (f) {
+      emit(state.copyWith(trashLoading: false, trashError: f.message));
+    }
+  }
+
+  /// Restore a soft-deleted task from the trash view. Drops it from
+  /// [TaskState.trashTasks] and upserts the now-active task back into
+  /// whichever buckets it belongs to (`_upsert` keys purely off status), so
+  /// it reappears in the normal tabs immediately instead of waiting for a
+  /// manual refresh.
+  Future<void> restoreTask(String taskId) async {
+    if (_householdId == null) return;
+    try {
+      final task = await _repo.restore(_householdId!, taskId);
+      _upsert(task);
+      emit(state.copyWith(
+        trashTasks: state.trashTasks.where((t) => t.id != taskId).toList(),
+      ));
+    } on Failure catch (f) {
+      emit(state.copyWith(trashError: f.message));
     }
   }
 

@@ -24,6 +24,12 @@ PaginatedResponse<Task> page(
 }
 
 /// Mounts the real TasksPage over a scripted repository.
+///
+/// MultiBlocProvider wraps the whole MaterialApp (not just `home`), so its
+/// providers stay ancestors of every route MaterialApp's internal Navigator
+/// pushes later — including TrashPage, pushed from the AppBar's Papelera
+/// action (TD-009) — same reasoning as recurring_tasks_page_test.dart's
+/// `_host`.
 Future<TaskCubit> pumpTasksPage(
   WidgetTester tester,
   FakeTaskRepository repo,
@@ -36,18 +42,16 @@ Future<TaskCubit> pumpTasksPage(
   await cubit.loadTimeline('h1');
 
   await tester.pumpWidget(
-    MaterialApp(
-      home: MultiBlocProvider(
-        providers: [
-          BlocProvider<TaskCubit>.value(value: cubit),
-          // TaskTile reads HouseholdCubit to resolve "who completed this"
-          // (PDR-002); an empty/initial state is enough for these tests.
-          BlocProvider<HouseholdCubit>(
-            create: (_) => HouseholdCubit(FakeHouseholdRepository()),
-          ),
-        ],
-        child: const TasksPage(),
-      ),
+    MultiBlocProvider(
+      providers: [
+        BlocProvider<TaskCubit>.value(value: cubit),
+        // TaskTile reads HouseholdCubit to resolve "who completed this"
+        // (PDR-002); an empty/initial state is enough for these tests.
+        BlocProvider<HouseholdCubit>(
+          create: (_) => HouseholdCubit(FakeHouseholdRepository()),
+        ),
+      ],
+      child: const MaterialApp(home: TasksPage()),
     ),
   );
   await tester.pumpAndSettle();
@@ -252,6 +256,34 @@ void main() {
       expect(find.text('Tarea 4'), findsOneWidget);
       // Revealing already-loaded items is local state, not a fetch.
       expect(repo.timelineListCalls, callsAfterLoad);
+    });
+  });
+
+  group('Papelera entry point (TD-009)', () {
+    testWidgets('tapping the Papelera action loads and shows soft-deleted tasks',
+        (tester) async {
+      // Both TaskCubit.load (pumpTasksPage's initial "Todas" fetch) and
+      // TaskCubit.loadTrashTasks query with status:null — two entries under
+      // the same key so each call gets served in order.
+      final repo = FakeTaskRepository(
+        pagesByStatus: {
+          null: [
+            page([buildTask('a', title: 'Tarea activa')], total: 1),
+            page([
+              buildTask('a', title: 'Tarea activa'),
+              buildTask('d1', title: 'Sacar la basura', isDeleted: true),
+            ]),
+          ],
+        },
+      );
+      await pumpTasksPage(tester, repo);
+
+      await tester.tap(find.byTooltip('Papelera'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Papelera'), findsOneWidget);
+      expect(find.text('Sacar la basura'), findsOneWidget);
+      expect(find.text('Tarea activa'), findsNothing);
     });
   });
 }

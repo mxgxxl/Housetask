@@ -26,6 +26,7 @@ Map<String, dynamic> taskToCacheMap(Task task) {
     'parentTaskId': task.parentTaskId,
     'isSynced': task.isSynced,
     'isDeleted': task.isDeleted,
+    'deletedAt': task.deletedAt?.toIso8601String(),
   };
 }
 

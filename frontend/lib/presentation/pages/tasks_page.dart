@@ -8,6 +8,7 @@ import '../cubit/task_cubit.dart';
 import '../widgets/common.dart';
 import '../widgets/task_tile.dart';
 import 'task_form_page.dart';
+import 'trash_page.dart';
 
 /// The tabs, in display order. Each one is a server-side filter, not a local
 /// `where` over a shared list.
@@ -100,6 +101,13 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
       appBar: AppBar(
         title: const Text('Tareas',
             style: TextStyle(fontWeight: FontWeight.w800, fontSize: 22)),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.delete_outline),
+            tooltip: 'Papelera',
+            onPressed: () => _openTrash(context),
+          ),
+        ],
         bottom: TabBar(
           controller: _tabController,
           labelColor: AppColors.primary,
@@ -156,6 +164,21 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
         icon: const Icon(Icons.add),
         label: const Text('Tarea'),
       ),
+    );
+  }
+
+  /// Opens the Papelera (TD-009). Kicks off the fetch before pushing the
+  /// route rather than waiting for TrashPage to mount, so its BlocBuilder is
+  /// already in the loading state on first frame instead of briefly showing
+  /// the (still stale) empty state.
+  void _openTrash(BuildContext context) {
+    final cubit = context.read<TaskCubit>();
+    final householdId = cubit.householdId;
+    if (householdId != null) {
+      cubit.loadTrashTasks(householdId);
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const TrashPage()),
     );
   }
 }
