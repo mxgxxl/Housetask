@@ -106,7 +106,15 @@ const taskSchema = new Schema<ITask>(
 // It also subsumes the previous { householdId, status, dueDate } index: every
 // other query on those fields uses equality on status, where direction is
 // irrelevant, so the old one was pure write overhead.
-taskSchema.index({ householdId: 1, status: -1, dueDate: 1, _id: -1 });
+//
+// isDeleted sits before dueDate, not after: it is an equality filter on
+// EVERY query this index serves (listTasks excludes isDeleted:true by
+// default, and the includeDeleted=true trash view still equality-filters on
+// it, just for `true` instead) whereas dueDate is only ever a sort/range
+// bound. Placing an always-equality field ahead of a range field keeps the
+// index's bounds tight per MongoDB's Equality-Sort-Range guidance — a
+// prefix that mixed the range field in before it would force a wider scan.
+taskSchema.index({ householdId: 1, status: -1, isDeleted: 1, dueDate: 1, _id: -1 });
 
 // Supports the PDR-003 timeline's from/to window query (GET /tasks?from=&to=),
 // which filters by dueDate WITHOUT an equality predicate on status (the

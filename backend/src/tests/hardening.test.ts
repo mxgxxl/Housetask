@@ -261,10 +261,18 @@ describe('list indexes match the listing sort', () => {
   it('should have built a Task index with exactly the listing sort key pattern', async () => {
     const patterns = await builtKeyPatterns(TaskModel);
 
-    // Same fields AND same directions as { status: -1, dueDate: 1, _id: -1 },
-    // otherwise MongoDB sorts in memory (32MB cap) on every page.
-    expect(patterns).toContain(JSON.stringify({ householdId: 1, status: -1, dueDate: 1, _id: -1 }));
-    // The superseded index must be gone: keeping it is pure write overhead.
+    // Same fields AND same directions as
+    // { status: -1, isDeleted: 1, dueDate: 1, _id: -1 }, otherwise MongoDB
+    // sorts in memory (32MB cap) on every page. isDeleted sits before
+    // dueDate: every query this index serves equality-filters on it, while
+    // dueDate is only ever a sort/range bound (perf/task-index-isdeleted).
+    expect(patterns).toContain(
+      JSON.stringify({ householdId: 1, status: -1, isDeleted: 1, dueDate: 1, _id: -1 }),
+    );
+    // The superseded pre-isDeleted shape must be gone: keeping it around
+    // would be pure write overhead once the new key pattern is built.
+    expect(patterns).not.toContain(JSON.stringify({ householdId: 1, status: -1, dueDate: 1, _id: -1 }));
+    // The pre-TD-026 shape must also stay gone.
     expect(patterns).not.toContain(JSON.stringify({ householdId: 1, status: 1, dueDate: 1 }));
   });
 
