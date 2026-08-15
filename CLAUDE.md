@@ -365,7 +365,7 @@ to clients.
 
 ## 🧪 Testing Standards
 
-**⚠️ IMPORTANT — Target state, not yet installed:** The testing stack described below (Jest, Supertest, mongodb-memory-server, bloc_test) is NOT currently installed in the repo. Before writing tests, the assistant MUST first install the dependencies (see TD-005 / Phase 1). Do NOT assume tests can be executed until setup is complete.
+Testing stack installed: Jest + Supertest + mongodb-memory-server (backend); flutter_test + bloc_test (frontend). CI runs the full suite on every PR — 236 backend tests, 192 frontend tests.
 
 - **Backend:** Jest + Supertest for integration tests
 - **Frontend:** `flutter_test` for widget tests, `bloc_test` for Cubit tests
@@ -626,23 +626,23 @@ Two separate systems, deliberately not coupled by a branch-protection gate (see 
 
 ### Phase 1 — Stabilization (NOW)
 - [ ] Cursor-based pagination (TD-002)
-- [ ] Offline mode with Hive (TD-003)
-- [ ] Input sanitization and validation (TD-004)
-- [ ] Integration tests + install test stack (TD-005)
-- [ ] Error tracking with Sentry (TD-009)
-- [ ] Idempotency-Key on write POSTs (TD-014)
+- [x] ~~Offline mode with Hive (TD-003)~~
+- [x] ~~Input sanitization and validation (TD-004)~~
+- [x] ~~Integration tests + install test stack (TD-005)~~
+- [x] ~~Error tracking with Sentry (TD-009)~~
+- [x] ~~Idempotency-Key on write POSTs (TD-014)~~
 - [ ] express.json payload limit (TD-015)
 - [ ] CORS fail-fast in production (TD-016)
 
 ### Phase 2 — Robustness
 - [ ] Optimistic updates (TD-007)
 - [ ] Global rate limiting (TD-006)
-- [ ] CI/CD with GitHub Actions (TD-008)
+- [x] ~~CI/CD with GitHub Actions (TD-008)~~
 - [ ] Refactor members to separate collection (TD-001)
-- [ ] Granular task permissions (TD-011)
-- [ ] ESLint + Prettier + no-console (TD-012)
+- [x] ~~Granular task permissions (TD-011)~~
+- [x] ~~ESLint + Prettier + no-console (TD-012)~~
 - [ ] Household-timezone-aware recurrence (TD-013)
-- [ ] Env-based frontend config via --dart-define (TD-017)
+- [x] ~~Env-based frontend config via --dart-define (TD-017)~~
 - [ ] Member-leave lifecycle (TD-018)
 
 ### Phase 3 — Production
@@ -650,7 +650,7 @@ Two separate systems, deliberately not coupled by a branch-protection gate (see 
 - [ ] APM monitoring (Prometheus + Grafana)
 - [ ] Load testing (k6)
 - [ ] Performance optimization
-- [ ] API versioning
+- [ ] API versioning (see also TD-034: deploy-order safety net)
 
 ---
 
@@ -686,14 +686,6 @@ As of this commit, Phase 1 (Stabilization) is COMPLETE. All TD items in Phase 1 
 - [ ] Rotate any secrets that appeared in transcripts or logs
 - [ ] Smoke test on real devices (iOS + Android)
 - [ ] Announce beta to early users
-
-**Phase 2 roadmap (deferred items):**
-- TD-001: Migrate members to separate collection
-- TD-007: Optimistic updates
-- TD-013: Household-timezone-aware recurrence
-- TD-018: Member-leave lifecycle
-- TD-034: Deploy-order safety net
-- TD-039: Per-field conflict resolution
 
 ---
 
