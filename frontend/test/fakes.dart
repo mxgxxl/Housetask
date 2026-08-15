@@ -195,6 +195,11 @@ class FakeTaskRepository implements TaskRepository {
     return buildTask(
       'created',
       title: payload['title'] as String? ?? 'Tarea',
+      // Echoes dueDate only when the payload actually sent one, same as
+      // startsAt/endsAt below — a plain {'title': ...} payload (most existing
+      // tests) still returns an undated task, e.g. task_cubit_test.dart's
+      // "lands in Sin fecha" assertion.
+      dueDate: _parseDate(payload['dueDate']),
       startsAt: _parseDate(payload['startsAt']),
       endsAt: _parseDate(payload['endsAt']),
     ).copyWith(isSynced: !returnsUnsynced);
