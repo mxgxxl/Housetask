@@ -761,12 +761,9 @@ As of this commit, Phase 1 (Stabilization) is COMPLETE. All TD items in Phase 1 
 **Phase 2 roadmap (deferred items):**
 - TD-001: Migrate members to separate collection
 - TD-007: Optimistic updates
-- TD-008: CI/CD with GitHub Actions
-- TD-011: Granular task permissions
 - TD-013: Household-timezone-aware recurrence
 - TD-018: Member-leave lifecycle
 - TD-034: Deploy-order safety net
-- TD-038: sentry-cocoa upstream fix
 - TD-039: Per-field conflict resolution
 
 ---
