@@ -74,6 +74,26 @@ void main() {
     });
   });
 
+  group('mergeTasks (TD-045)', () {
+    test('upserts by id without touching tasks absent from the incoming list', () {
+      CacheService().saveTasks('h1', [buildTask('a'), buildTask('b')]);
+
+      CacheService().mergeTasks([buildTask('c')]);
+
+      expect(CacheService().getTasks('h1').map((t) => t.id).toSet(), {'a', 'b', 'c'});
+    });
+
+    test('overwrites an existing id in place instead of duplicating it', () {
+      CacheService().saveTasks('h1', [buildTask('a')]); // pending by default
+
+      CacheService().mergeTasks([buildTask('a', completed: true)]);
+
+      final cached = CacheService().getTasks('h1');
+      expect(cached, hasLength(1));
+      expect(cached.single.status, 'completed');
+    });
+  });
+
   group('shopping', () {
     test('round-trips a shopping item through the real Hive adapter', () {
       final item = buildItem('s1', name: 'Leche');
