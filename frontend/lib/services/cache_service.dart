@@ -122,6 +122,22 @@ class CacheService {
   List<Task> getTasks(String householdId) =>
       _tasks.values.where((t) => t.householdId == householdId).toList();
 
+  /// Upsert [tasks] by id without touching anything else cached for the
+  /// household (TD-045).
+  ///
+  /// Unlike [saveTasks], this is not a full-household replace: a status-
+  /// filtered first page (e.g. the Pendientes/Completadas tabs) is only a
+  /// slice of the household's tasks, not a complete snapshot, so evicting
+  /// everything absent from it would wrongly drop tasks in other statuses
+  /// from the offline cache. Each incoming task overwrites its own id; every
+  /// other cached task — including ones in a different status, or on a page
+  /// of this same filter not yet fetched — is left exactly as it was.
+  void mergeTasks(List<Task> tasks) {
+    for (final task in tasks) {
+      _tasks.put(task.id, task);
+    }
+  }
+
   /// Cache (or update) a single task, e.g. after an optimistic offline write.
   void saveTask(Task task) => _tasks.put(task.id, task);
 

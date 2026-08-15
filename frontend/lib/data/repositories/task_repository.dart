@@ -97,7 +97,16 @@ class TaskRepository {
         // includeDeleted page mixes in rows that don't belong in the offline
         // active-task cache, and a middle page would make a later offline
         // read show an arbitrary slice instead of the earliest rows.
-        _cache.saveTasks(householdId, page.items);
+        //
+        // A status-filtered first page (Pendientes/Completadas) is a
+        // different case: it's a real slice, not a snapshot, so it merges by
+        // id instead of replacing — a full replace here would evict every
+        // other status already cached for the household (TD-045).
+        if (status == null) {
+          _cache.saveTasks(householdId, page.items);
+        } else {
+          _cache.mergeTasks(page.items);
+        }
       }
       lastListWasFromCache = false;
       return page;
