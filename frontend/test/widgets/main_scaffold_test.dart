@@ -152,8 +152,15 @@ void main() {
     final before = tester.widget<IndexedStack>(find.byType(IndexedStack));
     expect(before.index, 0);
 
+    // Not pumpAndSettle: PetCubit's default/never-loaded state renders an
+    // indeterminate CircularProgressIndicator in the (offstage) Mascota tab,
+    // which animates forever and would make pumpAndSettle time out. A tab
+    // switch is a synchronous setState, not an animation — a couple of plain
+    // pumps is enough to observe it (same reasoning as offline_banner_test
+    // .dart's isSyncing-spinner assertions).
     await tester.tap(find.widgetWithText(NavigationDestination, 'Recurrentes'));
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump();
 
     final after = tester.widget<IndexedStack>(find.byType(IndexedStack));
     expect(after.index, 2);

@@ -7,6 +7,7 @@ import 'package:homesync/presentation/cubit/household_cubit.dart';
 import 'package:homesync/presentation/cubit/task_cubit.dart';
 import 'package:homesync/presentation/pages/recurring_tasks_page.dart';
 import 'package:homesync/presentation/pages/task_form_page.dart';
+import 'package:intl/date_symbol_data_local.dart';
 
 import '../fakes.dart';
 
@@ -14,21 +15,31 @@ PaginatedResponse<Task> _page(List<Task> items) {
   return PaginatedResponse<Task>(items: items, nextCursor: null, hasMore: false, total: items.length);
 }
 
+/// MultiBlocProvider wraps the whole MaterialApp (not just `home`), so its
+/// providers stay ancestors of every route MaterialApp's internal Navigator
+/// pushes later — including TaskFormPage, pushed from a row's onTap. Wrapping
+/// only `home` (as e.g. calendar_page_test.dart does, which never navigates
+/// away) would leave a pushed route as a sibling of `home` in the Navigator's
+/// stack, not a descendant of the providers.
 Widget _host(TaskCubit taskCubit, {HouseholdCubit? householdCubit}) {
-  return MaterialApp(
-    home: MultiBlocProvider(
-      providers: [
-        BlocProvider<TaskCubit>.value(value: taskCubit),
-        BlocProvider<HouseholdCubit>.value(
-          value: householdCubit ?? HouseholdCubit(FakeHouseholdRepository()),
-        ),
-      ],
-      child: const RecurringTasksPage(),
-    ),
+  return MultiBlocProvider(
+    providers: [
+      BlocProvider<TaskCubit>.value(value: taskCubit),
+      BlocProvider<HouseholdCubit>.value(
+        value: householdCubit ?? HouseholdCubit(FakeHouseholdRepository()),
+      ),
+    ],
+    child: const MaterialApp(home: RecurringTasksPage()),
   );
 }
 
 void main() {
+  // TaskTile's due-date label goes through DateFormat(..., 'es') — needs
+  // locale data initialized, same as calendar_page_test.dart.
+  setUpAll(() async {
+    await initializeDateFormatting('es', null);
+  });
+
   group('RecurringTasksPage (TD-035)', () {
     testWidgets('lists only recurring tasks, not the rest of the household\'s tasks',
         (tester) async {
