@@ -784,10 +784,13 @@ class TaskCubit extends Cubit<TaskState> {
       );
     }
 
+    final timeline = _timelineAfterUpsert(task);
     emit(state.copyWith(
       status: TaskStatusUi.loaded,
       buckets: updated,
       offlineNotice: offlineNotice,
+      timelineDays: timeline?.days,
+      timelineUndated: timeline?.undated,
     ));
   }
 
@@ -802,7 +805,64 @@ class TaskCubit extends Cubit<TaskState> {
         total: _adjustedTotal(bucket, delta: existed ? -1 : 0),
       );
     }
-    emit(state.copyWith(buckets: updated));
+
+    final timeline = _timelineAfterRemove(id);
+    emit(state.copyWith(
+      buckets: updated,
+      timelineDays: timeline?.days,
+      timelineUndated: timeline?.undated,
+    ));
+  }
+
+  /// Keep [TaskState.timelineDays]/[TaskState.timelineUndated] consistent with
+  /// [task], the same way the loop above keeps [TaskState.buckets] consistent
+  /// — the PDR-003 "Todas" tab renders the timeline directly (see
+  /// tasks_page.dart's `_TimelineList`), not `buckets[TaskFilter.all]`, so a
+  /// local mutation or realtime event that only patched buckets left an
+  /// equally real staleness bug there: a created task invisible until
+  /// pull-to-refresh, a deleted one stuck on screen, a rescheduled one stuck
+  /// on its old day.
+  ///
+  /// Mirrors what a fresh [loadTimeline] response would contain: [task] lands
+  /// in its due date's day (moved if the date changed since the last upsert),
+  /// in "Sin fecha" if it has none (the backend always includes undated tasks
+  /// regardless of window), or is dropped if its date now falls outside
+  /// [TaskState.timelineWindowFrom]..[TaskState.timelineWindowTo] — e.g. a
+  /// task just rescheduled past the loaded window. Returns null (no-op) until
+  /// the first [loadTimeline] call establishes those window bounds.
+  _TimelineGroups? _timelineAfterUpsert(Task task) {
+    final from = state.timelineWindowFrom;
+    final to = state.timelineWindowTo;
+    if (from == null || to == null) return null;
+
+    final byId = <String, Task>{
+      for (final t in state.timelineDays.values.expand((l) => l)) t.id: t,
+      for (final t in state.timelineUndated) t.id: t,
+    };
+
+    final due = task.dueDate?.toLocal();
+    final withinWindow = due == null || (!due.isBefore(from) && !due.isAfter(to));
+    if (withinWindow) {
+      byId[task.id] = task;
+    } else {
+      byId.remove(task.id);
+    }
+    return _groupTasksByLocalDay(byId.values.toList());
+  }
+
+  /// Companion to [_timelineAfterUpsert] for a hard delete/removal by [id].
+  /// Same null-means-no-op rule before the first [loadTimeline] call.
+  _TimelineGroups? _timelineAfterRemove(String id) {
+    if (state.timelineWindowFrom == null || state.timelineWindowTo == null) {
+      return null;
+    }
+
+    final byId = <String, Task>{
+      for (final t in state.timelineDays.values.expand((l) => l)) t.id: t,
+      for (final t in state.timelineUndated) t.id: t,
+    };
+    if (byId.remove(id) == null) return null; // wasn't in the timeline anyway.
+    return _groupTasksByLocalDay(byId.values.toList());
   }
 
   /// [bucket.total] shifted by [delta], but only once the bucket has actually

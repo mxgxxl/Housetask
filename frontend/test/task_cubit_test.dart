@@ -760,6 +760,138 @@ void main() {
     });
   });
 
+  group('TaskCubit timeline stays in sync with mutations and realtime (bugfix)', () {
+    // "Todas" (tasks_page.dart's _TimelineList) renders timelineDays/
+    // timelineUndated directly, not bucket(TaskFilter.all) — so before this
+    // fix, _upsert/_remove (the shared engine behind createTask, updateTask,
+    // completeTask, deleteTask, restoreTask and applyRealtime) only touched
+    // buckets and left the timeline stale: a created task never appeared on
+    // the main tab, a deleted one stayed visible, and a realtime event from
+    // another device updated nothing there at all.
+
+    test('createTask inserts the new (undated) task into timelineUndated', () async {
+      final repo = FakeTaskRepository(timelinePages: [page([])]);
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.loadTimeline('h1');
+      expect(cubit.state.timelineUndated, isEmpty);
+
+      // FakeTaskRepository.create() always returns an undated task, which
+      // lands in "Sin fecha" — the backend includes undated tasks in every
+      // window response regardless of from/to.
+      await cubit.createTask({'title': 'Nueva'});
+
+      expect(cubit.state.timelineUndated.map((t) => t.id), contains('created'));
+    });
+
+    test('deleteTask (online) removes the task from its timeline day', () async {
+      final today = DateTime.now();
+      final repo = FakeTaskRepository(timelinePages: [
+        page([buildTask('t1', dueDate: today)]),
+      ]);
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.loadTimeline('h1');
+      final todayKey = DateTime(today.year, today.month, today.day);
+      expect(cubit.state.timelineDays[todayKey]?.map((t) => t.id), ['t1']);
+
+      await cubit.deleteTask('t1');
+
+      expect(cubit.state.timelineDays[todayKey] ?? const [], isEmpty);
+    });
+
+    test('applyRealtime task:created inserts into the matching timeline day', () async {
+      final today = DateTime.now();
+      final repo = FakeTaskRepository(timelinePages: [page([])]);
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.loadTimeline('h1');
+
+      cubit.applyRealtime('task:created', {
+        'id': 'remote-1',
+        'householdId': 'h1',
+        'title': 'De otro dispositivo',
+        'status': 'pending',
+        'isRecurring': false,
+        'dueDate': today.toIso8601String(),
+      });
+
+      final todayKey = DateTime(today.year, today.month, today.day);
+      expect(cubit.state.timelineDays[todayKey]?.map((t) => t.id), contains('remote-1'));
+    });
+
+    test('applyRealtime task:deleted removes the task from the timeline', () async {
+      final today = DateTime.now();
+      final repo = FakeTaskRepository(timelinePages: [
+        page([buildTask('t1', dueDate: today)]),
+      ]);
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.loadTimeline('h1');
+      final todayKey = DateTime(today.year, today.month, today.day);
+      expect(cubit.state.timelineDays[todayKey]?.map((t) => t.id), ['t1']);
+
+      cubit.applyRealtime('task:deleted', {'id': 't1', 'householdId': 'h1'});
+
+      expect(cubit.state.timelineDays[todayKey] ?? const [], isEmpty);
+    });
+
+    test('applyRealtime task:updated moves the task to its new day when dueDate changes',
+        () async {
+      final today = DateTime.now();
+      final tomorrow = today.add(const Duration(days: 1));
+      final repo = FakeTaskRepository(timelinePages: [
+        page([buildTask('t1', dueDate: today)]),
+      ]);
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.loadTimeline('h1');
+
+      cubit.applyRealtime('task:updated', {
+        'id': 't1',
+        'householdId': 'h1',
+        'title': 'Tarea',
+        'status': 'pending',
+        'isRecurring': false,
+        'dueDate': tomorrow.toIso8601String(),
+      });
+
+      final todayKey = DateTime(today.year, today.month, today.day);
+      final tomorrowKey = DateTime(tomorrow.year, tomorrow.month, tomorrow.day);
+      expect(cubit.state.timelineDays[todayKey] ?? const [], isEmpty);
+      expect(cubit.state.timelineDays[tomorrowKey]?.map((t) => t.id), ['t1']);
+    });
+
+    test('a task due outside the loaded window is not added to the timeline', () async {
+      final today = DateTime.now();
+      final farFuture = today.add(const Duration(days: 30));
+      final repo = FakeTaskRepository(timelinePages: [page([])]);
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.loadTimeline('h1');
+
+      cubit.applyRealtime('task:created', {
+        'id': 'far-1',
+        'householdId': 'h1',
+        'title': 'Muy lejos',
+        'status': 'pending',
+        'isRecurring': false,
+        'dueDate': farFuture.toIso8601String(),
+      });
+
+      expect(
+        cubit.state.timelineDays.values.expand((l) => l).map((t) => t.id),
+        isNot(contains('far-1')),
+      );
+    });
+
+    test('a mutation before loadTimeline() has ever run does not populate the timeline',
+        () async {
+      final repo = FakeTaskRepository(pages: [page([buildTask('1')])]);
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1'); // loadTimeline() deliberately never called
+
+      await cubit.createTask({'title': 'Nueva'});
+
+      expect(cubit.state.timelineDays, isEmpty);
+      expect(cubit.state.timelineUndated, isEmpty);
+    });
+  });
+
   group('TaskCubit start-reminder notifications (PDR-004)', () {
     test('createTask with startsAt schedules a start reminder', () async {
       final notifications = RecordingNotificationService();

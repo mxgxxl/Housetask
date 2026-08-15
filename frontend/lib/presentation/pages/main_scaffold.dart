@@ -30,6 +30,10 @@ class _MainScaffoldState extends State<MainScaffold> {
   int _index = 0;
   String? _loadedHouseholdId;
 
+  /// Index of [RecurringTasksPage] in [_pages]/the NavigationBar destinations
+  /// below — used by [_onDestinationSelected] to refresh it on entry.
+  static const _recurringTabIndex = 2;
+
   final _pages = const [
     HomePage(),
     TasksPage(),
@@ -78,6 +82,23 @@ class _MainScaffoldState extends State<MainScaffold> {
     }
   }
 
+  /// Every page below lives in an [IndexedStack], so switching tabs never
+  /// remounts them — a page has no lifecycle hook that fires "the user just
+  /// navigated to me". [RecurringTasksPage] is TD-035's derived, walk-the-
+  /// whole-list-and-group-by-series view: unlike the Tareas tab's timeline
+  /// (whose local upsert now keeps it live, see TaskCubit._upsert), a single
+  /// mutated task can change which occurrence represents its series, which
+  /// isn't something a targeted patch can cheaply reproduce — so this
+  /// re-derives it by refetching each time the user lands on the tab instead.
+  void _onDestinationSelected(int index) {
+    setState(() => _index = index);
+    if (index != _recurringTabIndex) return;
+    final householdId = _loadedHouseholdId;
+    if (householdId != null) {
+      context.read<TaskCubit>().loadRecurringTasks(householdId);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return BlocConsumer<HouseholdCubit, HouseholdState>(
@@ -105,7 +126,7 @@ class _MainScaffoldState extends State<MainScaffold> {
           ),
           bottomNavigationBar: NavigationBar(
             selectedIndex: _index,
-            onDestinationSelected: (i) => setState(() => _index = i),
+            onDestinationSelected: _onDestinationSelected,
             backgroundColor: AppColors.surface,
             indicatorColor: AppColors.primary.withValues(alpha: 0.12),
             destinations: const [

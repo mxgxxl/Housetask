@@ -50,6 +50,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   late HouseholdCubit householdCubit;
+  late FakeTaskRepository taskRepo;
   late TaskCubit taskCubit;
   late ShoppingCubit shoppingCubit;
   late PetCubit petCubit;
@@ -80,7 +81,8 @@ void main() {
         members: [],
       ),
     ));
-    taskCubit = TaskCubit(FakeTaskRepository(), FakeNotificationService());
+    taskRepo = FakeTaskRepository();
+    taskCubit = TaskCubit(taskRepo, FakeNotificationService());
     shoppingCubit = ShoppingCubit(FakeShoppingRepository());
     petCubit = PetCubit(FakePetRepository());
 
@@ -164,5 +166,36 @@ void main() {
 
     final after = tester.widget<IndexedStack>(find.byType(IndexedStack));
     expect(after.index, 2);
+  });
+
+  testWidgets(
+      'tapping Recurrentes refreshes its list — IndexedStack keeps the page '
+      'mounted across tab switches, so without an explicit refresh it would '
+      'never see a task created/completed/deleted while on another tab',
+      (tester) async {
+    tester.view.physicalSize = const Size(800, 3000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(_host(
+      householdCubit: householdCubit,
+      taskCubit: taskCubit,
+      shoppingCubit: shoppingCubit,
+      petCubit: petCubit,
+      authCubit: authCubit,
+      socketCubit: socketCubit,
+    ));
+    // Let MainScaffold's post-frame callback fire its initial _loadForHousehold
+    // (which already calls loadRecurringTasks once) before measuring the delta.
+    await tester.pump();
+    await tester.pump();
+    final callsAfterInitialLoad = taskRepo.listCalls;
+
+    await tester.tap(find.widgetWithText(NavigationDestination, 'Recurrentes'));
+    await tester.pump();
+    await tester.pump();
+
+    expect(taskRepo.listCalls, greaterThan(callsAfterInitialLoad));
   });
 }
