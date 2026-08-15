@@ -97,6 +97,10 @@ async function populated(task: ITask): Promise<ITask> {
 /**
  * Check whether a pending task with the same title already exists near
  * `dueDate` (±1 day) so recurrence generation never creates duplicates.
+ *
+ * Excludes soft-deleted tasks (TD-009/TD-046): a deleted "pending" occurrence
+ * no longer represents live, unfinished work, so it must not block a new one
+ * from being generated in its place.
  */
 async function pendingDuplicateExists(
   householdId: Types.ObjectId,
@@ -112,6 +116,7 @@ async function pendingDuplicateExists(
     householdId,
     title,
     status: 'pending',
+    isDeleted: { $ne: true },
     dueDate: { $gte: oneDayBefore, $lte: oneDayAfter },
   });
   return existing !== null;
@@ -606,10 +611,13 @@ export async function catchUpRecurring(
   userId: string,
   upTo: Date,
 ): Promise<{ generated: number; tasks: ITask[] }> {
+  // Excludes soft-deleted tasks (TD-009/TD-046): a deleted completed
+  // occurrence should not seed further catch-up generation for its series.
   const completedRecurring = await TaskModel.find({
     householdId: new Types.ObjectId(householdId),
     isRecurring: true,
     status: 'completed',
+    isDeleted: { $ne: true },
   }).sort({ completedAt: -1 });
 
   // Keep only the latest completed task per series (by title).
