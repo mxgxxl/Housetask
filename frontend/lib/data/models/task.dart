@@ -33,11 +33,20 @@ class Task extends Equatable {
   /// see [toJson] — and irrelevant once the write has synced.
   final bool isSynced;
 
-  /// Local-only: true when this task was deleted while offline. The row
-  /// stays in the cache (struck through in the UI) until the queued delete
-  /// actually reaches the server, instead of disappearing on an
-  /// unconfirmed action the user cannot yet undo.
+  /// True when this task is deleted — either the server's own soft-delete
+  /// state (TD-009: the backend marks a task deleted instead of removing it,
+  /// and the default task list excludes it, so this only ever comes back
+  /// `true` from an explicit `includeDeleted=true` fetch, e.g. the trash
+  /// view), or a local-only marker set while a delete made offline is still
+  /// waiting in the pending-operations queue. Either way the row renders
+  /// struck through — see [TaskTile] — until it is genuinely gone from the
+  /// user's normal lists.
   final bool isDeleted;
+
+  /// When the task was soft-deleted (TD-009), from the server. Null for an
+  /// offline-only pending delete (the server hasn't recorded it yet) or a
+  /// task that was never deleted.
+  final DateTime? deletedAt;
 
   const Task({
     required this.id,
@@ -59,6 +68,7 @@ class Task extends Equatable {
     this.parentTaskId,
     this.isSynced = true,
     this.isDeleted = false,
+    this.deletedAt,
   });
 
   bool get isCompleted => status == 'completed';
@@ -94,6 +104,8 @@ class Task extends Equatable {
       parentTaskId: json['parentTaskId']?.toString(),
       isSynced: (json['isSynced'] ?? true) as bool,
       isDeleted: (json['isDeleted'] ?? false) as bool,
+      deletedAt:
+          json['deletedAt'] != null ? DateTime.tryParse(json['deletedAt'].toString()) : null,
     );
   }
 
@@ -129,6 +141,7 @@ class Task extends Equatable {
     RecurrenceRule? recurrenceRule,
     bool? isSynced,
     bool? isDeleted,
+    DateTime? deletedAt,
   }) {
     return Task(
       id: id,
@@ -150,6 +163,7 @@ class Task extends Equatable {
       parentTaskId: parentTaskId,
       isSynced: isSynced ?? this.isSynced,
       isDeleted: isDeleted ?? this.isDeleted,
+      deletedAt: deletedAt ?? this.deletedAt,
     );
   }
 
@@ -171,5 +185,6 @@ class Task extends Equatable {
         parentTaskId,
         isSynced,
         isDeleted,
+        deletedAt,
       ];
 }

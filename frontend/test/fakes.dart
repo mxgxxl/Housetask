@@ -33,6 +33,8 @@ Task buildTask(
   Map<String, dynamic>? recurrenceRule,
   List<Map<String, dynamic>>? assignedTo,
   String? parentTaskId,
+  bool isDeleted = false,
+  DateTime? deletedAt,
 }) {
   return Task.fromJson({
     'id': id,
@@ -49,6 +51,8 @@ Task buildTask(
     if (startsAt != null) 'startsAt': startsAt.toIso8601String(),
     if (endsAt != null) 'endsAt': endsAt.toIso8601String(),
     if (completedBy != null) 'completedBy': completedBy,
+    'isDeleted': isDeleted,
+    if (deletedAt != null) 'deletedAt': deletedAt.toIso8601String(),
   });
 }
 
@@ -125,7 +129,13 @@ class FakeTaskRepository implements TaskRepository {
     this.offlineDeleteReturns,
     this.returnsUnsynced = false,
     this.syncGate,
+    this.failRestoreWith,
   });
+
+  /// `includeDeleted` received by [list], in order — lets a test assert the
+  /// trash view (TD-009) asks for deleted rows instead of relying on the
+  /// default (excluded) list.
+  final List<bool> receivedIncludeDeleted = [];
 
   @override
   Future<PaginatedResponse<Task>> list(
@@ -135,11 +145,13 @@ class FakeTaskRepository implements TaskRepository {
     String? cursor,
     DateTime? from,
     DateTime? to,
+    bool includeDeleted = false,
   }) async {
     receivedCursors.add(cursor);
     receivedStatuses.add(status);
     receivedFrom.add(from);
     receivedTo.add(to);
+    receivedIncludeDeleted.add(includeDeleted);
 
     if (from != null || to != null) {
       final n = timelineListCalls;
@@ -209,6 +221,18 @@ class FakeTaskRepository implements TaskRepository {
 
   @override
   Future<Task?> delete(String householdId, String taskId) async => offlineDeleteReturns;
+
+  /// Task ids passed to [restore], in order — lets a test assert exactly
+  /// which row's "Restaurar" button was tapped.
+  final List<String> restoreCalls = [];
+  final Failure? failRestoreWith;
+
+  @override
+  Future<Task> restore(String householdId, String taskId) async {
+    restoreCalls.add(taskId);
+    if (failRestoreWith != null) throw failRestoreWith!;
+    return buildTask(taskId, title: 'Restaurada');
+  }
 
   @override
   Future<Map<String, dynamic>> generateRecurringInstances(String householdId) async =>

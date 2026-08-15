@@ -37,6 +37,15 @@ export interface ITask extends Document {
   isRecurring: boolean;
   recurrenceRule?: IRecurrenceRule;
   parentTaskId?: Types.ObjectId | null;
+  /**
+   * Soft delete (TD-009): DELETE marks a task deleted instead of removing the
+   * document. Every read path excludes isDeleted:true by default — see
+   * task.service.ts's listTasks/updateTask/completeTask — so a deleted task
+   * behaves like a hard delete everywhere except the opt-in trash view
+   * (`includeDeleted`) and the creator-or-admin restore endpoint.
+   */
+  isDeleted: boolean;
+  deletedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -85,6 +94,8 @@ const taskSchema = new Schema<ITask>(
       default: null,
       index: true,
     },
+    isDeleted: { type: Boolean, default: false, index: true },
+    deletedAt: { type: Date },
   },
   { timestamps: true, ...jsonSchemaOptions },
 );

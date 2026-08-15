@@ -23,5 +23,6 @@ router.post('/generate-instances', asyncHandler(taskController.generateRecurring
 router.patch('/:taskId', validate(updateTaskSchema), asyncHandler(taskController.update));
 router.patch('/:taskId/complete', asyncHandler(taskController.complete));
 router.delete('/:taskId', asyncHandler(taskController.remove));
+router.post('/:taskId/restore', asyncHandler(taskController.restore));
 
 export default router;

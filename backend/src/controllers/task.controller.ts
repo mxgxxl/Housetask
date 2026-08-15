@@ -8,10 +8,12 @@ import { AuthenticatedRequest, TaskStatus } from '../types';
 const VALID_STATUS: TaskStatus[] = ['pending', 'completed'];
 
 /**
- * GET /api/households/:householdId/tasks?status=&limit=&cursor=&from=&to=
+ * GET /api/households/:householdId/tasks?status=&limit=&cursor=&from=&to=&includeDeleted=
  * Lists one page of tasks (pending first, then by dueDate asc). `from`/`to`
  * (PDR-003) additionally restrict dueDate to that window — see
  * taskService.listTasks for how they combine with status and undated tasks.
+ * `includeDeleted=true` (TD-009) additionally includes soft-deleted tasks,
+ * for the frontend's trash view — every other value/absence excludes them.
  * Responds with { items, nextCursor, hasMore, total }.
  */
 export async function list(req: AuthenticatedRequest, res: Response): Promise<void> {
@@ -30,6 +32,7 @@ export async function list(req: AuthenticatedRequest, res: Response): Promise<vo
     cursor: parseCursorParam(req.query.cursor),
     from: parseDateParam(req.query.from, 'from'),
     to: parseDateParam(req.query.to, 'to'),
+    includeDeleted: req.query.includeDeleted === 'true',
   });
   sendSuccess(res, page);
 }
@@ -79,7 +82,9 @@ export async function complete(req: AuthenticatedRequest, res: Response): Promis
 
 /**
  * DELETE /api/households/:householdId/tasks/:taskId
- * Hard-deletes the task; broadcasts task:deleted.
+ * Soft-deletes the task (TD-009: sets isDeleted/deletedAt, does not remove
+ * the document); broadcasts task:deleted. Idempotent — deleting an
+ * already-deleted task is a no-op, not a 404.
  */
 export async function remove(req: AuthenticatedRequest, res: Response): Promise<void> {
   await taskService.deleteTask(
@@ -89,6 +94,21 @@ export async function remove(req: AuthenticatedRequest, res: Response): Promise<
     req.member!.role,
   );
   sendSuccess(res, { message: 'Task deleted' });
+}
+
+/**
+ * POST /api/households/:householdId/tasks/:taskId/restore
+ * Restores a soft-deleted task (TD-009); broadcasts task:updated. Restricted
+ * to the task's creator or a household admin, same as edit/delete (TD-011).
+ */
+export async function restore(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const task = await taskService.restoreTask(
+    req.params.householdId,
+    req.user!.userId,
+    req.params.taskId,
+    req.member!.role,
+  );
+  sendSuccess(res, task);
 }
 
 /**

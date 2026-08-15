@@ -966,6 +966,123 @@ void main() {
       ],
     );
   });
+
+  group('TaskCubit.loadTrashTasks / restoreTask (TD-009)', () {
+    blocTest<TaskCubit, TaskState>(
+      'walks the includeDeleted list and keeps only deleted tasks, most recently deleted first',
+      build: () => TaskCubit(
+        FakeTaskRepository(
+          pages: [
+            page([
+              buildTask('active', title: 'Sigue viva'),
+              buildTask('deleted-old',
+                  title: 'Borrada hace tiempo',
+                  isDeleted: true,
+                  deletedAt: DateTime.utc(2026, 8, 1)),
+              buildTask('deleted-recent',
+                  title: 'Borrada hace poco',
+                  isDeleted: true,
+                  deletedAt: DateTime.utc(2026, 8, 10)),
+            ], nextCursor: null, hasMore: false, total: 3),
+          ],
+        ),
+        FakeNotificationService(),
+      ),
+      act: (cubit) => cubit.loadTrashTasks('h1'),
+      expect: () => [
+        isA<TaskState>().having((s) => s.trashLoading, 'trashLoading', true),
+        isA<TaskState>()
+            .having((s) => s.trashLoading, 'trashLoading', false)
+            .having((s) => s.trashLoaded, 'trashLoaded', true)
+            .having((s) => s.trashTasks.map((t) => t.id).toList(), 'ids',
+                ['deleted-recent', 'deleted-old'])
+            .having((s) => s.trashTasks.every((t) => t.isDeleted), 'all deleted', true),
+      ],
+    );
+
+    test('requests the list with includeDeleted:true', () async {
+      final repo = FakeTaskRepository(
+        pages: [page([buildTask('d1', isDeleted: true)], nextCursor: null, hasMore: false)],
+      );
+      final cubit = TaskCubit(repo, FakeNotificationService());
+
+      await cubit.loadTrashTasks('h1');
+
+      expect(repo.receivedIncludeDeleted, [true]);
+    });
+
+    test('drains every page before filtering, not just the first', () async {
+      final repo = FakeTaskRepository(
+        pages: [
+          page([buildTask('p1-active', title: 'Página 1')],
+              nextCursor: 'c1', hasMore: true, total: 2),
+          page([buildTask('p2-deleted', title: 'En página 2', isDeleted: true)],
+              nextCursor: null, hasMore: false),
+        ],
+      );
+      final cubit = TaskCubit(repo, FakeNotificationService());
+
+      await cubit.loadTrashTasks('h1');
+
+      expect(cubit.state.trashTasks.map((t) => t.id).toList(), ['p2-deleted']);
+    });
+
+    blocTest<TaskCubit, TaskState>(
+      'emits trashError and an empty list when the fetch fails',
+      build: () => TaskCubit(
+        FakeTaskRepository(failListWith: const ServerFailure('boom')),
+        FakeNotificationService(),
+      ),
+      act: (cubit) => cubit.loadTrashTasks('h1'),
+      expect: () => [
+        isA<TaskState>().having((s) => s.trashLoading, 'trashLoading', true),
+        isA<TaskState>()
+            .having((s) => s.trashLoading, 'trashLoading', false)
+            .having((s) => s.trashError, 'trashError', 'boom')
+            .having((s) => s.trashTasks, 'trashTasks', isEmpty),
+      ],
+    );
+
+    test('restoreTask calls the repository and drops the task from trashTasks', () async {
+      final repo = FakeTaskRepository();
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+      cubit.emit(cubit.state.copyWith(
+        trashTasks: [buildTask('d1', title: 'Borrada', isDeleted: true)],
+      ));
+
+      await cubit.restoreTask('d1');
+
+      expect(repo.restoreCalls, ['d1']);
+      expect(cubit.state.trashTasks, isEmpty);
+    });
+
+    test('restoreTask upserts the restored task back into the matching buckets', () async {
+      final repo = FakeTaskRepository();
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+      cubit.emit(cubit.state.copyWith(
+        trashTasks: [buildTask('d1', title: 'Borrada', isDeleted: true)],
+      ));
+
+      await cubit.restoreTask('d1');
+
+      expect(cubit.state.allTasks.map((t) => t.id), contains('d1'));
+    });
+
+    test('restoreTask surfaces a failure via trashError without touching trashTasks', () async {
+      final repo = FakeTaskRepository(failRestoreWith: const ServerFailure('boom'));
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+      final seeded = [buildTask('d1', title: 'Borrada', isDeleted: true)];
+      cubit.emit(cubit.state.copyWith(trashTasks: seeded));
+
+      await cubit.restoreTask('d1');
+
+      expect(cubit.state.trashError, 'boom');
+      expect(cubit.state.trashTasks, seeded);
+    });
+  });
 }
 
 /// First page succeeds, second fails — models a mid-scroll network drop.
@@ -980,6 +1097,7 @@ class _FailingSecondPageRepository extends FakeTaskRepository {
     String? cursor,
     DateTime? from,
     DateTime? to,
+    bool includeDeleted = false,
   }) async {
     receivedCursors.add(cursor);
     listCalls++;

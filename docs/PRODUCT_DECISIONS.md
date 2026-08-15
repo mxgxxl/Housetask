@@ -56,3 +56,11 @@ Los PDRs registran decisiones de producto con Context / Decision / Consequences,
 - **Context:** Flutter 3.44+ enforces minSdk 23 as a hard error (`DependencyVersionChecker.errorMinSdkVersion`) — a project below that floor cannot build at all on this Flutter version, independent of any Gradle/AGP/Kotlin fix.
 - **Decision:** Raise minSdk from 21 to 23, dropping support for Android 5.0–6.0 (<5% market).
 - **Consequences:** Cleaner builds, no workaround flags; acceptable for validation phase.
+
+## PDR-006: Soft delete y papelera de tareas (TD-046)
+
+**Status:** Resolved
+
+- **Context:** Borrar una tarea era instantáneo e irreversible (hard delete); un swipe accidental, o el de un miembro con prisa, perdía la tarea (y su historial de completado) sin ninguna red de seguridad. En un hogar compartido el coste de un borrado accidental lo paga otro miembro, no quien lo causó.
+- **Decision:** DELETE marca la tarea como borrada (`isDeleted` + `deletedAt`) en vez de eliminar el documento; los listados la excluyen por defecto. Nueva sección "Papelera" (acción en la barra superior de Tareas) lista las tareas borradas con un botón "Restaurar". Restaurar, igual que editar/borrar, está limitado al creador de la tarea o a un admin del hogar (misma regla que TD-011) — cualquier miembro puede borrar (como ya podía completar), pero deshacerlo requiere el mismo nivel de permiso que borrarlo.
+- **Consequences:** Red de seguridad de bajo coste (ningún cambio de esquema visible al usuario, la app se siente igual salvo por la Papelera); las tareas borradas quedan en la base de datos indefinidamente — no hay todavía un purgado periódico, aceptable mientras el volumen sea bajo (household de 2-6 personas); un purgado (p.ej. borrar definitivamente tras 30 días) es un candidato de Fase 2 si el almacenamiento llega a importar.

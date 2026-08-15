@@ -57,6 +57,15 @@ class TaskRepository {
   /// cached for the household in one page (Hive has no server-side cursor to
   /// resume from), so a subsequent loadMore() is a correct no-op rather than
   /// re-appending the same rows.
+  ///
+  /// [includeDeleted] (TD-009) asks the backend to include soft-deleted tasks
+  /// in the page instead of excluding them (the default) — used by
+  /// [TaskCubit.loadTrashTasks] to walk the full list and keep only the
+  /// deleted rows, the same TD-035 pattern [TaskCubit.loadRecurringTasks]
+  /// already uses instead of a dedicated endpoint. An offline fallback never
+  /// has deleted rows to show (the cache only ever holds active tasks, plus
+  /// locally-queued pending deletes — see [_listFromCache]), so it ignores
+  /// this flag rather than serving something misleading.
   Future<PaginatedResponse<Task>> list(
     String householdId, {
     String? status,
@@ -64,6 +73,7 @@ class TaskRepository {
     String? cursor,
     DateTime? from,
     DateTime? to,
+    bool includeDeleted = false,
   }) async {
     try {
       final data = await _api.get(
@@ -74,16 +84,19 @@ class TaskRepository {
           if (cursor != null) 'cursor': cursor,
           if (from != null) 'from': from.toUtc().toIso8601String(),
           if (to != null) 'to': to.toUtc().toIso8601String(),
+          if (includeDeleted) 'includeDeleted': 'true',
         },
       );
       final page = PaginatedResponse<Task>.fromJson(
         Map<String, dynamic>.from(data as Map),
         Task.fromJson,
       );
-      if (cursor == null) {
-        // Only the first page is a full-enough snapshot to cache as "this
-        // household's tasks" — caching a middle page would make a later
-        // offline read show an arbitrary slice instead of the earliest rows.
+      if (cursor == null && !includeDeleted) {
+        // Only the first page of the DEFAULT (active-only) list is a
+        // full-enough snapshot to cache as "this household's tasks" — an
+        // includeDeleted page mixes in rows that don't belong in the offline
+        // active-task cache, and a middle page would make a later offline
+        // read show an arbitrary slice instead of the earliest rows.
         _cache.saveTasks(householdId, page.items);
       }
       lastListWasFromCache = false;
@@ -275,6 +288,18 @@ class TaskRepository {
       idempotencyKey: _uuid.v4(),
     ));
     return marked;
+  }
+
+  /// Restore a soft-deleted task (TD-009). Online-only, like
+  /// [generateRecurringInstances]: undoing a delete from the trash view is a
+  /// deliberate, in-the-moment action a user takes while looking at the app,
+  /// not something that needs to survive being offline — a failure here is
+  /// left to the caller rather than silently queued.
+  Future<Task> restore(String householdId, String taskId) async {
+    final data = await _api.post('/households/$householdId/tasks/$taskId/restore');
+    final task = Task.fromJson(data as Map<String, dynamic>);
+    _cache.saveTask(task);
+    return task;
   }
 
   /// Catch-up: ask the server to generate missed recurring occurrences.
