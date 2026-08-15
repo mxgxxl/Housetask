@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../config/theme.dart';
+import '../../data/models/recurrence_rule.dart';
 
 /// Maps a task priority to its accent color.
 Color priorityColor(String priority) {
@@ -103,3 +104,21 @@ String formatDueDate(DateTime? date) {
 }
 
 String formatTime(DateTime date) => DateFormat('HH:mm').format(date);
+
+/// Human-readable recurrence schedule (e.g. "Cada semana", "Cada 3 días") —
+/// the Recurrentes tab's rule label (TD-035). null only defensively; every
+/// task shown there has isRecurring == true and therefore a rule.
+String recurrenceRuleLabel(RecurrenceRule? rule) {
+  if (rule == null) return 'Recurrente';
+  final interval = rule.interval ?? 1;
+  switch (rule.type) {
+    case 'daily':
+      return interval <= 1 ? 'Cada día' : 'Cada $interval días';
+    case 'weekly':
+      return interval <= 1 ? 'Cada semana' : 'Cada $interval semanas';
+    case 'monthly':
+      return interval <= 1 ? 'Cada mes' : 'Cada $interval meses';
+    default:
+      return 'Personalizada';
+  }
+}

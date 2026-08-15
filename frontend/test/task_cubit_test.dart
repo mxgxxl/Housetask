@@ -819,6 +819,153 @@ void main() {
       expect(notifications.scheduledStartReminders.single.startsAt, startsAt);
     });
   });
+
+  group('TaskCubit.loadRecurringTasks (TD-035)', () {
+    blocTest<TaskCubit, TaskState>(
+      'lists only isRecurring tasks, one row per series, sorted by next due date',
+      build: () => TaskCubit(
+        FakeTaskRepository(
+          pages: [
+            page([
+              buildTask('not-recurring', title: 'Fregar'),
+              buildTask('daily-1',
+                  title: 'Regar plantas',
+                  isRecurring: true,
+                  recurrenceRule: {'type': 'daily', 'interval': 1},
+                  dueDate: DateTime.utc(2026, 8, 20)),
+              buildTask('weekly-1',
+                  title: 'Sacar basura',
+                  isRecurring: true,
+                  recurrenceRule: {'type': 'weekly', 'interval': 1},
+                  dueDate: DateTime.utc(2026, 8, 17)),
+            ], nextCursor: null, hasMore: false, total: 3),
+          ],
+        ),
+        FakeNotificationService(),
+      ),
+      act: (cubit) => cubit.loadRecurringTasks('h1'),
+      expect: () => [
+        isA<TaskState>().having((s) => s.recurringLoading, 'recurringLoading', true),
+        isA<TaskState>()
+            .having((s) => s.recurringLoading, 'recurringLoading', false)
+            .having((s) => s.recurringLoaded, 'recurringLoaded', true)
+            .having((s) => s.recurringTasks.map((t) => t.id).toList(), 'ids',
+                ['weekly-1', 'daily-1']) // earliest dueDate first
+            .having((s) => s.recurringTasks.every((t) => t.isRecurring), 'all recurring', true),
+      ],
+    );
+
+    blocTest<TaskCubit, TaskState>(
+      'drains every page before filtering, not just the first (avoids the original TD-035 bug)',
+      build: () => TaskCubit(
+        FakeTaskRepository(
+          pages: [
+            page([buildTask('p1-not-recurring', title: 'Página 1')],
+                nextCursor: 'c1', hasMore: true, total: 2),
+            page([
+              buildTask('p2-recurring',
+                  title: 'En página 2',
+                  isRecurring: true,
+                  recurrenceRule: {'type': 'monthly', 'interval': 1}),
+            ], nextCursor: null, hasMore: false),
+          ],
+        ),
+        FakeNotificationService(),
+      ),
+      act: (cubit) => cubit.loadRecurringTasks('h1'),
+      expect: () => [
+        isA<TaskState>().having((s) => s.recurringLoading, 'recurringLoading', true),
+        isA<TaskState>().having(
+            (s) => s.recurringTasks.map((t) => t.id).toList(), 'ids', ['p2-recurring']),
+      ],
+    );
+
+    test('requests the second page with the cursor the first page returned', () async {
+      final repo = FakeTaskRepository(
+        pages: [
+          page([buildTask('p1', title: 'Página 1')], nextCursor: 'c1', hasMore: true, total: 2),
+          page([buildTask('p2', title: 'Página 2', isRecurring: true)],
+              nextCursor: null, hasMore: false),
+        ],
+      );
+      final cubit = TaskCubit(repo, FakeNotificationService());
+
+      await cubit.loadRecurringTasks('h1');
+
+      expect(repo.receivedCursors, [null, 'c1']);
+    });
+
+    test('a series with only completed occurrences shows the most recently due one', () async {
+      final repo = FakeTaskRepository(
+        pages: [
+          page([
+            buildTask('series-a-old',
+                title: 'Serie A (antigua)',
+                completed: true,
+                isRecurring: true,
+                recurrenceRule: {'type': 'weekly'},
+                dueDate: DateTime.utc(2026, 8, 1),
+                parentTaskId: 'series-a-root'),
+            buildTask('series-a-recent',
+                title: 'Serie A (reciente)',
+                completed: true,
+                isRecurring: true,
+                recurrenceRule: {'type': 'weekly'},
+                dueDate: DateTime.utc(2026, 8, 10),
+                parentTaskId: 'series-a-root'),
+          ], nextCursor: null, hasMore: false),
+        ],
+      );
+      final cubit = TaskCubit(repo, FakeNotificationService());
+
+      await cubit.loadRecurringTasks('h1');
+
+      expect(cubit.state.recurringTasks.map((t) => t.id).toList(), ['series-a-recent']);
+    });
+
+    test('prefers the pending occurrence of a series over its completed ones', () async {
+      final repo = FakeTaskRepository(
+        pages: [
+          page([
+            buildTask('series-b-completed',
+                title: 'Serie B (completada)',
+                completed: true,
+                isRecurring: true,
+                recurrenceRule: {'type': 'weekly'},
+                dueDate: DateTime.utc(2026, 8, 1),
+                parentTaskId: 'series-b-root'),
+            buildTask('series-b-pending',
+                title: 'Serie B (pendiente)',
+                isRecurring: true,
+                recurrenceRule: {'type': 'weekly'},
+                dueDate: DateTime.utc(2026, 8, 8),
+                parentTaskId: 'series-b-root'),
+          ], nextCursor: null, hasMore: false),
+        ],
+      );
+      final cubit = TaskCubit(repo, FakeNotificationService());
+
+      await cubit.loadRecurringTasks('h1');
+
+      expect(cubit.state.recurringTasks.map((t) => t.id).toList(), ['series-b-pending']);
+    });
+
+    blocTest<TaskCubit, TaskState>(
+      'emits recurringError and an empty list when the fetch fails',
+      build: () => TaskCubit(
+        FakeTaskRepository(failListWith: const ServerFailure('boom')),
+        FakeNotificationService(),
+      ),
+      act: (cubit) => cubit.loadRecurringTasks('h1'),
+      expect: () => [
+        isA<TaskState>().having((s) => s.recurringLoading, 'recurringLoading', true),
+        isA<TaskState>()
+            .having((s) => s.recurringLoading, 'recurringLoading', false)
+            .having((s) => s.recurringError, 'recurringError', 'boom')
+            .having((s) => s.recurringTasks, 'recurringTasks', isEmpty),
+      ],
+    );
+  });
 }
 
 /// First page succeeds, second fails — models a mid-scroll network drop.

@@ -159,6 +159,17 @@ class TaskState extends Equatable {
   final bool timelineLoadingMore;
   final String? timelineError;
 
+  /// One row per recurring series for the Recurrentes tab (TD-035): the
+  /// current occurrence (pending if one exists, otherwise the most
+  /// recently due completed one), sorted by next due date. Populated by
+  /// [TaskCubit.loadRecurringTasks] — deliberately NOT derived from
+  /// [allTasks] or any [buckets] entry, both of which are only ever
+  /// partially paginated; see that method's doc comment.
+  final List<Task> recurringTasks;
+  final bool recurringLoading;
+  final bool recurringLoaded;
+  final String? recurringError;
+
   const TaskState({
     this.status = TaskStatusUi.initial,
     this.error,
@@ -176,6 +187,10 @@ class TaskState extends Equatable {
     this.timelineLoading = false,
     this.timelineLoadingMore = false,
     this.timelineError,
+    this.recurringTasks = const [],
+    this.recurringLoading = false,
+    this.recurringLoaded = false,
+    this.recurringError,
   });
 
   /// Pagination state for [filter], empty if it has never been loaded.
@@ -214,6 +229,10 @@ class TaskState extends Equatable {
     bool? timelineLoading,
     bool? timelineLoadingMore,
     String? timelineError,
+    List<Task>? recurringTasks,
+    bool? recurringLoading,
+    bool? recurringLoaded,
+    String? recurringError,
   }) {
     return TaskState(
       status: status ?? this.status,
@@ -234,6 +253,11 @@ class TaskState extends Equatable {
       timelineLoading: timelineLoading ?? this.timelineLoading,
       timelineLoadingMore: timelineLoadingMore ?? this.timelineLoadingMore,
       timelineError: timelineError,
+      recurringTasks: recurringTasks ?? this.recurringTasks,
+      recurringLoading: recurringLoading ?? this.recurringLoading,
+      recurringLoaded: recurringLoaded ?? this.recurringLoaded,
+      // Explicitly nullable, like timelineError/error: must clear on success.
+      recurringError: recurringError,
     );
   }
 
@@ -255,6 +279,10 @@ class TaskState extends Equatable {
         timelineLoading,
         timelineLoadingMore,
         timelineError,
+        recurringTasks,
+        recurringLoading,
+        recurringLoaded,
+        recurringError,
       ];
 }
 
@@ -511,6 +539,45 @@ class TaskCubit extends Cubit<TaskState> {
     }
   }
 
+  /// Fetch every recurring task's current-occurrence representative for the
+  /// Recurrentes tab (TD-035), sorted by next due date. Exhaustively drains
+  /// the UNFILTERED task list (same status=null population [TaskFilter.all]'s
+  /// bucket uses) rather than reading whatever page happens to already be
+  /// cached — filtering a partially-loaded paginated list is exactly why this
+  /// tab was removed the first time (see [TaskFilter]'s own doc comment).
+  /// Deliberately does NOT use a status=pending/status=completed filtered
+  /// fetch even though that would be cheaper: [TaskRepository.list] only
+  /// caches a first page (`cursor == null`) as "this household's tasks" —
+  /// caching a status-filtered first page here would silently evict the other
+  /// statuses' entries from the offline cache (`CacheService.saveTasks`
+  /// replaces, it does not merge). No new backend endpoint (TD-035's original
+  /// proposal): the existing paginated list already has everything needed, it
+  /// just has to be walked to completion instead of one page. An offline
+  /// cache fallback returns everything in a single non-paginated page (see
+  /// [TaskRepository.list]'s doc comment), so this loop still terminates in
+  /// one iteration when there is no connectivity.
+  Future<void> loadRecurringTasks(String householdId) async {
+    _householdId = householdId;
+    emit(state.copyWith(recurringLoading: true, recurringError: null));
+    try {
+      final all = <Task>[];
+      String? cursor;
+      while (true) {
+        final page = await _repo.list(householdId, cursor: cursor);
+        all.addAll(page.items);
+        if (!page.hasMore || page.nextCursor == null) break;
+        cursor = page.nextCursor;
+      }
+      emit(state.copyWith(
+        recurringLoading: false,
+        recurringLoaded: true,
+        recurringTasks: _representativeRecurringTasks(all),
+      ));
+    } on Failure catch (f) {
+      emit(state.copyWith(recurringLoading: false, recurringError: f.message));
+    }
+  }
+
   Future<Task?> createTask(Map<String, dynamic> payload) async {
     if (_householdId == null) return null;
     try {
@@ -749,4 +816,51 @@ _TimelineGroups _mergeTimelineItems(
     byId[t.id] = t;
   }
   return _groupTasksByLocalDay(byId.values.toList());
+}
+
+/// One row per recurring series (grouped by parentTaskId, or the task's own
+/// id for a series' very first occurrence): the PENDING occurrence if one
+/// exists (the "current" one — completing a recurring task immediately
+/// regenerates the next pending instance, task.service.ts's
+/// generateNextInstance, so this is the normal case), otherwise the most
+/// recently due completed one, so a series briefly caught between completion
+/// and catch-up still shows something instead of vanishing. Every generated
+/// occurrence inherits isRecurring: true (not just the series template), so
+/// grouping by series is required — a raw `isRecurring == true` filter would
+/// list one row per historical occurrence instead of one per series.
+List<Task> _representativeRecurringTasks(List<Task> tasks) {
+  final bySeries = <String, Task>{};
+  for (final task in tasks) {
+    if (!task.isRecurring) continue;
+    final seriesId = task.parentTaskId ?? task.id;
+    final existing = bySeries[seriesId];
+    if (existing == null || _isBetterRecurringRepresentative(task, existing)) {
+      bySeries[seriesId] = task;
+    }
+  }
+  return _sortByNextOccurrence(bySeries.values.toList());
+}
+
+bool _isBetterRecurringRepresentative(Task candidate, Task current) {
+  if (candidate.isCompleted != current.isCompleted) {
+    return !candidate.isCompleted; // prefer pending over completed
+  }
+  final cd = candidate.dueDate;
+  final xd = current.dueDate;
+  if (cd == null) return false;
+  if (xd == null) return true;
+  return cd.isAfter(xd); // among same-status candidates, the latest one
+}
+
+List<Task> _sortByNextOccurrence(List<Task> tasks) {
+  final copy = List<Task>.from(tasks);
+  copy.sort((a, b) {
+    final ad = a.dueDate;
+    final bd = b.dueDate;
+    if (ad == null && bd == null) return 0;
+    if (ad == null) return 1;
+    if (bd == null) return -1;
+    return ad.compareTo(bd);
+  });
+  return copy;
 }

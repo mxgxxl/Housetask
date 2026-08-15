@@ -13,6 +13,7 @@ import 'home_page.dart';
 import 'household_setup_page.dart';
 import 'pet_page.dart';
 import 'profile_page.dart';
+import 'recurring_tasks_page.dart';
 import 'shopping_page.dart';
 import 'tasks_page.dart';
 
@@ -32,6 +33,7 @@ class _MainScaffoldState extends State<MainScaffold> {
   final _pages = const [
     HomePage(),
     TasksPage(),
+    RecurringTasksPage(),
     CalendarPage(),
     ShoppingPage(),
     PetPage(),
@@ -63,6 +65,8 @@ class _MainScaffoldState extends State<MainScaffold> {
     context.read<SocketCubit>().joinHousehold(householdId);
     // Generate any missed recurring occurrences for this household.
     context.read<TaskCubit>().catchUpRecurringTasks(householdId);
+    // Recurrentes tab (TD-035) — warmed up front like every other tab.
+    context.read<TaskCubit>().loadRecurringTasks(householdId);
 
     // PetCubit needs the current user id to tell "I proposed this
     // adoption" apart from "someone else did" (PDR-001 A3) — it's read
@@ -114,6 +118,11 @@ class _MainScaffoldState extends State<MainScaffold> {
                 icon: Icon(Icons.checklist_outlined),
                 selectedIcon: Icon(Icons.checklist),
                 label: 'Tareas',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.repeat),
+                selectedIcon: Icon(Icons.repeat),
+                label: 'Recurrentes',
               ),
               NavigationDestination(
                 icon: Icon(Icons.calendar_month_outlined),
