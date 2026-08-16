@@ -41,12 +41,30 @@ class UserAvatar extends StatelessWidget {
 }
 
 /// A row of overlapping avatars for assigned members.
+///
+/// TD-018: an assignee can be a former member — either they left/were
+/// removed from the household (their id is no longer in [formerMemberIds],
+/// computed by the caller from the current member list) or their ref never
+/// populated at all (empty name AND email, e.g. a hard-deleted account).
+/// Either case renders a neutral placeholder avatar with an "Ex-miembro"
+/// tooltip instead of the normal name-initials avatar, same label
+/// [TaskTile] already uses for a former `completedBy` (PDR-002).
 class AvatarStack extends StatelessWidget {
   final List<User> users;
   final double size;
   final int max;
+  final Set<String> formerMemberIds;
 
-  const AvatarStack({super.key, required this.users, this.size = 28, this.max = 3});
+  const AvatarStack({
+    super.key,
+    required this.users,
+    this.size = 28,
+    this.max = 3,
+    this.formerMemberIds = const {},
+  });
+
+  bool _isFormerMember(User user) =>
+      (user.name.isEmpty && user.email.isEmpty) || formerMemberIds.contains(user.id);
 
   @override
   Widget build(BuildContext context) {
@@ -70,7 +88,20 @@ class AvatarStack extends StatelessWidget {
                   color: AppColors.surface,
                 ),
                 padding: const EdgeInsets.all(1.5),
-                child: UserAvatar(user: shown[i], size: size),
+                child: _isFormerMember(shown[i])
+                    ? Tooltip(
+                        message: 'Ex-miembro',
+                        child: CircleAvatar(
+                          radius: size / 2,
+                          backgroundColor: AppColors.textSecondary.withValues(alpha: 0.18),
+                          child: Icon(
+                            Icons.person_outline,
+                            size: size * 0.6,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      )
+                    : UserAvatar(user: shown[i], size: size),
               ),
             ),
           if (overflow > 0)

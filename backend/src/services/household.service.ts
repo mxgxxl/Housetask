@@ -1,12 +1,15 @@
 import { Types } from 'mongoose';
 import { HouseholdModel, IHousehold } from '../models/Household';
 import { UserModel } from '../models/User';
+import { TaskModel } from '../models/Task';
 import { AppError } from '../middleware/error.middleware';
 import { emitToHousehold } from '../config/socket';
 import { RequesterMembership, Role } from '../types';
 import { sanitizeString } from '../utils/sanitize';
+import { logger } from '../utils/logger';
 
 const MAX_HOUSEHOLD_NAME_LENGTH = 100;
+const TASK_POPULATE_FIELDS = 'name email avatarUrl';
 
 const INVITE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous 0/O/1/I
 const INVITE_LENGTH = 8;
@@ -130,6 +133,56 @@ export async function joinHousehold(userId: string, inviteCode: string): Promise
 }
 
 /**
+ * TD-018 (Hard Rule 16): when a member leaves a household — currently the
+ * only exit path is removeMember below — their PENDING task assignments must
+ * not linger pointing at someone who can no longer see or complete them.
+ * This prunes the departed user from `assignedTo` on every pending,
+ * non-deleted task in the household, leaving the task itself intact:
+ *   - A task the departing member was assigned to (by themselves or anyone
+ *     else) becomes unassigned if they were the only assignee, or keeps its
+ *     remaining assignees otherwise.
+ *   - A task the departing member CREATED is preserved untouched except for
+ *     this same assignedTo pruning — authorship is never erased.
+ *   - Completed and already soft-deleted tasks are left alone: they are
+ *     historical record, not live work someone still needs to act on.
+ * Each affected task is re-broadcast as `task:updated` so connected clients
+ * drop the departed member from the assignee avatars without a manual
+ * refresh (mirrors the `household:member_left` emission below).
+ */
+async function unassignDepartedMemberTasks(householdId: string, userId: string): Promise<void> {
+  const userObjectId = new Types.ObjectId(userId);
+  const affected = await TaskModel.find({
+    householdId: new Types.ObjectId(householdId),
+    assignedTo: userObjectId,
+    status: 'pending',
+    isDeleted: { $ne: true },
+  });
+
+  if (affected.length === 0) return;
+
+  await TaskModel.updateMany(
+    { _id: { $in: affected.map((t) => t._id) } },
+    { $pull: { assignedTo: userObjectId } },
+  );
+
+  logger.info('Unassigned departed member from pending tasks', {
+    householdId,
+    userId,
+    count: affected.length,
+  });
+
+  for (const task of affected) {
+    task.assignedTo = task.assignedTo.filter((id) => id.toString() !== userId);
+    await task.populate([
+      { path: 'assignedTo', select: TASK_POPULATE_FIELDS },
+      { path: 'createdBy', select: TASK_POPULATE_FIELDS },
+      { path: 'completedBy', select: TASK_POPULATE_FIELDS },
+    ]);
+    emitToHousehold(householdId, 'task:updated', task.toJSON());
+  }
+}
+
+/**
  * Remove a member from a household. Only admins may remove members. The last
  * remaining admin cannot be removed (which would leave the household leaderless).
  *
@@ -177,6 +230,17 @@ export async function removeMember(
     householdId: household._id.toString(),
     userId: targetUserId,
   });
+
+  // TD-018: prune the departed member from pending task assignments. Runs
+  // after the membership mutation is already committed and broadcast, and is
+  // wrapped so it can never fail the removal itself (same fire-and-forget
+  // contract as grantCoins/sendPushNotification) — a removal must not come
+  // back as an error just because the follow-up task cleanup hit a problem.
+  try {
+    await unassignDepartedMemberTasks(household._id.toString(), targetUserId);
+  } catch (err) {
+    logger.error('Error unassigning departed member from tasks', (err as Error).message);
+  }
 
   await household.populate('members.user', 'name email avatarUrl');
   return household;

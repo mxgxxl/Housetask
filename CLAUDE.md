@@ -385,7 +385,7 @@ Testing stack installed: Jest + Supertest + mongodb-memory-server (backend); flu
 2. Recurrence anti-duplicate guard (±1 day window)
 3. Never delete the household's last admin
 4. Idempotency of write operations under retry (401 refresh retry, socket reconnect)
-5. Member-leave lifecycle (unassign pending tasks on leave/removal, preserve created tasks, last-admin protection). Last-admin protection is testable today; the full lifecycle MUST be covered when TD-018 is implemented.
+5. Member-leave lifecycle (unassign pending tasks on leave/removal, preserve created tasks, last-admin protection) — covered by households.test.ts (TD-018 resolved).
 6. Widget rendering of offline/sync states (TaskTile unsynced/deleted, offline banner with pending count)
 
 ---
@@ -407,7 +407,7 @@ Testing stack installed: Jest + Supertest + mongodb-memory-server (backend); flu
 13. NEVER allow write POSTs without idempotency protection: every POST that creates a resource MUST accept an `Idempotency-Key` header; backend MUST dedupe via Redis with a TTL; frontend MUST generate one stable UUID per logical operation (surviving 401 retries). On duplicate key detection the backend MUST return the original resource with HTTP 200 and MUST NOT re-emit socket events. (MUST be enforced — currently NOT implemented, see TD-014)
 14. NEVER configure `express.json()` without a payload size limit (e.g. `limit: '100kb'`). (MUST be enforced — currently NOT implemented, see TD-015)
 15. NEVER ship production with empty `CORS_ORIGINS`: when `NODE_ENV=production` it MUST be non-empty and the server MUST fail fast at startup otherwise; wildcard `*` is only acceptable in development. (MUST be enforced — currently NOT implemented, see TD-016)
-16. NEVER leave orphaned references when a member leaves a household: their pending assigned tasks MUST be unassigned (removed from `assignedTo`), tasks they created MUST be preserved, and the UI MUST render "Former member" for dangling user refs. (MUST be enforced — currently NOT implemented, see TD-018)
+16. NEVER leave orphaned references when a member leaves a household: their pending assigned tasks MUST be unassigned (removed from `assignedTo`), tasks they created MUST be preserved, and the UI MUST render "Ex-miembro" for a former assignee. (Enforced since the TD-018 commit; see household.service.ts's unassignDepartedMemberTasks and task_tile.dart's AvatarStack)
 17. NEVER allow edit/delete of a task by anyone other than the creator or an admin; any member may complete tasks and purchase shopping items. (Enforced since the TD-011 commit; see tasks.test.ts permission tests)
 18. NEVER render user-supplied text in any HTML-capable surface (future web client, email templates, push deep-links) without escaping at render time; mobile Text() widgets are safe by construction, storage stays raw per ADR-009
 
@@ -444,7 +444,6 @@ The full registry (~47 entries, all history) lives in [Full Technical Debt Regis
 | TD-013 | Recurrence computed in UTC without household timezone | Medium | Planned (Phase 2) |
 | TD-015 | No express.json payload size limit | Medium | Planned (Phase 1) |
 | TD-016 | CORS_ORIGINS empty = * allowed in production | High | Planned (Phase 1) |
-| TD-018 | Member-leave lifecycle not handled (orphaned assignedTo refs, no "Former member" UI) | High | Planned (Phase 2) |
 | TD-034 | No deploy-order safety net between backend and Flutter app | Medium | Planned (Phase 3) |
 | TD-039 | Offline conflict resolution uses last-write-wins; concurrent edits on multiple devices can overwrite | Low | Deferred (Phase 2) |
 | TD-040 | flutter test hangs on loaded hosts (offline_banner_test.dart) | Low | Mitigated in CI; root cause still open |
@@ -670,7 +669,7 @@ Two separate systems, deliberately not coupled by a branch-protection gate (see 
 - [x] ~~ESLint + Prettier + no-console (TD-012)~~
 - [ ] Household-timezone-aware recurrence (TD-013)
 - [x] ~~Env-based frontend config via --dart-define (TD-017)~~
-- [ ] Member-leave lifecycle (TD-018)
+- [x] ~~Member-leave lifecycle (TD-018)~~
 
 ### Phase 3 — Production
 - [ ] MongoDB backups (TD-010)
