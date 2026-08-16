@@ -9,6 +9,7 @@ import { Page, decodeCursor, encodeCursor } from '../utils/pagination';
 import { TaskStatus, TaskPriority, TaskCategory, Role } from '../types';
 import { grantCoins } from './economy.service';
 import { TASK_COINS } from '../config/economy';
+import { sendPushNotification } from './notification.service';
 
 const POPULATE_FIELDS = 'name email avatarUrl';
 
@@ -92,6 +93,70 @@ async function populated(task: ITask): Promise<ITask> {
     { path: 'createdBy', select: POPULATE_FIELDS },
     { path: 'completedBy', select: POPULATE_FIELDS },
   ]);
+}
+
+/**
+ * A populated user ref carries a Mongoose document, not the plain ObjectId
+ * the ITask interface declares — same cast pattern household.service.ts's
+ * serializeHousehold uses for populated `members.user`.
+ */
+function populatedName(ref: Types.ObjectId): string {
+  return (ref as unknown as { name?: string }).name ?? 'Alguien';
+}
+
+function populatedId(ref: Types.ObjectId): string {
+  return (ref as unknown as { _id: Types.ObjectId })._id.toString();
+}
+
+/**
+ * PDR-008: push each assignee "you were assigned a task", skipping the
+ * creator if they assigned it to themselves (no point notifying yourself).
+ * Must be called with an already-populated task (populated() above) so
+ * `createdBy`'s name is available. Fire-and-forget: a push failure must
+ * never fail task creation, so every call is wrapped in try/catch and none
+ * of them are awaited by the caller.
+ */
+function notifyTaskAssigned(task: ITask, creatorId: string): void {
+  if (task.assignedTo.length === 0) return;
+
+  const creatorName = populatedName(task.createdBy);
+  const data = { type: 'task', taskId: task._id.toString() };
+
+  for (const assignee of task.assignedTo) {
+    const assigneeId = populatedId(assignee);
+    if (assigneeId === creatorId) continue;
+
+    sendPushNotification(
+      assigneeId,
+      'Nueva tarea asignada',
+      `${creatorName} te asignó: ${task.title}`,
+      data,
+    ).catch((err) => {
+      logger.error('Error sending task-assigned push notification', (err as Error).message);
+    });
+  }
+}
+
+/**
+ * PDR-008: push the task's creator "someone completed your task", unless
+ * they completed it themselves. Same fire-and-forget contract as
+ * notifyTaskAssigned above.
+ */
+function notifyTaskCompleted(task: ITask, completerId: string): void {
+  const creatorId = populatedId(task.createdBy);
+  if (creatorId === completerId) return;
+
+  const completerName = task.completedBy ? populatedName(task.completedBy) : 'Alguien';
+  const data = { type: 'task', taskId: task._id.toString() };
+
+  sendPushNotification(
+    creatorId,
+    'Tarea completada',
+    `${completerName} completó: ${task.title}`,
+    data,
+  ).catch((err) => {
+    logger.error('Error sending task-completed push notification', (err as Error).message);
+  });
 }
 
 /**
@@ -361,6 +426,7 @@ export async function createTask(
   });
 
   await populated(task);
+  notifyTaskAssigned(task, userId);
   emitToHousehold(householdId, 'task:created', task.toJSON());
   return task;
 }
@@ -522,6 +588,7 @@ export async function completeTask(
   }
 
   await populated(task);
+  notifyTaskCompleted(task, userId);
   emitToHousehold(householdId, 'task:completed', task.toJSON());
   return task;
 }

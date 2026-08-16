@@ -37,7 +37,7 @@ class HomeSyncApp extends StatelessWidget {
     final shoppingRepo = ShoppingRepository(api);
     final petRepo = PetRepository(api);
 
-    final notifications = NotificationService();
+    final notifications = NotificationService()..attachApi(api);
     final socketService = SocketService();
 
     return MultiRepositoryProvider(
@@ -51,7 +51,7 @@ class HomeSyncApp extends StatelessWidget {
       child: MultiBlocProvider(
         providers: [
           BlocProvider(create: (_) {
-            final cubit = AuthCubit(authRepo);
+            final cubit = AuthCubit(authRepo, notifications: notifications);
             // Force logout when the API layer can't refresh the session.
             api.onSessionExpired = cubit.onSessionExpired;
             return cubit;
@@ -72,12 +72,24 @@ class HomeSyncApp extends StatelessWidget {
             ),
           ),
         ],
-        child: MaterialApp(
-          title: 'HomeSync',
-          debugShowCheckedModeBanner: false,
-          theme: AppTheme.light,
-          initialRoute: Routes.splash,
-          onGenerateRoute: Routes.onGenerateRoute,
+        // PDR-008: requests push permission and registers the device's FCM
+        // token the moment the user is authenticated (fresh login/register,
+        // or an auto-login from a cached session) — NotificationService
+        // itself no-ops past the first successful call, so repeated
+        // `authenticated` emissions (e.g. a profile update) don't re-request
+        // permission or double-subscribe listeners.
+        child: BlocListener<AuthCubit, AuthState>(
+          listenWhen: (previous, current) =>
+              current.status == AuthStatus.authenticated,
+          listener: (context, state) => notifications.initPushNotifications(),
+          child: MaterialApp(
+            title: 'HomeSync',
+            debugShowCheckedModeBanner: false,
+            theme: AppTheme.light,
+            navigatorKey: Routes.navigatorKey,
+            initialRoute: Routes.splash,
+            onGenerateRoute: Routes.onGenerateRoute,
+          ),
         ),
       ),
     );

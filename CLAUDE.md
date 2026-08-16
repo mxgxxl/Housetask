@@ -129,6 +129,7 @@ Detailed ADRs live in docs/ADRs.md. Index:
 | JWT + bcrypt | Authentication |
 | express-rate-limit | Rate limiting |
 | Swagger (swagger-ui-express) | API documentation at `/api/docs` |
+| firebase-admin | Push notifications (FCM) — sends via `notification.service.ts`, no-op when `FIREBASE_SERVICE_ACCOUNT` is unset (PDR-008) |
 
 ### Frontend
 | Technology | Purpose |
@@ -143,6 +144,7 @@ Detailed ADRs live in docs/ADRs.md. Index:
 | flutter_local_notifications | Local task reminders |
 | google_fonts (Inter) | Typography |
 | flutter_slidable | Swipe actions on list items |
+| firebase_core, firebase_messaging | Push notifications (FCM) — `NotificationService`, no-op-safe until a real Firebase project is wired up (TD-049, PDR-008) |
 
 ### Deployment
 | Service | Purpose |
@@ -446,6 +448,7 @@ The full registry (~47 entries, all history) lives in [Full Technical Debt Regis
 | TD-034 | No deploy-order safety net between backend and Flutter app | Medium | Planned (Phase 3) |
 | TD-039 | Offline conflict resolution uses last-write-wins; concurrent edits on multiple devices can overwrite | Low | Deferred (Phase 2) |
 | TD-040 | flutter test hangs on loaded hosts (offline_banner_test.dart) | Low | Mitigated in CI; root cause still open |
+| TD-049 | No real Firebase project connected for push notifications (PDR-008) — code is in place, no push actually delivers until a Firebase project + `flutterfire configure` + APNs key are set up manually | High | Planned (before beta push notifications can work) |
 
 ---
 
@@ -562,6 +565,28 @@ Frontend breadcrumbs (`SentryService.addBreadcrumb`, categories `auth`/`task`/`p
 3. **5xx on a household-scoped route** — condition: `category` equals `http_5xx` AND `route` contains `/households/`; action: notify on any occurrence. This is the app's core surface; a 5xx there is never expected, unlike a best-effort background failure.
 
 `userId`/`householdId` are deliberately not alert *conditions* (too high-cardinality — one rule per household doesn't scale) but are useful for triaging an already-fired alert: search Sentry issues by `userId:<id>` to see everything one user hit.
+
+---
+
+## 📲 Push Notifications (FCM, PDR-008)
+
+**Backend:** `notification.service.ts` initializes Firebase Admin lazily from `FIREBASE_SERVICE_ACCOUNT` (a JSON string env var, never a committed file) — same no-op-when-unconfigured pattern as Sentry (TD-009): absent or malformed JSON disables sending without breaking anything else. `sendPushNotification(userId, title, body, data?)` looks up every `DeviceToken` for the user and sends a multicast via `sendEachForMulticast`; a token FCM reports as `messaging/registration-token-not-registered` is deleted automatically.
+
+**Device endpoints** (`/api/devices`, JWT-authenticated, not household-scoped — a token belongs to a user, who may be in several households):
+
+| Method | Path | Body | Notes |
+|--------|------|------|-------|
+| POST | `/api/devices/register` | `{ token, platform: 'ios'\|'android' }` | Upsert on `{userId, token}`; if `token` already belonged to a different user (shared device) it is transferred. Idempotency-Key protected (Hard Rule 13). |
+| DELETE | `/api/devices/:token` | — | Removes the caller's own token; idempotent no-op if it doesn't exist or belongs to someone else. |
+
+**Triggers**, both in `task.service.ts`, both fire-and-forget (try/catch around the send call — a notification failure must never fail the task write, same pattern as `grantCoins`):
+
+- `createTask`: pushes every assignee other than whoever created the task ("Nueva tarea asignada").
+- `completeTask`: pushes the task's creator when someone else completes it ("Tarea completada").
+
+**Frontend:** `NotificationService` (already existed for local task reminders) gained `requestPermission()`, `getToken()`, `registerToken()`, `listenForTokenRefresh()`, and `showLocalNotification()` — the last one is what makes a foreground push visible, since FCM does not show a system banner while the app is open. `AuthCubit` calls `initPushNotifications()` after authenticating and `unregisterToken()` on logout, before the session is cleared (the DELETE call needs a valid access token). Tapping a notification that opened the app from the background (`onMessageOpenedApp`) navigates to the main shell via `Routes.navigatorKey` — there is no per-task deep-link route yet, so it does not open the specific task.
+
+**TD-049 (open):** this repo ships no real Firebase project — no `google-services.json`/`GoogleService-Info.plist`, and the `com.google.gms.google-services` Gradle plugin is deliberately not applied (it would hard-fail the Android build without that json file present). Every FCM call on both sides degrades to a caught, logged no-op until a real Firebase project is connected (`flutterfire configure`, or the two config files placed manually, plus the Xcode Push Notifications + Background Modes capability with an uploaded APNs key for iOS) — a manual/external step, not automatable here. Local task reminders (`flutter_local_notifications`) are unaffected either way.
 
 ---
 
@@ -683,6 +708,7 @@ As of this commit, Phase 1 (Stabilization) is COMPLETE. All TD items in Phase 1 
 
 **Beta release checklist:**
 - [ ] Report sentry-cocoa Package.swift bug upstream (TD-038)
+- [ ] Connect a real Firebase project for push notifications (TD-049): `flutterfire configure`, Xcode Push Notifications + Background Modes capability with an APNs key, `FIREBASE_SERVICE_ACCOUNT` in Railway
 - [ ] Install JDK + Android SDK (deferred, see TD-008 notes)
 - [ ] Configure TestFlight (iOS) and Google Play Internal Testing (Android)
 - [ ] Rotate any secrets that appeared in transcripts or logs
@@ -719,9 +745,12 @@ Las decisiones de producto (monetización, gamificación, UX de alto nivel) vive
 | `backend/src/models/EconomyLedger.ts` | Append-only coin ledger; balance is always `sum(amount)` — PDR-001 |
 | `backend/src/services/pet.service.ts` | Pet/adoption business logic + socket emissions |
 | `backend/src/services/economy.service.ts` | Coin balance, lazy hunger/mood decay, grantCoins anti-farm rules |
+| `backend/src/services/notification.service.ts` | Firebase Admin push notifications: `sendPushNotification`, device token register/remove (PDR-008) |
+| `backend/src/models/DeviceToken.ts` | FCM device token per user, unique on `{userId, token}` — PDR-008 |
 | `frontend/lib/config/constants.dart` | API URLs and app config — set via `--dart-define` (API_BASE_URL/ENVIRONMENT), see README.md; no longer protected with --assume-unchanged (TD-017) |
 | `frontend/lib/data/datasources/remote/api_service.dart` | Dio client with auth interceptors |
 | `frontend/lib/services/socket_service.dart` | Socket.io singleton |
+| `frontend/lib/services/notification_service.dart` | Local task reminders + FCM push registration/foreground display (PDR-008) |
 | `frontend/lib/presentation/cubit/task_cubit.dart` | Task state management |
 | `frontend/lib/presentation/cubit/pet_cubit.dart` | Pet/adoption/economy state management |
 | `frontend/lib/presentation/pages/pet_page.dart` | Pet tab: adoption flow, care view (feed/play) |

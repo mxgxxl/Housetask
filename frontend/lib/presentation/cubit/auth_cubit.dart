@@ -4,6 +4,7 @@ import '../../core/errors/failures.dart';
 import '../../data/models/user.dart';
 import '../../data/repositories/auth_repository.dart';
 import '../../services/cache_service.dart';
+import '../../services/notification_service.dart';
 import '../../services/sentry_service.dart';
 
 enum AuthStatus { unknown, authenticated, unauthenticated }
@@ -44,9 +45,11 @@ class AuthState extends Equatable {
 class AuthCubit extends Cubit<AuthState> {
   final AuthRepository _repo;
   final CacheService _cache;
+  final NotificationService _notifications;
 
-  AuthCubit(this._repo, {CacheService? cache})
+  AuthCubit(this._repo, {CacheService? cache, NotificationService? notifications})
       : _cache = cache ?? CacheService(),
+        _notifications = notifications ?? NotificationService(),
         super(const AuthState());
 
   /// Called on startup (SplashPage) to decide the initial route.
@@ -103,6 +106,10 @@ class AuthCubit extends Cubit<AuthState> {
   }
 
   Future<void> logout() async {
+    // Runs BEFORE _repo.logout() clears the stored access token: unregisterToken
+    // needs it to authenticate the DELETE call (PDR-008). A device that never
+    // registered a token, or a Firebase-less build, is a silent no-op.
+    await _notifications.unregisterToken();
     await _repo.logout();
     // Wipe every cached task/shopping/household/pending-op — the next login
     // may be a different user, and offline writes queued under this session

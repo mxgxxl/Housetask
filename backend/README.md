@@ -46,6 +46,7 @@ the table above in the Railway service.
 | `JWT_REFRESH_EXPIRES`| Refresh-token lifetime (default `7d`)                   |
 | `REDIS_URL`          | Redis connection URL                                    |
 | `CORS_ORIGINS`       | Comma-separated allowed origins (empty = allow `*`)     |
+| `FIREBASE_SERVICE_ACCOUNT` | Firebase service account JSON, as a **string** (not a file) — enables push notifications (PDR-008). Absent = feature disabled, no-op (see [Push notifications](#push-notifications-fcm-pdr-008)) |
 
 ## Response envelope
 
@@ -80,6 +81,22 @@ Every endpoint responds with:
 | GET    | `/api/users/me`  | —                     |
 | PATCH  | `/api/users/me`  | `{ name?, avatarUrl? }` |
 
+## Devices (push notifications, PDR-008)
+
+| Method | Path                       | Auth | Body                              |
+| ------ | -------------------------- | ---- | ---------------------------------- |
+| POST   | `/api/devices/register`    | ✔    | `{ token, platform: 'ios'\|'android' }` |
+| DELETE | `/api/devices/:token`      | ✔    | —                                   |
+
+Not household-scoped — a device token belongs to a user, who may belong to
+several households. `register` upserts on `(userId, token)`; if `token`
+already belonged to a different user (e.g. a shared device) that row is
+deleted first, so the token always tracks whoever registered it most
+recently. `DELETE` removes only the caller's own token and is idempotent
+(no-op on an unknown or already-removed token). See
+[Push notifications](#push-notifications-fcm-pdr-008) below for how these
+tokens get used.
+
 ## Households
 
 | Method | Path                                       | Notes                              |
@@ -94,7 +111,8 @@ Every endpoint responds with:
 
 Resource-creating POSTs accept an optional `Idempotency-Key` header:
 `POST /api/households`, `POST /api/households/join`,
-`POST /api/households/:householdId/tasks`, `POST /api/households/:householdId/shopping`.
+`POST /api/households/:householdId/tasks`, `POST /api/households/:householdId/shopping`,
+`POST /api/devices/register`.
 
 | Situation                                   | Response                                          |
 | ------------------------------------------- | ------------------------------------------------- |
@@ -235,16 +253,52 @@ Server → client events (scoped to `household_<id>`):
 Client → server events: `household:join`, `household:leave` (re-join a room
 after creating/joining a household without reconnecting).
 
+## Push notifications (FCM, PDR-008)
+
+`notification.service.ts` sends via Firebase Admin, initialized lazily from
+`FIREBASE_SERVICE_ACCOUNT` — same no-op-when-unconfigured pattern as Sentry
+(TD-009): missing or malformed JSON disables the feature without breaking
+anything else. Two triggers, both fire-and-forget (a notification failure
+never fails the task write):
+
+- Creating a task pushes every assignee other than whoever created it
+  ("Nueva tarea asignada").
+- Completing a task pushes the creator, if someone else completed it
+  ("Tarea completada").
+
+Device tokens are managed via the [Devices](#devices-push-notifications-pdr-008)
+endpoints above.
+
+### Railway setup
+
+1. Create a Firebase project and a service account with the **Firebase
+   Cloud Messaging API** enabled (Firebase Console → Project Settings →
+   Service Accounts → Generate new private key). This downloads a
+   `firebase-service-account.json` file — **do not commit it**.
+2. In Railway: your service → **Variables** → **New Variable** → name
+   `FIREBASE_SERVICE_ACCOUNT` → paste the **entire JSON file content** as
+   the value (as a single-line or multi-line string, Railway accepts both —
+   this backend does `JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)`).
+3. Redeploy. `notification.service.ts` picks it up on the next cold start
+   (the Firebase Admin app is initialized once, lazily, on the first push
+   attempt).
+
+Without this variable set, every push notification silently no-ops — task
+creation/completion still work normally, they just don't notify anyone. See
+`frontend/README.md`'s "Push notifications (FCM) setup" (TD-049) for the
+additional mobile-side (Android/iOS) setup this feature needs before pushes
+are actually delivered to a device.
+
 ## Project layout
 
 ```
 src/
 ├── config/       database.ts · redis.ts · socket.ts
-├── models/       User · Household · Task · ShoppingItem · RefreshToken
-├── controllers/  auth · household · task · shopping · user
+├── models/       User · Household · Task · ShoppingItem · RefreshToken · DeviceToken
+├── controllers/  auth · household · task · shopping · user · device
 ├── middleware/   auth.middleware · error.middleware
-├── routes/       auth · household · task · shopping · user
-├── services/     auth · household · task · shopping
+├── routes/       auth · household · task · shopping · user · device
+├── services/     auth · household · task · shopping · notification
 ├── types/        index.ts
 ├── utils/        jwt · response · logger · asyncHandler · toJSON
 └── app.ts        entry point

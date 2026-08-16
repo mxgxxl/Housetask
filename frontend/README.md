@@ -131,8 +131,10 @@ the Inter typeface via `google_fonts`.
 - **iOS** (`ios/Runner/Info.plist`): `NSLocalNotificationUsageDescription`;
   set the Bundle Identifier to `com.homesync.app` in Xcode.
 - **Notifications** (`services/notification_service.dart`): schedules a local
-  reminder **1 hour before** a task's `dueDate`. Remote push (FCM) is left as
-  a future step — no Firebase Auth/Firestore is used.
+  reminder **1 hour before** a task's `dueDate`, plus remote push via FCM
+  (PDR-008) for task assignment/completion — see "Push notifications (FCM)
+  setup" under Known Issues for the manual Firebase project connection this
+  still needs. No Firebase Auth/Firestore is used, only Cloud Messaging.
 
 ## Offline support (TD-003)
 
@@ -145,6 +147,45 @@ device is back online. See ADR-010 in the root `CLAUDE.md` for the full design
 is last-write-wins for now — TD-039).
 
 ## Known Issues
+
+### Push notifications (FCM) setup required (TD-049)
+
+All the Dart-side code for push notifications is in place —
+`NotificationService.requestPermission()` / `getToken()` / `registerToken()`
+/ `listenForTokenRefresh()` / foreground + tapped-notification handling, and
+`AuthCubit` calling into it on login/logout (PDR-008) — but this repo does
+**not** ship a real Firebase project connection. Every FCM call degrades to
+a caught, logged no-op (`Firebase.initializeApp()` failing in `main.dart` is
+expected and harmless) until the following manual setup is done:
+
+1. Create a Firebase project (console.firebase.google.com) and add two apps
+   to it: Android with package `com.homesync.app`, iOS with bundle id
+   `com.homesync.app` (both match the ids already configured in this repo,
+   PDR-005 / the Deployment section of the root `CLAUDE.md`).
+2. Run `flutterfire configure` from `frontend/` (or download the two config
+   files by hand): places `android/app/google-services.json` and
+   `ios/Runner/GoogleService-Info.plist`. **Neither file is committed here**
+   — they are project-specific credentials, same reasoning as `.env` (Hard
+   Rule 6).
+3. Apply the Android Gradle plugin the config file needs: add
+   `id "com.google.gms.google-services"` to `android/app/build.gradle`'s
+   `plugins {}` block and the matching classpath to `android/build.gradle`
+   (or `android/settings.gradle`'s plugin block, depending on which
+   convention `flutterfire configure` picks for this AGP version — TD-041).
+   **This repo intentionally does not apply it yet** — doing so without a
+   real `google-services.json` present would hard-fail every Android build,
+   including CI's `flutter build apk --debug` smoke test.
+4. iOS: in Xcode, enable the **Push Notifications** capability and
+   **Background Modes → Remote notifications** for the Runner target (adds
+   entries to `Runner.entitlements`), then upload an APNs authentication key
+   (or certificate) to the Firebase project's Cloud Messaging settings —
+   FCM cannot deliver to iOS without one.
+5. Backend: set `FIREBASE_SERVICE_ACCOUNT` (see `backend/README.md`) in
+   Railway so the two triggers (task assigned / task completed) actually
+   send.
+
+None of this is automatable from a coding session — it requires real
+Firebase and Apple Developer account access. Tracked as TD-049.
 
 ### sentry-cocoa version drift (TD-038)
 

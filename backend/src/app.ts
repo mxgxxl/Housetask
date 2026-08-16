@@ -19,6 +19,7 @@ import shoppingRoutes from './routes/shopping.routes';
 import userRoutes from './routes/user.routes';
 import petRoutes from './routes/pet.routes';
 import economyRoutes from './routes/economy.routes';
+import deviceRoutes from './routes/device.routes';
 
 export interface CreateAppOptions {
   /**
@@ -129,6 +130,9 @@ export function createApp(options: CreateAppOptions = {}): Application {
   // second way to resolve "which household" from query params.
   app.use('/api/households/:householdId/pet', petRoutes);
   app.use('/api/households/:householdId/economy', economyRoutes);
+  // PDR-008: not household-scoped — a device token belongs to a user
+  // (they may be in multiple households), so no requireMembership check.
+  app.use('/api/devices', deviceRoutes);
 
   // 404 + centralized error handling (must be last).
   app.use(notFoundHandler);
