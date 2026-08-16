@@ -86,14 +86,16 @@ Living document capturing operational learnings from the Mac↔Mobile workflow e
 
 Acciones manuales/externas conocidas, no automatizables desde una sesión de agente — requieren acceso a cuentas, hardware o consolas de terceros.
 
-- **TD-049 — Firebase, configuración manual (requiere Mac/Xcode):** los archivos de configuración de Firebase ya se obtuvieron; falta aplicarlos:
-  - Copiar `google-services.json` a `android/app/`.
-  - Copiar `GoogleService-Info.plist` a `ios/Runner/`.
-  - Aplicar el plugin `com.google.gms.google-services` en Gradle (hoy deliberadamente no aplicado — sin el json fallaría el build de Android).
-  - Habilitar la capability "Push Notifications" + "Background Modes" en Xcode, con una APNs key subida a Firebase.
-  - Configurar `FIREBASE_SERVICE_ACCOUNT` en Railway (JSON como variable de entorno, nunca un archivo commiteado).
-  - Ejecutar `flutterfire configure`.
-  - Test end-to-end en dispositivo físico (push no se puede validar en simulador/emulador).
+- **TD-049 — Firebase, configuración manual (requiere Mac/Xcode) — actualizado 2026-08-16:**
+  - ✅ `google-services.json` y `GoogleService-Info.plist` ya copiados localmente por el dueño a `android/app/` e `ios/Runner/` (gitignored, confirmado con ambos patrones ya presentes en `frontend/.gitignore` antes de esta ronda).
+  - ✅ Plugin `com.google.gms.google-services` aplicado en Gradle: `classpath` en `android/build.gradle` (buildscript) + `apply plugin` al final de `android/app/build.gradle`.
+  - ✅ `android/app/src/main/AndroidManifest.xml` ya tenía `POST_NOTIFICATIONS` (añadido en una ronda anterior de TD-049 no reflejada aquí).
+  - ✅ `ios/Runner/Info.plist`: `UIBackgroundModes` con `fetch` + `remote-notification` añadido.
+  - ⏳ **Pendiente manual en Xcode:** capability "Push Notifications" (esto genera `Runner.entitlements` con `aps-environment` y referencia `CODE_SIGN_ENTITLEMENTS` en el pbxproj automáticamente) + "Background Modes → Remote notifications" ya cubierto por el Info.plist de arriba pero conviene confirmarlo también en la UI de Signing & Capabilities. Deliberadamente no se editó `project.pbxproj` a mano para crear el entitlements file — el riesgo de un pbxproj malformado sin poder verificarlo fuera de Xcode superaba el ahorro de 2 clicks. Pasos: Xcode → Runner target → Signing & Capabilities → "+ Capability" → "Push Notifications".
+  - ⏳ APNs key subida a Firebase Console (Project Settings → Cloud Messaging → APNs Authentication Key).
+  - ✅ `FIREBASE_SERVICE_ACCOUNT` ya configurado en Railway (confirmado por el dueño, fuera de esta ronda).
+  - ⏳ Ejecutar `flutterfire configure` (opcional si los config files ya están colocados a mano, como aquí).
+  - ⏳ Test end-to-end en dispositivo físico (push no se puede validar en simulador/emulador).
 - **Self-leave endpoint (gap identificado en TD-018, ronda 2026-08-16):** hoy solo un admin puede remover a otro miembro vía `removeMember` (`DELETE /households/:id/members/:userId`). No existe ningún endpoint de autoservicio para que un miembro normal salga voluntariamente del hogar por su cuenta. Candidato razonable para un TD nuevo si el producto lo necesita — la lógica de desasignación de tareas de TD-018 (`unassignDepartedMemberTasks`) ya está lista para reutilizarse desde ese endpoint el día que se cree.
 
 ---
