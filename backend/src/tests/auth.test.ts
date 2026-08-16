@@ -1,5 +1,7 @@
 import { Server } from 'http';
 import request from 'supertest';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
 
 import { RefreshTokenModel } from '../models/RefreshToken';
 import { logger } from '../utils/logger';
@@ -187,6 +189,24 @@ describe('POST /api/auth/login', () => {
     expect(unknownEmail.body.error).toBe(wrongPassword.body.error);
     expect(wrongPassword.body.error).toBe('Invalid credentials');
   });
+
+  it('should run a bcrypt.compare against a dummy hash on an unknown email, for timing parity (TD-053)', async () => {
+    const compareSpy = jest.spyOn(bcrypt, 'compare');
+
+    const res = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'never-registered@test.com', password: 'whatever123' });
+
+    expect(res.status).toBe(401);
+    // Without this, the miss path returns immediately after the failed
+    // findOne — no bcrypt.compare call at all — while a wrong-password hit
+    // pays a full compare below. That gap is what let response latency
+    // leak whether an email is registered, even though the status and
+    // message are identical (Hard Rule 2, covered by the test above).
+    expect(compareSpy).toHaveBeenCalledTimes(1);
+
+    compareSpy.mockRestore();
+  });
 });
 
 describe('POST /api/auth/refresh', () => {
@@ -330,6 +350,49 @@ describe('POST /api/auth/refresh', () => {
     const stillValid = await request(app)
       .post('/api/auth/refresh')
       .send({ refreshToken: user.refreshToken });
+    expect(stillValid.status).toBe(200);
+  });
+
+  it('should reject a refresh token signed with a different algorithm, even with a valid HMAC key (TD-051)', async () => {
+    const user = await createTestUser(app);
+
+    // Same secret jwt.ts falls back to under NODE_ENV=test, same claims
+    // shape, but signed HS384 instead of the pinned HS512... any algorithm
+    // other than the pinned HS256 must be rejected outright, regardless of
+    // whether the secret is otherwise correct.
+    const wrongAlgToken = jwt.sign(
+      { userId: user.id, tokenId: 'does-not-matter' },
+      'test_refresh_secret_at_least_32_characters',
+      { algorithm: 'HS384', expiresIn: '7d' },
+    );
+
+    const res = await request(app)
+      .post('/api/auth/refresh')
+      .send({ refreshToken: wrongAlgToken });
+    expect(res.status).toBe(401);
+  });
+});
+
+describe('GET /api/auth/me', () => {
+  it('should reject an access token signed with a different algorithm, even with a valid HMAC key (TD-051)', async () => {
+    const user = await createTestUser(app);
+
+    const wrongAlgToken = jwt.sign(
+      { userId: user.id, email: user.email },
+      'test_access_secret_at_least_32_characters',
+      { algorithm: 'HS384', expiresIn: '15m' },
+    );
+
+    const res = await request(app)
+      .get('/api/auth/me')
+      .set('Authorization', `Bearer ${wrongAlgToken}`);
+    expect(res.status).toBe(401);
+
+    // Sanity check the setup itself: a correctly signed (HS256, the pinned
+    // default) token for the same user must still be accepted.
+    const stillValid = await request(app)
+      .get('/api/auth/me')
+      .set('Authorization', `Bearer ${user.accessToken}`);
     expect(stillValid.status).toBe(200);
   });
 });
