@@ -171,4 +171,83 @@ void main() {
       expect(find.text('Completada'), findsNothing);
     });
   });
+
+  group('TaskTile assignee "Ex-miembro" fallback (TD-018)', () {
+    testWidgets('an assignee still in the household shows their normal avatar', (tester) async {
+      final task = buildTask(
+        '1',
+        assignedTo: [
+          {'id': 'u1', 'name': 'Ana Gómez', 'email': 'ana@test.com'},
+        ],
+      );
+      final members = [
+        const Member(
+          user: User(id: 'u1', email: 'ana@test.com', name: 'Ana Gómez'),
+          role: 'member',
+        ),
+      ];
+
+      await tester.pumpWidget(_host(task, members: members));
+
+      expect(find.byType(UserAvatar), findsOneWidget);
+      expect(find.byTooltip('Ex-miembro'), findsNothing);
+    });
+
+    testWidgets(
+        'an assignee whose id is no longer a current member shows the Ex-miembro placeholder',
+        (tester) async {
+      final task = buildTask(
+        '1',
+        assignedTo: [
+          {'id': 'gone', 'name': 'Carlos Viejo', 'email': 'carlos@test.com'},
+        ],
+      );
+
+      // No members in the current household — the assignee already left.
+      await tester.pumpWidget(_host(task, members: const []));
+
+      expect(find.byTooltip('Ex-miembro'), findsOneWidget);
+      expect(find.byIcon(Icons.person_outline), findsOneWidget);
+      expect(find.byType(UserAvatar), findsNothing);
+    });
+
+    testWidgets(
+        'an assignee ref that never populated (empty name/email) shows Ex-miembro even before '
+        'the household loads', (tester) async {
+      final task = Task.fromJson({
+        'id': '1',
+        'householdId': 'h1',
+        'title': 'Tarea con referencia colgante',
+        'status': 'pending',
+        'assignedTo': [null],
+      });
+      final loadingCubit = HouseholdCubit(FakeHouseholdRepository());
+
+      await tester.pumpWidget(_host(task, householdCubit: loadingCubit));
+
+      expect(find.byTooltip('Ex-miembro'), findsOneWidget);
+      expect(find.byType(UserAvatar), findsNothing);
+    });
+
+    testWidgets('several assignees mix normal avatars and Ex-miembro placeholders', (tester) async {
+      final task = buildTask(
+        '1',
+        assignedTo: [
+          {'id': 'u1', 'name': 'Ana Gómez', 'email': 'ana@test.com'},
+          {'id': 'gone', 'name': 'Carlos Viejo', 'email': 'carlos@test.com'},
+        ],
+      );
+      final members = [
+        const Member(
+          user: User(id: 'u1', email: 'ana@test.com', name: 'Ana Gómez'),
+          role: 'member',
+        ),
+      ];
+
+      await tester.pumpWidget(_host(task, members: members));
+
+      expect(find.byType(UserAvatar), findsOneWidget);
+      expect(find.byTooltip('Ex-miembro'), findsOneWidget);
+    });
+  });
 }

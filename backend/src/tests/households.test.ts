@@ -3,10 +3,12 @@ import request from 'supertest';
 
 import { buildTestApp } from './setup';
 import {
+  TestHousehold,
   authHeader,
   createHouseholdWithMember,
   createTestHousehold,
   createTestUser,
+  joinTestHousehold,
 } from './helpers';
 
 let app: Server;
@@ -163,6 +165,116 @@ describe('DELETE /api/households/:id/members/:userId', () => {
       .set(authHeader(member.accessToken));
 
     expect(res.status).toBe(403);
+  });
+});
+
+describe('Member-leave lifecycle (TD-018): removeMember unassigns the departed member', () => {
+  async function tasksUrl(household: TestHousehold): Promise<string> {
+    return `/api/households/${household.id}/tasks`;
+  }
+
+  it('should unassign the removed member from their pending tasks without deleting them', async () => {
+    const { admin, member, household } = await createHouseholdWithMember(app);
+
+    const task = await request(app)
+      .post(await tasksUrl(household))
+      .set(authHeader(admin.accessToken))
+      .send({ title: 'Sacar la basura', assignedTo: [member.id] });
+    expect(task.status).toBe(201);
+    expect(task.body.data.assignedTo).toHaveLength(1);
+
+    const removed = await request(app)
+      .delete(`/api/households/${household.id}/members/${member.id}`)
+      .set(authHeader(admin.accessToken));
+    expect(removed.status).toBe(200);
+
+    const list = await request(app)
+      .get(await tasksUrl(household))
+      .set(authHeader(admin.accessToken));
+    expect(list.status).toBe(200);
+    const survivor = list.body.data.items.find(
+      (t: { id: string }) => t.id === task.body.data.id,
+    );
+    // Task must still exist (not deleted) but no longer assigned to anyone.
+    expect(survivor).toBeDefined();
+    expect(survivor.assignedTo).toEqual([]);
+  });
+
+  it('should keep a remaining co-assignee when only one of several assignees leaves', async () => {
+    const admin = await createTestUser(app);
+    const leaver = await createTestUser(app);
+    const stays = await createTestUser(app);
+    const household = await createTestHousehold(app, admin);
+    await joinTestHousehold(app, leaver, household.inviteCode);
+    await joinTestHousehold(app, stays, household.inviteCode);
+
+    const task = await request(app)
+      .post(await tasksUrl(household))
+      .set(authHeader(admin.accessToken))
+      .send({ title: 'Comprar leche', assignedTo: [leaver.id, stays.id] });
+    expect(task.status).toBe(201);
+
+    await request(app)
+      .delete(`/api/households/${household.id}/members/${leaver.id}`)
+      .set(authHeader(admin.accessToken));
+
+    const list = await request(app)
+      .get(await tasksUrl(household))
+      .set(authHeader(admin.accessToken));
+    const survivor = list.body.data.items.find(
+      (t: { id: string }) => t.id === task.body.data.id,
+    );
+    expect(survivor.assignedTo).toHaveLength(1);
+    expect(survivor.assignedTo[0].id).toBe(stays.id);
+  });
+
+  it('should preserve tasks created by the departing member instead of deleting them', async () => {
+    const { admin, member, household } = await createHouseholdWithMember(app);
+
+    const task = await request(app)
+      .post(await tasksUrl(household))
+      .set(authHeader(member.accessToken))
+      .send({ title: 'Tarea creada por el que se va' });
+    expect(task.status).toBe(201);
+
+    await request(app)
+      .delete(`/api/households/${household.id}/members/${member.id}`)
+      .set(authHeader(admin.accessToken));
+
+    const list = await request(app)
+      .get(await tasksUrl(household))
+      .set(authHeader(admin.accessToken));
+    const survivor = list.body.data.items.find(
+      (t: { id: string }) => t.id === task.body.data.id,
+    );
+    expect(survivor).toBeDefined();
+    expect(survivor.createdBy.id).toBe(member.id);
+  });
+
+  it('should leave a completed task assigned to the departed member untouched (historical record)', async () => {
+    const { admin, member, household } = await createHouseholdWithMember(app);
+
+    const task = await request(app)
+      .post(await tasksUrl(household))
+      .set(authHeader(admin.accessToken))
+      .send({ title: 'Ya hecha', assignedTo: [member.id] });
+    await request(app)
+      .patch(`${await tasksUrl(household)}/${task.body.data.id}/complete`)
+      .set(authHeader(member.accessToken));
+
+    await request(app)
+      .delete(`/api/households/${household.id}/members/${member.id}`)
+      .set(authHeader(admin.accessToken));
+
+    const list = await request(app)
+      .get(await tasksUrl(household))
+      .set(authHeader(admin.accessToken));
+    const survivor = list.body.data.items.find(
+      (t: { id: string }) => t.id === task.body.data.id,
+    );
+    // Completed tasks are historical record — assignedTo is left as-is.
+    expect(survivor.assignedTo).toHaveLength(1);
+    expect(survivor.assignedTo[0].id).toBe(member.id);
   });
 });
 
