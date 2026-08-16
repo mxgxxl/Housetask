@@ -8,6 +8,23 @@ import { AuthenticatedRequest, TaskStatus } from '../types';
 const VALID_STATUS: TaskStatus[] = ['pending', 'completed'];
 
 /**
+ * Parse the `days` query param for the purge endpoint. Absent falls back to
+ * taskService.DEFAULT_PURGE_DAYS (30); present-but-invalid is a 400, same
+ * convention as pagination.ts's parseLimit/parseCursorParam.
+ */
+function parseDays(raw: unknown): number | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'string') {
+    throw new AppError('Invalid days', 400);
+  }
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new AppError('days must be a non-negative integer', 400);
+  }
+  return parsed;
+}
+
+/**
  * GET /api/households/:householdId/tasks?status=&limit=&cursor=&from=&to=&includeDeleted=
  * Lists one page of tasks (pending first, then by dueDate asc). `from`/`to`
  * (PDR-003) additionally restrict dueDate to that window — see
@@ -109,6 +126,22 @@ export async function restore(req: AuthenticatedRequest, res: Response): Promise
     req.member!.role,
   );
   sendSuccess(res, task);
+}
+
+/**
+ * POST /api/households/:householdId/tasks/purge?days=
+ * Hard-deletes soft-deleted tasks older than `days` (default 30, TD-048).
+ * Admin-only; broadcasts tasks:purged when anything was deleted.
+ * Responds { deleted: number }.
+ */
+export async function purge(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const days = parseDays(req.query.days) ?? taskService.DEFAULT_PURGE_DAYS;
+  const deleted = await taskService.purgeHouseholdTrash(
+    req.params.householdId,
+    req.member!.role,
+    days,
+  );
+  sendSuccess(res, { deleted });
 }
 
 /**

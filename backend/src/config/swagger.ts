@@ -470,6 +470,47 @@ export const swaggerSpec: Record<string, unknown> = {
         },
       },
     },
+    '/households/{householdId}/tasks/purge': {
+      post: {
+        tags: ['Tasks'],
+        summary: 'Hard-delete soft-deleted tasks older than N days (TD-048; admin only)',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+          {
+            name: 'days',
+            in: 'query',
+            required: false,
+            description: 'Retention window in days; out of range responds 400',
+            schema: { type: 'integer', minimum: 0, default: 30 },
+          },
+        ],
+        responses: {
+          '200': {
+            description: 'Purge result',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    data: {
+                      type: 'object',
+                      properties: { deleted: { type: 'integer' } },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          '400': {
+            description: 'Invalid days',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
+          '403': { description: 'Caller is not a household admin' },
+        },
+      },
+    },
     '/households/{householdId}/tasks/generate-instances': {
       post: {
         tags: ['Tasks'],
