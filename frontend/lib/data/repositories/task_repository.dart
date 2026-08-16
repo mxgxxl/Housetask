@@ -320,6 +320,17 @@ class TaskRepository {
     return data as Map<String, dynamic>;
   }
 
+  /// Hard-delete trash entries older than 30 days, backend default (TD-048,
+  /// follow-up to TD-046's soft delete having no cleanup policy). Admin-only
+  /// on the server — a non-admin call surfaces the 403 as a [Failure] to the
+  /// caller. Returns how many tasks were purged. Online-only, same reasoning
+  /// as [restore]: an explicit, in-the-moment destructive action, not
+  /// something to queue for later.
+  Future<int> purgeTrash(String householdId) async {
+    final data = await _api.post('/households/$householdId/tasks/purge');
+    return (data as Map<String, dynamic>)['deleted'] as int;
+  }
+
   /// Replay every queued task operation against the server, in the order
   /// they were made. Returns how many were successfully applied.
   ///

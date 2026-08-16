@@ -18,8 +18,9 @@ router.get('/', asyncHandler(taskController.list));
 // validate() before idempotency: a malformed body fails fast without ever
 // claiming/burning the client's Idempotency-Key (TD-028).
 router.post('/', validate(createTaskSchema), idempotency, asyncHandler(taskController.create));
-// Static path must precede the ':taskId' routes so it is not treated as an id.
+// Static paths must precede the ':taskId' routes so they are not treated as an id.
 router.post('/generate-instances', asyncHandler(taskController.generateRecurringInstances));
+router.post('/purge', asyncHandler(taskController.purge));
 router.patch('/:taskId', validate(updateTaskSchema), asyncHandler(taskController.update));
 router.patch('/:taskId/complete', asyncHandler(taskController.complete));
 router.delete('/:taskId', asyncHandler(taskController.remove));

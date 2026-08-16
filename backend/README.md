@@ -142,6 +142,7 @@ List endpoints return a page object instead of a bare array:
 | PATCH  | `/api/households/:householdId/tasks/:taskId`               |
 | PATCH  | `/api/households/:householdId/tasks/:taskId/complete`      |
 | DELETE | `/api/households/:householdId/tasks/:taskId`               |
+| POST   | `/api/households/:householdId/tasks/purge?days=`           |
 
 Listing order: pending tasks first, then by `dueDate` ascending (`_id` descending
 breaks ties).
@@ -153,6 +154,10 @@ breaks ties).
 | `status` | enum   | `pending` \| `completed`; combines with the cursor          |
 | `limit`  | int    | default 50, min 1, max 100; out of range → 400              |
 | `cursor` | string | opaque token from `nextCursor`; malformed → 400             |
+
+`POST .../tasks/purge` is admin-only and hard-deletes soft-deleted tasks
+older than `?days=` (default 30) — see [Trash purge](#trash-purge-td-048)
+below for the equivalent script and cron setup.
 
 ## Shopping (household-scoped)
 
@@ -173,6 +178,48 @@ Listing order: not-purchased items first, then newest first (`_id` descending).
 | `limit`  | int    | default 50, min 1, max 100; out of range → 400   |
 | `cursor` | string | opaque token from `nextCursor`; malformed → 400  |
 
+## Trash purge (TD-048)
+
+TD-046's soft delete (`isDeleted`/`deletedAt` on Task) never removes the
+document, only hides it — with no cleanup, the `tasks` collection
+accumulates deleted rows forever. Two ways to purge trash older than a
+retention window, sharing the same query
+(`taskService.purgeDeletedTasks`, `isDeleted: true, deletedAt: { $lt: cutoff }`):
+
+- **`POST /api/households/:householdId/tasks/purge?days=`** — admin-only,
+  scoped to one household. Used by the "Vaciar papelera" button in the
+  frontend's Papelera view. `days` defaults to 30; responds
+  `{ deleted: <count> }`. Broadcasts `tasks:purged` when anything was
+  actually deleted.
+- **`src/scripts/purge-trash.ts`** — global (every household), meant for a
+  scheduled job:
+
+  ```bash
+  npx ts-node src/scripts/purge-trash.ts            # purge trash older than 30 days
+  npx ts-node src/scripts/purge-trash.ts --days 60   # custom retention window
+  ```
+
+  Logs how many tasks were purged. Safe to run repeatedly — nothing left to
+  purge just logs 0 and exits cleanly.
+
+### Scheduling the script on Railway (optional)
+
+Railway supports **Cron Jobs** as a service type, separate from the main web
+service:
+
+1. In the Railway project, add a new service → **Cron Job**, pointing at the
+   same repo/image as the backend service (or a dedicated Dockerfile target
+   that just runs the script).
+2. Set its start command to
+   `node backend/dist/scripts/purge-trash.js --days 30` (compiled output —
+   `npm run build` already emits `scripts/` alongside the rest of `dist/`).
+3. Set the same `MONGODB_URI` environment variable as the main backend
+   service (the script only touches MongoDB — no Redis, no HTTP).
+4. Set a daily schedule, e.g. `0 3 * * *` (03:00 UTC, low-traffic window).
+
+This is optional: the admin-only HTTP endpoint above works standalone
+without any cron configured, for a household that wants to purge on demand.
+
 ## Realtime (Socket.io)
 
 Connect with the access token: `io(url, { auth: { token } })`. On connect the
@@ -181,7 +228,7 @@ events broadcast across every server instance.
 
 Server → client events (scoped to `household_<id>`):
 
-- `task:created`, `task:updated`, `task:completed`, `task:deleted`
+- `task:created`, `task:updated`, `task:completed`, `task:deleted`, `tasks:purged`
 - `shopping:created`, `shopping:updated`, `shopping:purchased`, `shopping:deleted`
 - `household:member_joined`, `household:member_left`
 

@@ -598,6 +598,62 @@ export async function restoreTask(
   return task;
 }
 
+export const DEFAULT_PURGE_DAYS = 30;
+
+/**
+ * Hard-delete soft-deleted tasks whose `deletedAt` is older than `days`
+ * (TD-048, follow-up to TD-046's soft delete: marking a task isDeleted
+ * stopped it from being visible, but nothing ever removed the document, so
+ * the `tasks` collection accumulates trash forever).
+ *
+ * Shared by the `purge-trash` maintenance script (global — no `householdId`,
+ * meant for a daily cron across every household) and
+ * `purgeHouseholdTrash` (the admin-only HTTP endpoint, scoped to one
+ * household) so both purge paths run the exact same query and can never
+ * drift apart.
+ */
+export async function purgeDeletedTasks(days: number, householdId?: string): Promise<number> {
+  if (!Number.isFinite(days) || days < 0) {
+    throw new AppError('days must be a non-negative number', 400);
+  }
+
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const filter: Record<string, unknown> = { isDeleted: true, deletedAt: { $lt: cutoff } };
+  if (householdId) {
+    filter.householdId = new Types.ObjectId(householdId);
+  }
+
+  const { deletedCount } = await TaskModel.deleteMany(filter);
+  return deletedCount ?? 0;
+}
+
+/**
+ * Household-scoped trash purge for `POST /households/:householdId/tasks/purge`.
+ * Admin-only: an accidental or malicious purge is unrecoverable (unlike soft
+ * delete, there is no restore for this), so it gets the same authorization
+ * bar as removing a member (household.service.ts's removeMember) rather than
+ * the creator-or-admin rule the rest of task mutation uses.
+ *
+ * Broadcasts `tasks:purged` when anything was actually deleted, so any other
+ * connected device looking at the trash view (or holding purged rows in its
+ * offline cache) refreshes instead of drifting from what the server now has.
+ */
+export async function purgeHouseholdTrash(
+  householdId: string,
+  memberRole: Role,
+  days: number,
+): Promise<number> {
+  if (memberRole !== 'admin') {
+    throw new AppError('Only admins can purge the trash', 403);
+  }
+
+  const deleted = await purgeDeletedTasks(days, householdId);
+  if (deleted > 0) {
+    emitToHousehold(householdId, 'tasks:purged', { householdId, deleted });
+  }
+  return deleted;
+}
+
 const MAX_CATCHUP_ITERATIONS = 52; // cap generation at ~1 year per series
 
 /**

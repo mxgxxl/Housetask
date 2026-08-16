@@ -190,6 +190,7 @@ Detailed ADRs live in docs/ADRs.md. Index:
 | `household:member_joined` | Member + Household | User joined household |
 | `household:member_left` | Member + Household | User left/removed |
 | `tasks:batch_created` | `{ tasks[], count }` | Recurring catch-up generation |
+| `tasks:purged` | `{ householdId, deleted }` | Admin purges the trash (TD-048); only emitted when `deleted > 0` |
 | `pet:adopt_requested` | AdoptionRequest: `{ id, householdId, species, name, requestedBy, status: 'pending', createdAt, updatedAt }` | 2+ member household proposes an adoption (PDR-001) |
 | `pet:adopted` | Pet: `{ id, householdId, species, name, adoptedAt, adoptedBy, hunger, mood, lastFedAt, lastPlayedAt, cosmetics, activeCosmetic, createdAt, updatedAt }` (hunger/mood decayed to now) | A DIFFERENT member confirms a pending adoption, OR a single-member household adopts instantly on propose (no confirmation step — PDR-001) |
 | `pet:adopt_cancelled` | `{ householdId }` | Pending adoption request cancelled by its requester or a household admin |
