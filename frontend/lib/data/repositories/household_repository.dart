@@ -3,6 +3,7 @@ import 'package:uuid/uuid.dart';
 import '../datasources/local/auth_local_datasource.dart';
 import '../datasources/remote/api_service.dart';
 import '../models/household.dart';
+import '../models/household_stats.dart';
 import '../models/member.dart';
 
 /// CRUD for households + local persistence of the active household id.
@@ -49,6 +50,14 @@ class HouseholdRepository {
   Future<Household> removeMember(String householdId, String userId) async {
     final data = await _api.delete('/households/$householdId/members/$userId');
     return Household.fromJson(data as Map<String, dynamic>);
+  }
+
+  Future<HouseholdStats> stats(String householdId, StatsPeriod period) async {
+    final data = await _api.get(
+      '/households/$householdId/stats',
+      query: {'period': period.queryValue},
+    );
+    return HouseholdStats.fromJson(data as Map<String, dynamic>);
   }
 
   Future<String?> currentHouseholdId() => _local.getCurrentHouseholdId();

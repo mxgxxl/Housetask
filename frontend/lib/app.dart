@@ -15,6 +15,7 @@ import 'presentation/cubit/household_cubit.dart';
 import 'presentation/cubit/pet_cubit.dart';
 import 'presentation/cubit/shopping_cubit.dart';
 import 'presentation/cubit/socket_cubit.dart';
+import 'presentation/cubit/stats_cubit.dart';
 import 'presentation/cubit/task_cubit.dart';
 import 'services/notification_service.dart';
 import 'services/socket_service.dart';
@@ -59,6 +60,7 @@ class HomeSyncApp extends StatelessWidget {
           BlocProvider(create: (_) => TaskCubit(taskRepo, notifications)),
           BlocProvider(create: (_) => ShoppingCubit(shoppingRepo)),
           BlocProvider(create: (_) => PetCubit(petRepo)),
+          BlocProvider(create: (_) => StatsCubit(householdRepo)),
           BlocProvider(
             create: (ctx) => SocketCubit(
               socketService,
