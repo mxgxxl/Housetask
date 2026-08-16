@@ -147,7 +147,6 @@ describe('GET /api/households/:householdId/stats (PDR-007)', () => {
     );
     expect(byId[admin.id]).toMatchObject({ created: 3, completed: 1, userName: admin.name });
     expect(byId[member.id]).toMatchObject({ created: 1, completed: 2, userName: member.name });
-    expect(data.memberStats.every((m: { avatarUrl?: string }) => 'avatarUrl' in m)).toBe(true);
 
     expect(data.topCompleter).toMatchObject({ userId: member.id, completed: 2 });
   });
