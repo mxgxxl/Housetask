@@ -446,9 +446,6 @@ The full registry (~47 entries, all history) lives in [Full Technical Debt Regis
 | TD-039 | Offline conflict resolution uses last-write-wins; concurrent edits on multiple devices can overwrite | Low | Deferred (Phase 2) |
 | TD-040 | flutter test hangs on loaded hosts (offline_banner_test.dart) | Low | Mitigated in CI; root cause still open |
 | TD-049 | No real Firebase project connected for push notifications (PDR-008) — code is in place, no push actually delivers until a Firebase project + `flutterfire configure` + APNs key are set up manually | High | Planned (before beta push notifications can work) |
-| TD-051 | `jwt.verify` does not pin `algorithms` explicitly (defence-in-depth; not exploitable on jsonwebtoken 9) | Medium | Planned |
-| TD-052 | `validateProductionEnv` never asserts `JWT_SECRET` and `JWT_REFRESH_SECRET` differ | Medium | Planned |
-| TD-053 | Login timing side-channel enables account enumeration despite identical messages | Medium | Planned |
 | TD-054 | Access token stays valid up to 15 min after logout (stateless-JWT tradeoff, documented not fixed) | Low | Planned |
 
 ---

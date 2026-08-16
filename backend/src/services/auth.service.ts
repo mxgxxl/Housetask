@@ -13,6 +13,16 @@ const BCRYPT_ROUNDS = 10;
 const MAX_NAME_LENGTH = 100;
 const REFRESH_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
+// TD-053 (2026-08-17): a fixed dummy hash `login` compares against when no
+// user matches, so an unregistered email pays the same bcrypt.compare cost
+// (~100ms at BCRYPT_ROUNDS) as a wrong password on a real account. Without
+// this, `login` returned as soon as `findOne` missed, and the response-time
+// gap alone let an attacker distinguish a registered email from an
+// unregistered one even though the status code and message are identical
+// (Hard Rule 2). Computed once at module load — the hash itself is not a
+// secret, only used for timing parity, so a fixed plaintext is fine.
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync('td-053-timing-parity-dummy', BCRYPT_ROUNDS);
+
 export interface TokenPair {
   accessToken: string;
   refreshToken: string;
@@ -102,6 +112,10 @@ export async function login(
   // password has select:false, so request it explicitly here.
   const user = await UserModel.findOne({ email: normalizedEmail }).select('+password');
   if (!user) {
+    // TD-053: pay the same bcrypt cost a real user's wrong-password branch
+    // pays below, so response latency cannot reveal whether the email is
+    // registered.
+    await bcrypt.compare(password, DUMMY_PASSWORD_HASH);
     throw new AppError('Invalid credentials', 401);
   }
 
