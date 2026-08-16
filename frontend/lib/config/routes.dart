@@ -9,6 +9,11 @@ import '../presentation/pages/main_scaffold.dart';
 class Routes {
   Routes._();
 
+  /// Lets NotificationService navigate on a push-notification tap (PDR-008)
+  /// without needing a BuildContext of its own — it runs from a top-level
+  /// FirebaseMessaging listener, not from inside the widget tree.
+  static final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
   static const String splash = '/';
   static const String login = '/login';
   static const String register = '/register';

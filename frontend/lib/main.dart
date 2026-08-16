@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'app.dart';
@@ -27,6 +29,18 @@ Future<void> main() async {
 
       // Locale data for date formatting (Spanish labels).
       await initializeDateFormatting('es', null);
+
+      // PDR-008: no-op-safe — this repo ships no google-services.json /
+      // GoogleService-Info.plist yet (see frontend/README.md), so this
+      // throws on a real device/emulator until a real Firebase project is
+      // wired up. Push notifications are a bonus feature, never a reason to
+      // block app startup; NotificationService's own FCM calls are
+      // independently guarded the same way.
+      try {
+        await Firebase.initializeApp();
+      } catch (e) {
+        debugPrint('Firebase.initializeApp() failed (push notifications disabled): $e');
+      }
 
       // Initialize local notifications (permissions + timezone db).
       await NotificationService().init();
