@@ -1,6 +1,7 @@
-import express, { Application, NextFunction, Request, Response } from 'express';
+import express, { Application, NextFunction, Request, RequestHandler, Response } from 'express';
 import cors from 'cors';
 import mongoSanitize from 'express-mongo-sanitize';
+import rateLimit from 'express-rate-limit';
 import swaggerUi from 'swagger-ui-express';
 import * as Sentry from '@sentry/node';
 
@@ -30,11 +31,39 @@ export interface CreateAppOptions {
    */
   authRateLimit?: boolean;
   /**
+   * Force the global API rate limiter (TD-006) on or off. Defaults to
+   * enabled everywhere except NODE_ENV=test, same reasoning as
+   * authRateLimit: most suites fire far more than 100 requests against one
+   * shared app instance across their `it()` blocks, which would start
+   * returning 429s long before any assertion about the limiter itself runs.
+   * The test that asserts the 429 opts back in explicitly.
+   */
+  globalRateLimit?: boolean;
+  /**
    * Backing store for Idempotency-Key handling (ADR-007). Omitted outside
    * tests means the feature is off and the header is ignored; server.ts wires
    * the Redis-backed store.
    */
   idempotencyStore?: IdempotencyStore;
+}
+
+/**
+ * TD-006: 100 requests / 15 minutes / IP across every `/api` route except
+ * `/api/auth/*`, which already has its own stricter limiter (5/15min,
+ * auth.routes.ts) — `skip` here avoids double-limiting those endpoints
+ * against two independent counters. Uses `req.originalUrl` rather than
+ * `req.path`/`req.baseUrl` so the exemption holds regardless of exactly
+ * where this middleware ends up mounted.
+ */
+function buildGlobalLimiter(): RequestHandler {
+  return rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    message: { success: false, error: 'Too many requests from this IP' },
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: (req) => req.originalUrl.startsWith('/api/auth'),
+  });
 }
 
 /**
@@ -114,8 +143,17 @@ export function createApp(options: CreateAppOptions = {}): Application {
     sendSuccess(res, idempotencyMetrics());
   });
 
-  // API documentation (Swagger UI).
+  // API documentation (Swagger UI) — mounted before the global limiter below,
+  // so browsing the docs (which fires several sub-resource requests) is never
+  // rate-limited.
   app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+
+  // TD-006: global rate limit across every /api route (auth endpoints excluded,
+  // see buildGlobalLimiter's `skip`).
+  const globalRateLimitEnabled = options.globalRateLimit ?? process.env.NODE_ENV !== 'test';
+  if (globalRateLimitEnabled) {
+    app.use('/api', buildGlobalLimiter());
+  }
 
   // API routes.
   app.use('/api/auth', createAuthRouter({ rateLimit: authRateLimit }));

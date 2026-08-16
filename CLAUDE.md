@@ -167,8 +167,10 @@ Detailed ADRs live in docs/ADRs.md. Index:
 - Passwords hashed with bcrypt, never returned in responses
 - Failed login/register return generic message (never reveal if email exists)
 - Credential endpoints rate-limited: 5 requests / 15 min / IP
+- Every other `/api/*` route is additionally rate-limited globally: 100 requests / 15 min / IP (`app.ts`'s `buildGlobalLimiter`, TD-006), `/api/auth/*` exempted from this counter (it already has the stricter limiter above) via a `skip` on `req.originalUrl` — a request there is never double-limited
 - Password field has `select: false` in Mongoose schema
 - Replay detection revokes the full token family on two triggers: valid signature + missing row, OR stored userId mismatch with the JWT payload; every family revocation emits a security log (`logger.warn` with userId) as the audit hook for Sentry (TD-009)
+- Production boot fails fast (`utils/env.ts`'s `validateProductionEnv`, called from `server.ts` before anything binds) when `CORS_ORIGINS` is empty, `MONGODB_URI` is unset, or either JWT secret is under 32 characters (TD-016) — a misconfigured production process crashing visibly beats it silently degrading `CORS_ORIGINS` to `*` or running with a forgeable JWT secret
 
 ---
 
@@ -438,12 +440,10 @@ The full registry (~47 entries, all history) lives in [Full Technical Debt Regis
 |----|-------------|----------|--------|
 | TD-001 | Members embedded in Household document | High | Planned (Phase 2) |
 | TD-002 | No pagination on list endpoints | High | Planned (Phase 1) |
-| TD-006 | Rate limiting only on auth endpoints | Medium | Planned (Phase 2) |
 | TD-007 | No optimistic updates in frontend | Medium | Planned (Phase 2) |
 | TD-010 | No database backups | Medium | Planned (Phase 3) |
 | TD-013 | Recurrence computed in UTC without household timezone | Medium | Planned (Phase 2) |
 | TD-015 | No express.json payload size limit | Medium | Planned (Phase 1) |
-| TD-016 | CORS_ORIGINS empty = * allowed in production | High | Planned (Phase 1) |
 | TD-034 | No deploy-order safety net between backend and Flutter app | Medium | Planned (Phase 3) |
 | TD-039 | Offline conflict resolution uses last-write-wins; concurrent edits on multiple devices can overwrite | Low | Deferred (Phase 2) |
 | TD-040 | flutter test hangs on loaded hosts (offline_banner_test.dart) | Low | Mitigated in CI; root cause still open |
@@ -658,11 +658,11 @@ Two separate systems, deliberately not coupled by a branch-protection gate (see 
 - [x] ~~Error tracking with Sentry (TD-009)~~
 - [x] ~~Idempotency-Key on write POSTs (TD-014)~~
 - [ ] express.json payload limit (TD-015)
-- [ ] CORS fail-fast in production (TD-016)
+- [x] ~~CORS fail-fast in production (TD-016)~~
 
 ### Phase 2 — Robustness
 - [ ] Optimistic updates (TD-007)
-- [ ] Global rate limiting (TD-006)
+- [x] ~~Global rate limiting (TD-006)~~
 - [x] ~~CI/CD with GitHub Actions (TD-008)~~
 - [ ] Refactor members to separate collection (TD-001)
 - [x] ~~Granular task permissions (TD-011)~~
@@ -714,7 +714,7 @@ As of this commit, Phase 1 (Stabilization) is COMPLETE. All TD items in Phase 1 
 - [ ] Smoke test on real devices (iOS + Android)
 - [ ] Announce beta to early users
 
-Note: this section originally claimed Phase 1 complete, but TD-002, TD-015, TD-016 remain Planned (Phase 1). Phase 1 is considered functionally complete for beta release despite these residual items — see docs/TECH_DEBT.md for current status of each.
+Note: this section originally claimed Phase 1 complete, but TD-002, TD-015, TD-016 were listed Planned (Phase 1) at the time. As of this round TD-016 is resolved (see "Security rules" above); TD-002 and TD-015 were separately found already implemented (verified 2026-08-16, see docs/TECH_DEBT.md) but this line was never revisited — Phase 1 is, and was, functionally complete for beta release regardless.
 
 ---
 
