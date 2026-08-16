@@ -9,6 +9,7 @@ import '../cubit/socket_cubit.dart';
 import '../widgets/common.dart';
 import '../widgets/user_avatar.dart';
 import 'household_setup_page.dart';
+import 'stats_page.dart';
 
 /// Profile: user info, household details + invite code, members, and actions
 /// to switch households or log out.
@@ -21,6 +22,15 @@ class ProfilePage extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Perfil',
             style: TextStyle(fontWeight: FontWeight.w800, fontSize: 22)),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.bar_chart),
+            tooltip: 'Estadísticas',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const StatsPage()),
+            ),
+          ),
+        ],
       ),
       body: BlocBuilder<AuthCubit, AuthState>(
         builder: (context, authState) {
