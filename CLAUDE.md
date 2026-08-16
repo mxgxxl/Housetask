@@ -687,6 +687,8 @@ As of this commit, Phase 1 (Stabilization) is COMPLETE. All TD items in Phase 1 
 - [ ] Smoke test on real devices (iOS + Android)
 - [ ] Announce beta to early users
 
+Note: this section originally claimed Phase 1 complete, but TD-002, TD-015, TD-016 remain Planned (Phase 1). Phase 1 is considered functionally complete for beta release despite these residual items — see docs/TECH_DEBT.md for current status of each.
+
 ---
 
 ## 📦 Product Decisions
