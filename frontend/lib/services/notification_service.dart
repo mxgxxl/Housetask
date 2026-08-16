@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/data/latest.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz;
@@ -44,7 +45,13 @@ class NotificationService {
     iOS: DarwinNotificationDetails(),
   );
 
-  /// Initialize the plugin + timezone database and request permissions.
+  /// Initialize the plugin + timezone database. Permission requests are
+  /// deferred to after the first rendered frame (see [_requestPermissions]
+  /// below) — requesting them here, with `requestAlertPermission: true`,
+  /// made `FlutterLocalNotificationsPlugin.initialize()` present iOS's
+  /// system permission dialog before Flutter had rendered anything, which
+  /// blocked main() ahead of runApp() and produced a stuck launch screen
+  /// (white screen) on physical iOS devices.
   Future<void> init() async {
     if (_initialized) return;
 
@@ -52,28 +59,35 @@ class NotificationService {
 
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
     const iosInit = DarwinInitializationSettings(
-      requestAlertPermission: true,
-      requestBadgePermission: true,
-      requestSoundPermission: true,
+      requestAlertPermission: false,
+      requestBadgePermission: false,
+      requestSoundPermission: false,
     );
 
     await _plugin.initialize(
       const InitializationSettings(android: androidInit, iOS: iosInit),
     );
 
-    await _requestPermissions();
     _initialized = true;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_requestPermissions());
+    });
   }
 
   Future<void> _requestPermissions() async {
-    await _plugin
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
-        ?.requestNotificationsPermission();
-    await _plugin
-        .resolvePlatformSpecificImplementation<
-            IOSFlutterLocalNotificationsPlugin>()
-        ?.requestPermissions(alert: true, badge: true, sound: true);
+    try {
+      await _plugin
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>()
+          ?.requestNotificationsPermission();
+      await _plugin
+          .resolvePlatformSpecificImplementation<
+              IOSFlutterLocalNotificationsPlugin>()
+          ?.requestPermissions(alert: true, badge: true, sound: true);
+    } catch (e) {
+      debugPrint('Failed to request local notification permissions: $e');
+    }
   }
 
   /// Stable notification id derived from the task id.
