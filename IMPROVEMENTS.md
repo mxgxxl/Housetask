@@ -79,6 +79,13 @@ Living document capturing operational learnings from the Mac↔Mobile workflow e
 
 - `mongodb-memory-server` intenta descargar binarios de MongoDB → 403 desde algunas redes.
 - **Workaround:** CI valida tests, móvil solo typecheck+lint+build.
+- **Confirmado de nuevo (2026-08-16, ronda de scan auth):** `npm ci` sí funciona; lo que falla es la descarga del binario (`https://fastdl.mongodb.org/...` → `CONNECT tunnel failed, response 403`). No hay `mongod` local instalado como alternativa. Consecuencia práctica para sesiones móviles: **un fix cuyo riesgo principal es de comportamiento en runtime (no de tipos) no se puede validar localmente** — solo `npm run typecheck` y `npm run lint`. Esto acota qué fixes es razonable intentar desde móvil con presupuesto de 1 iteración de CI: cambios deterministas y de superficie pequeña sí; cambios sensibles a timing o concurrencia (p. ej. TD-050) conviene dejarlos para una sesión con MongoDB real. Workaround parcial útil: extraer la lógica pura a una función y verificarla con un script `node` suelto (se hizo así con el predicado `skip` del rate limiter global en esta ronda).
+
+### Scan de seguridad backend auth (2026-08-16)
+
+- **Hallazgo principal arreglado:** el limitador global (TD-006) eximía todo el prefijo `/api/auth` asumiendo que esos endpoints ya tenían su propio limitador — cierto solo para `/register` y `/login`. `/refresh` y `/logout` no tenían ninguno, así que la exención los dejaba como **las únicas rutas totalmente sin límite de toda la API**. Lección: una exención escrita por prefijo envejece mal cuando se añaden rutas nuevas bajo ese prefijo; conviene enumerar explícitamente lo que se exime (lista `OWN_LIMITER_PREFIXES`) en vez de confiar en que el prefijo entero comparta la misma propiedad.
+- **Lección de proceso:** varios hallazgos Medium (TD-051, TD-052, TD-053) son de tipo "la protección existe pero vive en un default de una dependencia o en una convención, no en una aserción explícita del código". No son bugs hoy y por eso no se arreglaron en una ronda de scope cerrado, pero son exactamente los que se rompen en silencio en un bump de major.
+- **Fix no aplicado a propósito (TD-050):** ver la entrada en `docs/TECH_DEBT.md`. Requiere relitigar una decisión de seguridad deliberada (TD-022) y rompería un test existente que la codifica; se documentó con el fix candidato en vez de implementarlo unilateralmente.
 
 ---
 

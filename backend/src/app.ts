@@ -48,12 +48,23 @@ export interface CreateAppOptions {
 }
 
 /**
+ * Credential endpoints that carry their own stricter limiter (5/15min, see
+ * auth.routes.ts). Only these are exempted from the global counter, so they
+ * are never limited twice against two independent budgets.
+ *
+ * Deliberately NOT the whole `/api/auth` prefix: `/api/auth/refresh` and
+ * `/api/auth/logout` have no limiter of their own, so exempting them left
+ * them as the only completely unbounded routes in the API. They now fall
+ * under the global 100/15min budget below — generous next to a legitimate
+ * client's ~1 refresh per 15 minutes per device, while still bounding abuse.
+ */
+const OWN_LIMITER_PREFIXES = ['/api/auth/register', '/api/auth/login'];
+
+/**
  * TD-006: 100 requests / 15 minutes / IP across every `/api` route except
- * `/api/auth/*`, which already has its own stricter limiter (5/15min,
- * auth.routes.ts) — `skip` here avoids double-limiting those endpoints
- * against two independent counters. Uses `req.originalUrl` rather than
- * `req.path`/`req.baseUrl` so the exemption holds regardless of exactly
- * where this middleware ends up mounted.
+ * the credential endpoints listed in {@link OWN_LIMITER_PREFIXES}. Uses
+ * `req.originalUrl` rather than `req.path`/`req.baseUrl` so the exemption
+ * holds regardless of exactly where this middleware ends up mounted.
  */
 function buildGlobalLimiter(): RequestHandler {
   return rateLimit({
@@ -62,7 +73,7 @@ function buildGlobalLimiter(): RequestHandler {
     message: { success: false, error: 'Too many requests from this IP' },
     standardHeaders: true,
     legacyHeaders: false,
-    skip: (req) => req.originalUrl.startsWith('/api/auth'),
+    skip: (req) => OWN_LIMITER_PREFIXES.some((prefix) => req.originalUrl.startsWith(prefix)),
   });
 }
 
