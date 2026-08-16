@@ -1,9 +1,12 @@
-import { Types } from 'mongoose';
-
-import './setup';
-import { DeviceTokenModel } from '../models/DeviceToken';
-import { logger } from '../utils/logger';
-
+// These jest.mock() calls MUST be the very first statements in this file —
+// ts-jest preserves source order (unlike babel-jest, it does NOT hoist
+// jest.mock() above imports), and `import './setup'` below transitively
+// requires notification.service.ts (via app.ts -> device.routes ->
+// device.controller). If any import ran first, that chain would capture a
+// binding to the REAL firebase-admin/app before these mocks ever registered
+// — confirmed the hard way: it produced a real "Failed to parse private
+// key." error from firebase-admin's own credential parser instead of using
+// the mock.
 jest.mock('firebase-admin/app', () => ({
   initializeApp: jest.fn(() => ({ name: 'mock-app' })),
   getApps: jest.fn(() => []),
@@ -14,11 +17,11 @@ jest.mock('firebase-admin/messaging', () => ({
   getMessaging: jest.fn(),
 }));
 
-// Imported AFTER the jest.mock() calls above (ts-jest preserves source
-// order — unlike babel-jest, it does NOT hoist jest.mock() above imports —
-// so the mock registration must textually precede any import that would
-// require the real firebase-admin submodules, including transitively via
-// notification.service.ts below).
+import { Types } from 'mongoose';
+
+import './setup';
+import { DeviceTokenModel } from '../models/DeviceToken';
+import { logger } from '../utils/logger';
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { getMessaging } from 'firebase-admin/messaging';
 import {
