@@ -370,7 +370,7 @@ to clients.
 
 ## 🧪 Testing Standards
 
-Testing stack installed: Jest + Supertest + mongodb-memory-server (backend); flutter_test + bloc_test (frontend). CI runs the full suite on every PR — 236 backend tests, 192 frontend tests.
+Testing stack installed: Jest + Supertest + mongodb-memory-server (backend); flutter_test + bloc_test (frontend). CI runs the full suite on every PR — 298 backend tests (20 suites), 216 frontend tests in the main blocking step, plus `test/widgets/offline_banner_test.dart` run separately with allow-failure (TD-040).
 
 - **Backend:** Jest + Supertest for integration tests
 - **Frontend:** `flutter_test` for widget tests, `bloc_test` for Cubit tests
@@ -406,9 +406,9 @@ Testing stack installed: Jest + Supertest + mongodb-memory-server (backend); flu
 10. NEVER skip error handling — every async operation must have error handling
 11. NEVER merge code without tests for new features
 12. NEVER ignore a failing test — fix it or remove it with justification
-13. NEVER allow write POSTs without idempotency protection: every POST that creates a resource MUST accept an `Idempotency-Key` header; backend MUST dedupe via Redis with a TTL; frontend MUST generate one stable UUID per logical operation (surviving 401 retries). On duplicate key detection the backend MUST return the original resource with HTTP 200 and MUST NOT re-emit socket events. (MUST be enforced — currently NOT implemented, see TD-014)
-14. NEVER configure `express.json()` without a payload size limit (e.g. `limit: '100kb'`). (MUST be enforced — currently NOT implemented, see TD-015)
-15. NEVER ship production with empty `CORS_ORIGINS`: when `NODE_ENV=production` it MUST be non-empty and the server MUST fail fast at startup otherwise; wildcard `*` is only acceptable in development. (MUST be enforced — currently NOT implemented, see TD-016)
+13. NEVER allow write POSTs without idempotency protection: every POST that creates a resource MUST accept an `Idempotency-Key` header; backend MUST dedupe via Redis with a TTL; frontend MUST generate one stable UUID per logical operation (surviving 401 retries). On duplicate key detection the backend MUST return the original resource with HTTP 200 and MUST NOT re-emit socket events. (Enforced since the TD-014 commit; see middleware/idempotency.middleware.ts)
+14. NEVER configure `express.json()` without a payload size limit (e.g. `limit: '100kb'`). (Enforced since the TD-015 commit; see app.ts's `express.json({ limit: '100kb' })`)
+15. NEVER ship production with empty `CORS_ORIGINS`: when `NODE_ENV=production` it MUST be non-empty and the server MUST fail fast at startup otherwise; wildcard `*` is only acceptable in development. (Enforced since the TD-016 commit; see utils/env.ts's `validateProductionEnv`, called from server.ts)
 16. NEVER leave orphaned references when a member leaves a household: their pending assigned tasks MUST be unassigned (removed from `assignedTo`), tasks they created MUST be preserved, and the UI MUST render "Ex-miembro" for a former assignee. (Enforced since the TD-018 commit; see household.service.ts's unassignDepartedMemberTasks and task_tile.dart's AvatarStack)
 17. NEVER allow edit/delete of a task by anyone other than the creator or an admin; any member may complete tasks and purchase shopping items. (Enforced since the TD-011 commit; see tasks.test.ts permission tests)
 18. NEVER render user-supplied text in any HTML-capable surface (future web client, email templates, push deep-links) without escaping at render time; mobile Text() widgets are safe by construction, storage stays raw per ADR-009
@@ -439,11 +439,9 @@ The full registry (~47 entries, all history) lives in [Full Technical Debt Regis
 | ID | Description | Severity | Status |
 |----|-------------|----------|--------|
 | TD-001 | Members embedded in Household document | High | Planned (Phase 2) |
-| TD-002 | No pagination on list endpoints | High | Planned (Phase 1) |
 | TD-007 | No optimistic updates in frontend | Medium | Planned (Phase 2) |
 | TD-010 | No database backups | Medium | Planned (Phase 3) |
 | TD-013 | Recurrence computed in UTC without household timezone | Medium | Planned (Phase 2) |
-| TD-015 | No express.json payload size limit | Medium | Planned (Phase 1) |
 | TD-034 | No deploy-order safety net between backend and Flutter app | Medium | Planned (Phase 3) |
 | TD-039 | Offline conflict resolution uses last-write-wins; concurrent edits on multiple devices can overwrite | Low | Deferred (Phase 2) |
 | TD-040 | flutter test hangs on loaded hosts (offline_banner_test.dart) | Low | Mitigated in CI; root cause still open |
@@ -651,13 +649,13 @@ Two separate systems, deliberately not coupled by a branch-protection gate (see 
 ## 🔮 Roadmap
 
 ### Phase 1 — Stabilization (NOW)
-- [ ] Cursor-based pagination (TD-002)
+- [x] ~~Cursor-based pagination (TD-002)~~
 - [x] ~~Offline mode with Hive (TD-003)~~
 - [x] ~~Input sanitization and validation (TD-004)~~
 - [x] ~~Integration tests + install test stack (TD-005)~~
 - [x] ~~Error tracking with Sentry (TD-009)~~
 - [x] ~~Idempotency-Key on write POSTs (TD-014)~~
-- [ ] express.json payload limit (TD-015)
+- [x] ~~express.json payload limit (TD-015)~~
 - [x] ~~CORS fail-fast in production (TD-016)~~
 
 ### Phase 2 — Robustness
@@ -714,7 +712,7 @@ As of this commit, Phase 1 (Stabilization) is COMPLETE. All TD items in Phase 1 
 - [ ] Smoke test on real devices (iOS + Android)
 - [ ] Announce beta to early users
 
-Note: this section originally claimed Phase 1 complete, but TD-002, TD-015, TD-016 were listed Planned (Phase 1) at the time. As of this round TD-016 is resolved (see "Security rules" above); TD-002 and TD-015 were separately found already implemented (verified 2026-08-16, see docs/TECH_DEBT.md) but this line was never revisited — Phase 1 is, and was, functionally complete for beta release regardless.
+Note: this section originally claimed Phase 1 complete while TD-002, TD-015, TD-016 were still listed Planned (Phase 1) in the Roadmap checklist above — a stale checkbox, not a stale claim: all three were already implemented (TD-016 resolved same-day via PR #22; TD-002 and TD-015 were found already implemented, verified 2026-08-16, see docs/TECH_DEBT.md), the Roadmap checklist just hadn't been revisited to reflect it. Now fixed — the Phase 1 checklist above is fully checked, matching this section's claim.
 
 ---
 
@@ -746,6 +744,7 @@ Las decisiones de producto (monetización, gamificación, UX de alto nivel) vive
 | `backend/src/services/economy.service.ts` | Coin balance, lazy hunger/mood decay, grantCoins anti-farm rules |
 | `backend/src/services/notification.service.ts` | Firebase Admin push notifications: `sendPushNotification`, device token register/remove (PDR-008) |
 | `backend/src/models/DeviceToken.ts` | FCM device token per user, unique on `{userId, token}` — PDR-008 |
+| `backend/src/scripts/purge-trash.ts` | `--days N` (default 30) global trash purge, meant for a scheduled job — shares `taskService.purgeDeletedTasks` with the admin-only `POST .../tasks/purge` endpoint (TD-048) |
 | `frontend/lib/config/constants.dart` | API URLs and app config — set via `--dart-define` (API_BASE_URL/ENVIRONMENT), see README.md; no longer protected with --assume-unchanged (TD-017) |
 | `frontend/lib/data/datasources/remote/api_service.dart` | Dio client with auth interceptors |
 | `frontend/lib/services/socket_service.dart` | Socket.io singleton |
