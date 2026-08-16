@@ -710,6 +710,7 @@ Las decisiones de producto (monetización, gamificación, UX de alto nivel) vive
 | `backend/src/schemas/` | Zod request-validation schemas, one file per domain (task/household/auth.schema.ts), applied to routes via validate() (TD-028) |
 | `backend/src/utils/response.ts` | `sendSuccess` / `sendError` helpers |
 | `backend/src/services/task.service.ts` | Task business logic + recurrence |
+| `backend/src/services/household-stats.service.ts` | `GET /households/:householdId/stats?period=` load/completion stats (any member, PDR-007) |
 | `backend/src/config/economy.ts` | Tunable economy constants (coin amounts, cooldowns, cosmetics catalog) — PDR-001 |
 | `backend/src/config/swagger.ts` | OpenAPI spec served at `/api/docs` |
 | `backend/src/models/Pet.ts` | Household pet schema (hunger/mood decay, cosmetics) — PDR-001 |
@@ -726,3 +727,4 @@ Las decisiones de producto (monetización, gamificación, UX de alto nivel) vive
 | `frontend/lib/presentation/pages/pet_shop_page.dart` | Cosmetics shop UI |
 | `frontend/lib/presentation/pages/calendar_page.dart` | Mes/Semana selector; week view reuses spanning bars logic from month view |
 | `frontend/lib/presentation/pages/recurring_tasks_page.dart` | Recurrentes tab (TD-035): one row per recurring series (`TaskCubit.recurringTasks`), reusing `TaskTile` + `TaskFormPage` navigation |
+| `frontend/lib/presentation/pages/stats_page.dart` | Household stats view (PDR-007), reached from Profile's AppBar (bar_chart icon); period toggle (30 días/Todo) via `StatsCubit` |
