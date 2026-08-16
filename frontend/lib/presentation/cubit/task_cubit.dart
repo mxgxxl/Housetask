@@ -657,6 +657,24 @@ class TaskCubit extends Cubit<TaskState> {
     }
   }
 
+  /// "Vaciar papelera" (TD-048): hard-delete trash entries older than 30 days
+  /// (the backend's default). Reloads [TaskState.trashTasks] from the server
+  /// afterwards rather than guessing locally which rows were purged — the
+  /// server is the only place that knows each row's exact age. Returns the
+  /// purged count on success, or null on failure (with [TaskState.trashError]
+  /// set — e.g. a non-admin caller sees the backend's 403).
+  Future<int?> purgeTrash() async {
+    if (_householdId == null) return null;
+    try {
+      final deleted = await _repo.purgeTrash(_householdId!);
+      await loadTrashTasks(_householdId!);
+      return deleted;
+    } on Failure catch (f) {
+      emit(state.copyWith(trashError: f.message));
+      return null;
+    }
+  }
+
   Future<Task?> createTask(Map<String, dynamic> payload) async {
     if (_householdId == null) return null;
     try {
