@@ -63,6 +63,17 @@ Living document capturing operational learnings from the Mac↔Mobile workflow e
 - **2026-08-16 (TD-047):** "Home no muestra tareas hasta refresh" → resultó no ser un bug de load inicial; era combinación de dos bugs previos (timeline stale + creación 400). Documentado como "Resolved — hypothesis refuted" en docs/TECH_DEBT.md.
 - **Lección:** antes de lanzar fix de hipótesis, verificar con evidencia de runtime (logs, status codes), no solo con análisis de código.
 
+### Discrepancia de sesión (2026-08-17, móvil)
+
+- Error de Qwen: asumió que TD-050..TD-054 no estaban registrados en TECH_DEBT.md. Verificación de Claude Code (commit 2fb2028) confirmó que ya estaban registrados desde 7e0555d (PR #25). Lección: verificar estado del repo antes de generar tareas de sincronización.
+
+### Decisión TD-050 (2026-08-17)
+
+- Opción elegida por el dueño: A — aplicar fix `createdAt: {$lt: requestStartedAt}`.
+- Razón: riesgo de logout fantasma con conexión inestable > riesgo de replay real en ventana de microsegundos.
+- Implementado en: 13d5cc2 (fix) + e941e23 (test)
+- **Nota de validación:** el fix se implementó y se cubrió con un test nuevo de refresh concurrente (`auth.test.ts`), pero no se pudo correr la suite de Jest en esta sesión — `mongodb-memory-server` sigue bloqueado por el proxy (`fastdl.mongodb.org` → 403 de policy denial, confirmado también desde este entorno, no solo desde móvil como se documentó antes en este archivo). `npm run typecheck` y `npm run lint` sí pasan limpio sobre el cambio. La validación real de comportamiento (incluida la de concurrencia) queda en manos de CI al abrir el PR — ver `docs/NEXT_SESSION_MAC.md`, que ya señalaba TD-050 como el caso de uso típico de "necesita MongoDB real".
+
 ---
 
 ## Fricciones conocidas

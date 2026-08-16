@@ -169,7 +169,7 @@ Detailed ADRs live in docs/ADRs.md. Index:
 - Credential endpoints rate-limited: 5 requests / 15 min / IP
 - Every other `/api/*` route is additionally rate-limited globally: 100 requests / 15 min / IP (`app.ts`'s `buildGlobalLimiter`, TD-006), `/api/auth/*` exempted from this counter (it already has the stricter limiter above) via a `skip` on `req.originalUrl` — a request there is never double-limited
 - Password field has `select: false` in Mongoose schema
-- Replay detection revokes the full token family on two triggers: valid signature + missing row, OR stored userId mismatch with the JWT payload; every family revocation emits a security log (`logger.warn` with userId) as the audit hook for Sentry (TD-009)
+- Replay detection revokes the token family on two triggers: valid signature + missing row (revokes tokens created before the replaying request started — TD-050, 2026-08-17, so a concurrent legitimate rotation's brand-new token survives), OR stored userId mismatch with the JWT payload (tampering, not a race — revokes the full family unconditionally); every family revocation emits a security log (`logger.warn` with userId) as the audit hook for Sentry (TD-009)
 - Production boot fails fast (`utils/env.ts`'s `validateProductionEnv`, called from `server.ts` before anything binds) when `CORS_ORIGINS` is empty, `MONGODB_URI` is unset, or either JWT secret is under 32 characters (TD-016) — a misconfigured production process crashing visibly beats it silently degrading `CORS_ORIGINS` to `*` or running with a forgeable JWT secret
 
 ---
@@ -446,7 +446,6 @@ The full registry (~47 entries, all history) lives in [Full Technical Debt Regis
 | TD-039 | Offline conflict resolution uses last-write-wins; concurrent edits on multiple devices can overwrite | Low | Deferred (Phase 2) |
 | TD-040 | flutter test hangs on loaded hosts (offline_banner_test.dart) | Low | Mitigated in CI; root cause still open |
 | TD-049 | No real Firebase project connected for push notifications (PDR-008) — code is in place, no push actually delivers until a Firebase project + `flutterfire configure` + APNs key are set up manually | High | Planned (before beta push notifications can work) |
-| TD-050 | Concurrent refresh with the same token revokes the whole token family → spurious logout of the legitimate client | High | Planned (needs owner decision, see docs/TECH_DEBT.md) |
 | TD-051 | `jwt.verify` does not pin `algorithms` explicitly (defence-in-depth; not exploitable on jsonwebtoken 9) | Medium | Planned |
 | TD-052 | `validateProductionEnv` never asserts `JWT_SECRET` and `JWT_REFRESH_SECRET` differ | Medium | Planned |
 | TD-053 | Login timing side-channel enables account enumeration despite identical messages | Medium | Planned |

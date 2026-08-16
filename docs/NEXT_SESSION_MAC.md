@@ -2,22 +2,22 @@
 
 Generado durante el backlog grooming del 2026-08-16 (sesión móvil, `chore/backlog-grooming`). Ver `docs/TECH_DEBT.md` para el registro completo con la columna Priority nueva.
 
-**Actualizado 2026-08-17** tras el escaneo de seguridad backend auth (PR #25): TD-018 ya está Resolved (ver `docs/TECH_DEBT.md`), así que sale de este top; TD-050 entra porque encaja exactamente en el criterio de esta lista — fix sensible a timing/concurrencia que necesita MongoDB real, no validable desde una sesión móvil (ver `IMPROVEMENTS.md`, sección "Bloqueo de npm test desde móvil").
+**Actualizado 2026-08-17 (segunda vez):** TD-050 ya no necesita una sesión de Mac — el dueño aprobó la Opción A y el fix (`deleteMany({ userId, createdAt: { $lt: requestStartedAt } })`) más su test de refresh concurrente ya están implementados en `fix/td-050-refresh-race-condition`. La sesión que lo implementó tampoco pudo correr Jest localmente (mismo bloqueo de `mongodb-memory-server` por proxy, confirmado que no es exclusivo de móvil), así que la validación real queda en manos de CI al abrir el PR, no de una sesión de Mac con MongoDB local como se anticipaba antes. TD-050 sale del Top 3 por esto; TD-001 sube al puesto que dejó libre TD-018 (Resolved el 2026-08-16).
 
 ---
 
 ## Top 3 TDs para próxima sesión de Mac
 
-1. **TD-050 — race condition de refresh concurrente (revocación de familia completa, logout espurio).**
-   Fix candidato ya documentado en `docs/TECH_DEBT.md` (`deleteMany({ userId, createdAt: { $lt: requestStartedAt } })`), pero requiere (a) decisión del dueño sobre el tradeoff seguridad/UX frente a TD-022, y (b) validación contra MongoDB real — `mongodb-memory-server` no se puede descargar desde sesiones móviles (403 de proxy), así que el fix no se pudo probar cuando se encontró. Es el único de los tres items originales de este Top 3 que no estaba aquí antes; los otros dos siguen vigentes.
-
-2. **TD-040 — investigar el cuelgue de `offline_banner_test.dart`.**
+1. **TD-040 — investigar el cuelgue de `offline_banner_test.dart`.**
    Requiere CPU libre y un toolchain Flutter local con `--verbose`/`--machine`, no factible desde una sesión móvil sin toolchain. Confirmado de nuevo el 2026-08-16 (ver evidencia abajo): sigue reproduciéndose en CI, no es un falso positivo antiguo.
 
-3. **TD-001 — migrar `members` embebido a una colección `HouseholdMember` separada.**
+2. **TD-001 — migrar `members` embebido a una colección `HouseholdMember` separada.**
    Es la migración más grande y arriesgada del backlog abierto (toca modelo, todos los servicios que leen `household.members`, y el frontend). Se beneficia de iteración local sin el overhead de rama+PR+CI por cada paso intermedio que impone el flujo móvil (ver `IMPROVEMENTS.md`).
 
-Nota: TD-018 (lifecycle de member-leave), que ocupaba el puesto 3 en la versión anterior de esta lista, quedó Resolved el 2026-08-16 (commit ver `docs/TECH_DEBT.md`) — ya no requiere sesión de Mac.
+3. **TD-007 — optimistic updates en frontend.**
+   Es Medium severity pero toca varios Cubits (`TaskCubit`, `ShoppingCubit`) y su interacción con el offline queue (TD-003/ADR-010) de forma coherente — mejor sin el corte de una PR intermedia por cada Cubit tocado.
+
+Nota: TD-018 (lifecycle de member-leave) quedó Resolved el 2026-08-16. TD-050 (race condition de refresh concurrente) quedó Resolved el 2026-08-17 — fix + tests implementados en `fix/td-050-refresh-race-condition`, pendiente solo de que CI confirme la suite en verde (ver `docs/ROADMAP.md`).
 
 ---
 
