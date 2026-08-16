@@ -98,6 +98,27 @@ Living document capturing operational learnings from the Mac↔Mobile workflow e
 - **Lección de proceso:** varios hallazgos Medium (TD-051, TD-052, TD-053) son de tipo "la protección existe pero vive en un default de una dependencia o en una convención, no en una aserción explícita del código". No son bugs hoy y por eso no se arreglaron en una ronda de scope cerrado, pero son exactamente los que se rompen en silencio en un bump de major.
 - **Fix no aplicado a propósito (TD-050):** ver la entrada en `docs/TECH_DEBT.md`. Requiere relitigar una decisión de seguridad deliberada (TD-022) y rompería un test existente que la codifica; se documentó con el fix candidato en vez de implementarlo unilateralmente.
 
+### Fixes TD-051, TD-052, TD-053 (2026-08-17)
+
+**Problema:** Protecciones de seguridad dependían de defaults de dependencias externas (jsonwebtoken, comparación de secrets, timing de bcrypt). Riesgo de pérdida silenciosa de protección en major bumps.
+
+**Solución:** Configuraciones hechas explícitas en código:
+- TD-051: JWT algorithm explícito en `sign()` (`{ algorithm: 'HS256' }`) y `verify()` (`{ algorithms: ['HS256'] }`) en `utils/jwt.ts`, para las cuatro funciones (access + refresh, sign + verify).
+- TD-052: `validateProductionEnv` (`utils/env.ts`) ahora rechaza `JWT_SECRET === JWT_REFRESH_SECRET` en producción, además del chequeo de longitud mínima ya existente.
+- TD-053: `login` (`auth.service.ts`) compara contra un hash bcrypt fijo (`DUMMY_PASSWORD_HASH`, calculado una vez al cargar el módulo) cuando el email no existe, para que ambas ramas paguen el mismo coste de `bcrypt.compare` (~80-100ms) y la latencia deje de ser un oráculo de enumeración de cuentas.
+
+**Nota sobre TD-053 (descripción genérica de la tarea vs. registro real):** la tarea que disparó esta ronda describía TD-053 genéricamente como "protección en default de bcrypt (salt rounds/versión)" — eso ya estaba resuelto de antes (`BCRYPT_ROUNDS = 10` como constante explícita en `auth.service.ts` desde antes de esta ronda). El TD-053 real registrado en `docs/TECH_DEBT.md` es distinto: un side-channel de timing en `login` que permite enumeración de cuentas. Se implementó el fix correcto (el que dice el registro), no el que la descripción genérica de la tarea sugería. Misma discrepancia para TD-052: la tarea lo describía como "comparación timing-safe de secrets", pero el TD-052 real es sobre `JWT_SECRET !== JWT_REFRESH_SECRET`. Lección: cuando una tarea da una descripción genérica de un TD y también apunta a `docs/TECH_DEBT.md` como fuente de contexto completo, el registro manda sobre el resumen.
+
+**Archivos modificados:**
+- `backend/src/utils/jwt.ts` (TD-051)
+- `backend/src/utils/env.ts` (TD-052)
+- `backend/src/services/auth.service.ts` (TD-053)
+- Tests añadidos en `backend/src/tests/auth.test.ts` (TD-051 ×2, TD-053) y `backend/src/tests/env.test.ts` (TD-052), más el ajuste del test preexistente "everything valid" para usar dos secrets distintos (ya no puede compartir el mismo `VALID_SECRET` para ambos, o dispara el chequeo nuevo).
+
+**Validación:** de nuevo, `mongodb-memory-server` bloqueado en este entorno (ver más arriba) — no se pudo correr la suite de Jest completa. Se verificó la lógica pura de TD-051/TD-052 (sin BD) con un script `ts-node` suelto ejecutando `signAccessToken`/`verifyAccessToken`/`verifyRefreshToken` y `validateProductionEnv` directamente, y la de TD-053 comparando el tiempo de un `bcrypt.compare` contra el hash dummy frente a uno real (~80ms ambos). `npm run typecheck` y `npm run lint` pasan limpio. Validación de comportamiento vía HTTP (los tests de Supertest nuevos) queda en manos de CI.
+
+**Decisión del dueño:** priorizar prevención de bugs silenciosos en futuras actualizaciones de dependencias.
+
 ---
 
 ## Próximas mejoras pendientes

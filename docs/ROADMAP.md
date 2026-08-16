@@ -6,7 +6,8 @@
 
 | Fecha | PR/Commit | Descripción | Impacto |
 |-------|-----------|-------------|---------|
-| 2026-08-17 | fix/td-050-refresh-race-condition | TD-050 resuelto (Opción A aprobada por el dueño): revocación de replay filtrada por `createdAt < requestStartedAt`, elimina el logout fantasma en refresh concurrente sin debilitar la detección de replay real | Seguridad + UX — cierra el único High-severity abierto del scan de auth |
+| 2026-08-17 | fix/td-051-053-explicit-security-configs | TD-051/TD-052/TD-053 resueltos: JWT algorithm explícito (sign+verify), assert `JWT_SECRET !== JWT_REFRESH_SECRET` en producción, comparación bcrypt dummy en login para eliminar el side-channel de timing | Seguridad — cierra los tres Medium restantes del scan de auth, ya no dependen de defaults de dependencias |
+| 2026-08-17 | PR #27 (fix/td-050-refresh-race-condition, mergeado) | TD-050 resuelto (Opción A aprobada por el dueño): revocación de replay filtrada por `createdAt < requestStartedAt`, elimina el logout fantasma en refresh concurrente sin debilitar la detección de replay real. CI backend confirmó la suite en verde antes del merge. | Seguridad + UX — cierra el único High-severity abierto del scan de auth |
 | 2026-08-16 | PR #25 (857fc1c) | Escaneo seguridad backend auth: rate limit en `/api/auth/refresh` y `/logout` (commit 19521d0), TD-050..TD-054 registrados en TECH_DEBT.md | Seguridad reforzada — cierra el único hueco de rate limiting que quedaba en `/api/auth/*` |
 | 2026-08-16 | PR #24 (29fc2d3) | Fix white screen iOS: `NotificationService.init()` colgaba pidiendo permiso Darwin antes de `runApp()` — permiso diferido vía `addPostFrameCallback` | Estabilidad iOS — la app arrancaba en pantalla en blanco en dispositivo físico |
 | 2026-08-16 | 4 commits a main (787fc1a, 1425b7a, 69c1181, 8aaf17d, 4c080aa, 2892e72) | Setup Firebase/TD-049: plugin Gradle guardado tras `file('google-services.json').exists()`, `UIBackgroundModes` en Info.plist, docs actualizadas | Push notifications prep — config parcial, aún requiere pasos manuales en Xcode |
@@ -18,9 +19,9 @@
 - **Bloqueante:** requiere iPhone real (no reproducible en simulador para el diálogo de permisos nativo).
 - **Siguiente paso:** el dueño prueba la app; si confirma que la pantalla en blanco no reaparece, se abre un PR de limpieza que quita los `debugPrint('[bootstrap] ...')` marcados `TODO(tech-debt)` en `main.dart`.
 
-### Fix TD-050 — validación en CI
-- **Estado:** código + tests implementados y pusheados a `fix/td-050-refresh-race-condition`; `npm run typecheck` y `npm run lint` pasan limpio.
-- **Bloqueante:** la sesión que implementó el fix no pudo correr la suite de Jest localmente (`mongodb-memory-server` bloqueado por política del proxy, mismo problema ya documentado en IMPROVEMENTS.md para sesiones móviles — se confirmó que también aplica aquí). Falta que CI (que sí resuelve el binario) confirme los 300+ tests en verde antes de considerar el PR mergeable.
+### Fix TD-051/TD-052/TD-053 — validación en CI
+- **Estado:** código + tests implementados y pusheados a `fix/td-051-053-explicit-security-configs`; `npm run typecheck` y `npm run lint` pasan limpio. La lógica pura de TD-051 (algorithm pinning) y TD-052 (secrets iguales) se verificó adicionalmente con un script suelto fuera de Jest; TD-053 (timing) se verificó comparando manualmente el tiempo de un compare dummy vs. uno real.
+- **Bloqueante:** igual que TD-050, la suite de Jest no se pudo correr localmente en este entorno (`mongodb-memory-server` bloqueado por política del proxy). Falta que CI confirme los 300+ tests en verde.
 - **Siguiente paso:** revisar el resultado de GitHub Actions en el PR y, si CI está verde, el dueño decide si mergea.
 
 ## Próximas Prioridades (ordenado)
@@ -28,10 +29,10 @@
 | # | ID | Descripción | Esfuerzo | Bloqueante |
 |---|----|-------------|----------|------------|
 | 1 | Validación PR #24 | Probar fix white screen en iPhone físico + limpiar debugPrints de diagnóstico | Bajo | Dispositivo físico |
-| 2 | TD-050 (CI) | Confirmar CI verde en `fix/td-050-refresh-race-condition` y mergear | Bajo | Ninguno — solo esperar el run de GitHub Actions |
-| 3 | TD-051/TD-052/TD-053 | Hardening defensivo: pinning de `algorithms` en `jwt.verify`, assert `JWT_SECRET !== JWT_REFRESH_SECRET`, comparación bcrypt dummy contra timing en login | Bajo | Ninguno — abordable desde cualquier sesión |
-| 4 | Ronda 2 escaneo frontend | State management (preparada, no lanzada) | Alto | Ninguno |
-| 5 | TD-040 | Investigar cuelgue de `offline_banner_test.dart` en hosts cargados | Medio | Mac + CPU idle |
+| 2 | TD-051/052/053 (CI) | Confirmar CI verde en `fix/td-051-053-explicit-security-configs` y mergear | Bajo | Ninguno — solo esperar el run de GitHub Actions |
+| 3 | Ronda 2 escaneo frontend | State management (preparada, no lanzada) | Alto | Ninguno |
+| 4 | TD-040 | Investigar cuelgue de `offline_banner_test.dart` en hosts cargados | Medio | Mac + CPU idle |
+| 5 | TD-054 | Ventana de token de acceso post-logout (bajo impacto, solo si el modelo de amenaza lo requiere) | Bajo | Ninguno — es el único TD del scan de auth que sigue abierto |
 
 ## Futuro (backlog)
 
