@@ -1,7 +1,21 @@
 import { Response } from 'express';
 import * as householdService from '../services/household.service';
+import * as householdStatsService from '../services/household-stats.service';
+import { StatsPeriod } from '../services/household-stats.service';
+import { AppError } from '../middleware/error.middleware';
 import { sendSuccess } from '../utils/response';
 import { AuthenticatedRequest } from '../types';
+
+const VALID_PERIODS: StatsPeriod[] = ['last30days', 'allTime'];
+
+/** Parse the `period` query param; absent defaults to last30days, invalid is a 400. */
+function parsePeriod(raw: unknown): StatsPeriod {
+  if (raw === undefined) return 'last30days';
+  if (typeof raw !== 'string' || !VALID_PERIODS.includes(raw as StatsPeriod)) {
+    throw new AppError('period must be one of: last30days, allTime', 400);
+  }
+  return raw as StatsPeriod;
+}
 
 /**
  * POST /api/households
@@ -54,4 +68,15 @@ export async function removeMember(req: AuthenticatedRequest, res: Response): Pr
     req.params.userId,
   );
   sendSuccess(res, householdService.serializeHousehold(household));
+}
+
+/**
+ * GET /api/households/:householdId/stats?period=last30days|allTime
+ * Load/completion stats (PDR-007). Any member may read; requireMembership
+ * has already verified membership before this handler runs.
+ */
+export async function getStats(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const period = parsePeriod(req.query.period);
+  const stats = await householdStatsService.getHouseholdStats(req.params.householdId, period);
+  sendSuccess(res, stats);
 }

@@ -35,6 +35,7 @@ router.get(
   requireMembership,
   asyncHandler(householdController.listMembers),
 );
+router.get('/:householdId/stats', requireMembership, asyncHandler(householdController.getStats));
 router.delete(
   '/:householdId/members/:userId',
   requireMembership,

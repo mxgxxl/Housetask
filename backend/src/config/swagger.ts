@@ -360,6 +360,75 @@ export const swaggerSpec: Record<string, unknown> = {
         responses: { '200': { description: 'OK' }, '403': { description: 'Forbidden' } },
       },
     },
+    '/households/{householdId}/stats': {
+      get: {
+        tags: ['Households'],
+        summary: 'Household load/completion stats (PDR-007, any member)',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+          {
+            name: 'period',
+            in: 'query',
+            required: false,
+            description: 'Window for the stats; invalid value responds 400',
+            schema: { type: 'string', enum: ['last30days', 'allTime'], default: 'last30days' },
+          },
+        ],
+        responses: {
+          '200': {
+            description: 'Household stats',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    data: {
+                      type: 'object',
+                      properties: {
+                        totalTasks: { type: 'integer' },
+                        completedTasks: { type: 'integer' },
+                        completionRate: { type: 'number' },
+                        memberStats: {
+                          type: 'array',
+                          items: {
+                            type: 'object',
+                            properties: {
+                              userId: { type: 'string' },
+                              userName: { type: 'string' },
+                              avatarUrl: { type: 'string', nullable: true },
+                              created: { type: 'integer' },
+                              completed: { type: 'integer' },
+                            },
+                          },
+                        },
+                        topCompleter: {
+                          type: 'object',
+                          nullable: true,
+                          properties: {
+                            userId: { type: 'string' },
+                            userName: { type: 'string' },
+                            completed: { type: 'integer' },
+                          },
+                        },
+                        period: { type: 'string', enum: ['last30days', 'allTime'] },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          '400': {
+            description: 'Invalid period',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
+          '403': { description: 'Not a member of this household' },
+          '404': { description: 'Household not found' },
+        },
+      },
+    },
     '/households/{householdId}/tasks': {
       get: {
         tags: ['Tasks'],
