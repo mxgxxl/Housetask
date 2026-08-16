@@ -130,6 +130,8 @@ class FakeTaskRepository implements TaskRepository {
     this.returnsUnsynced = false,
     this.syncGate,
     this.failRestoreWith,
+    this.failPurgeWith,
+    this.purgeResult = 0,
   });
 
   /// `includeDeleted` received by [list], in order — lets a test assert the
@@ -242,6 +244,21 @@ class FakeTaskRepository implements TaskRepository {
   @override
   Future<Map<String, dynamic>> generateRecurringInstances(String householdId) async =>
       {'generated': 0, 'tasks': <dynamic>[]};
+
+  /// Household ids passed to [purgeTrash], in order — lets a test assert the
+  /// "Vaciar papelera" button called the right household (TD-048).
+  final List<String> purgeCalls = [];
+  final Failure? failPurgeWith;
+
+  /// Value [purgeTrash] returns when it doesn't throw.
+  final int purgeResult;
+
+  @override
+  Future<int> purgeTrash(String householdId) async {
+    purgeCalls.add(householdId);
+    if (failPurgeWith != null) throw failPurgeWith!;
+    return purgeResult;
+  }
 
   /// How many times syncPendingOperations() was called — lets a test assert
   /// the cubit actually triggers a sync rather than merely holding the count.
