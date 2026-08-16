@@ -49,6 +49,15 @@ Living document capturing operational learnings from the Mac↔Mobile workflow e
 - **Fix:** job `changes` (dorny/paths-filter@v3) al inicio de `.github/workflows/ci.yml`; los jobs `backend`/`frontend` ahora tienen `needs: changes` + `if: needs.changes.outputs.<job> == 'true'` y se saltan cuando sus paths no cambiaron. El propio `.github/workflows/ci.yml` está incluido en ambos filtros a propósito — un cambio al workflow siempre re-verifica ambas suites en vez de confiar ciegamente en el edit.
 - **Lección:** un PR que solo toca `.github/workflows/ci.yml` (como el que introdujo este fix) sigue corriendo el CI completo por ese mismo motivo — no es "instantáneo", es la validación intencional del propio cambio de CI.
 
+### iOS white-screen startup bug (2026-08-16)
+
+- **Síntoma:** `flutter run` en iPhone físico instala la app, la Dart VM arranca, pero la pantalla se queda en blanco (launch screen nativa) — sin ningún print `flutter:` en consola, indicando que `main()` se colgaba antes de `runApp()`.
+- **Diagnóstico:** se añadieron `debugPrint` temporales entre cada `await` del bootstrap en `main.dart` (Sentry → Firebase → NotificationService → CacheService → runApp) para aislar qué paso no completaba.
+- **Causa raíz:** `NotificationService.init()` llamaba a `FlutterLocalNotificationsPlugin.initialize()` con `DarwinInitializationSettings(requestAlertPermission: true, ...)`, lo que dispara el diálogo de permisos del sistema en iOS. Al mostrarse ese diálogo antes de que Flutter hubiera renderizado el primer frame (`runApp()` no se había llamado todavía), el `await` quedaba bloqueado indefinidamente — de ahí la pantalla en blanco sin logs.
+- **Fix:** `requestAlertPermission`/`requestBadgePermission`/`requestSoundPermission` puestos a `false` en `DarwinInitializationSettings` (así `plugin.initialize()` ya no dispara el diálogo), y la petición explícita de permisos (`_requestPermissions()`) se difiere con `WidgetsBinding.instance.addPostFrameCallback`, para que se ejecute después de que el primer frame ya esté en pantalla. `_requestPermissions()` también se envolvió en try/catch, consistente con el resto de llamadas al plugin en este archivo.
+- **Nota:** no relacionado con TD-049 (que trata de conectar un proyecto Firebase real para push) — este bug es del plugin de notificaciones locales (`flutter_local_notifications`), independiente de FCM/Firebase.
+- **Pendiente:** los `debugPrint('[bootstrap] ...')` añadidos a `main.dart` para el diagnóstico son temporales (marcados con `TODO(tech-debt)`) — quitar una vez el dueño confirme en dispositivo físico que la pantalla en blanco no reaparece.
+
 ### Hipótesis refutadas
 
 - **2026-08-16 (TD-047):** "Home no muestra tareas hasta refresh" → resultó no ser un bug de load inicial; era combinación de dos bugs previos (timeline stale + creación 400). Documentado como "Resolved — hypothesis refuted" en docs/TECH_DEBT.md.
