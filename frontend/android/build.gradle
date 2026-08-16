@@ -1,3 +1,15 @@
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        // TD-049: Firebase config plugin. Requires google-services.json in
+        // android/app/ (gitignored, manual setup) or the Android build fails.
+        classpath 'com.google.gms:google-services:4.4.2'
+    }
+}
+
 allprojects {
     repositories {
         google()

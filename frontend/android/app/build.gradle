@@ -58,3 +58,7 @@ flutter {
 dependencies {
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'
 }
+
+// TD-049: applies the Firebase config read from google-services.json
+// (gitignored, placed manually in this directory per setup docs).
+apply plugin: 'com.google.gms.google-services'
