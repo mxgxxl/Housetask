@@ -28,25 +28,31 @@ class TaskTile extends StatelessWidget {
     // removed once back online".
     final struckThrough = task.isCompleted || task.isDeleted;
 
-    // A completer who is no longer a household member (TD-018) still has a
-    // valid User document — the id just no longer appears in the current
-    // members list — so "current member" is decided here, not by a null
-    // name/email. Crucially, that lookup requires the household to actually
-    // be loaded: while HouseholdCubit is still initial/loading/error, `members`
-    // is empty for a reason that has nothing to do with the completer, so
-    // treating "not found" as "Ex-miembro" in that window would flag every
-    // completer as a former member for as long as the household takes to
-    // load. `completedByPending` distinguishes that transient case so the UI
-    // can show a neutral placeholder instead of a false "Ex-miembro".
+    // A completer (or assignee) who is no longer a household member (TD-018)
+    // still has a valid User document — the id just no longer appears in the
+    // current members list — so "current member" is decided here, not by a
+    // null name/email. Crucially, that lookup requires the household to
+    // actually be loaded: while HouseholdCubit is still initial/loading/error,
+    // `members` is empty for a reason that has nothing to do with the
+    // completer/assignee, so treating "not found" as "Ex-miembro" in that
+    // window would flag everyone as a former member for as long as the
+    // household takes to load. `completedByPending` distinguishes that
+    // transient case for the completed-by row; `formerAssigneeIds` is simply
+    // left empty until the household loads, so AvatarStack falls back to its
+    // own dangling-ref check (empty name+email) in the meantime.
+    final householdState = context.watch<HouseholdCubit>().state;
+    final householdLoaded = householdState.status == HouseholdStatusUi.loaded;
+    final currentMemberIds = householdLoaded
+        ? (householdState.current?.members ?? const []).map((m) => m.user.id).toSet()
+        : const <String>{};
+
     String? completedByLabel;
     User? completedByAvatarUser;
     bool completedByPending = false;
     final completedBy = task.completedBy;
     if (task.isCompleted && completedBy != null) {
-      final householdState = context.watch<HouseholdCubit>().state;
-      if (householdState.status == HouseholdStatusUi.loaded) {
-        final members = householdState.current?.members ?? const [];
-        final isCurrentMember = members.any((m) => m.user.id == completedBy.id);
+      if (householdLoaded) {
+        final isCurrentMember = currentMemberIds.contains(completedBy.id);
         completedByLabel = isCurrentMember
             ? (completedBy.name.isEmpty ? completedBy.email : completedBy.name)
             : 'Ex-miembro';
@@ -56,6 +62,13 @@ class TaskTile extends StatelessWidget {
         completedByPending = true;
       }
     }
+
+    final formerAssigneeIds = householdLoaded
+        ? task.assignedTo
+            .map((u) => u.id)
+            .where((id) => id.isNotEmpty && !currentMemberIds.contains(id))
+            .toSet()
+        : const <String>{};
 
     return Opacity(
       opacity: task.isDeleted ? 0.5 : 1,
@@ -171,7 +184,11 @@ class TaskTile extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
-                AvatarStack(users: task.assignedTo, size: 26),
+                AvatarStack(
+                  users: task.assignedTo,
+                  size: 26,
+                  formerMemberIds: formerAssigneeIds,
+                ),
               ],
             ),
           ),
