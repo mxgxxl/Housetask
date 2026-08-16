@@ -78,3 +78,30 @@ Living document capturing operational learnings from the Mac↔Mobile workflow e
 - **IMPROVEMENTS.md mismo:** documentar decisiones de PDR faltantes (002, 003, 005) cuando se creen.
 - **README.md update:** añadir mascota, papelera, Sentry, --dart-define, infra EU (pendiente).
 - **backend/README.md:** falta por crear (setup + patrón controller/service/model).
+- **CLAUDE.md, lista corta "Currently open TDs":** TD-002 y TD-015 llevan verificados como Resolved en `docs/TECH_DEBT.md` desde 2026-08-16 (código ya implementado antes de esa verificación) pero la lista corta espejo en CLAUDE.md nunca se actualizó — quedaron fuera del alcance cerrado de esta ronda (solo TD-016/TD-006), pero es una limpieza de una línea pendiente para la próxima sesión que toque CLAUDE.md.
+
+---
+
+## Configuración pendiente
+
+Acciones manuales/externas conocidas, no automatizables desde una sesión de agente — requieren acceso a cuentas, hardware o consolas de terceros.
+
+- **TD-049 — Firebase, configuración manual (requiere Mac/Xcode):** los archivos de configuración de Firebase ya se obtuvieron; falta aplicarlos:
+  - Copiar `google-services.json` a `android/app/`.
+  - Copiar `GoogleService-Info.plist` a `ios/Runner/`.
+  - Aplicar el plugin `com.google.gms.google-services` en Gradle (hoy deliberadamente no aplicado — sin el json fallaría el build de Android).
+  - Habilitar la capability "Push Notifications" + "Background Modes" en Xcode, con una APNs key subida a Firebase.
+  - Configurar `FIREBASE_SERVICE_ACCOUNT` en Railway (JSON como variable de entorno, nunca un archivo commiteado).
+  - Ejecutar `flutterfire configure`.
+  - Test end-to-end en dispositivo físico (push no se puede validar en simulador/emulador).
+- **Self-leave endpoint (gap identificado en TD-018, ronda 2026-08-16):** hoy solo un admin puede remover a otro miembro vía `removeMember` (`DELETE /households/:id/members/:userId`). No existe ningún endpoint de autoservicio para que un miembro normal salga voluntariamente del hogar por su cuenta. Candidato razonable para un TD nuevo si el producto lo necesita — la lógica de desasignación de tareas de TD-018 (`unassignDepartedMemberTasks`) ya está lista para reutilizarse desde ese endpoint el día que se cree.
+
+---
+
+## Roadmap futuro
+
+Funcionalidad identificada pero fuera de alcance de las rondas que la mencionaron.
+
+- **Deep-link a tarea específica desde push notification (PDR-008):** hoy tocar una notificación que abrió la app desde background (`onMessageOpenedApp`) solo navega al shell principal (pestaña de tareas) — no existe todavía una ruta de deep-link por tarea, así que no abre la tarea exacta.
+- **Background/terminated message handling para push notifications (PDR-008):** hoy `NotificationService` solo maneja foreground (banner local vía `showLocalNotification`) y background→foreground vía tap (`onMessageOpenedApp`). Falta `onBackgroundMessage`/`getInitialMessage` para el caso de mensaje recibido con la app en background o terminada.
+- **Recordatorios de tareas próximas vía push (PDR-003):** PDR-003 lo menciona como "futuro" — requiere lógica de scheduling server-side (hoy los recordatorios de `flutter_local_notifications` son solo locales, calculados client-side a partir de `dueDate`/`startsAt`, sin contraparte de push server-driven).
