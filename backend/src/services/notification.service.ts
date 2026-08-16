@@ -1,6 +1,6 @@
 import { Types } from 'mongoose';
 import { initializeApp, getApps, cert, App } from 'firebase-admin/app';
-import { getMessaging } from 'firebase-admin/messaging';
+import { getMessaging, Messaging } from 'firebase-admin/messaging';
 
 import { DeviceTokenModel } from '../models/DeviceToken';
 import { logger } from '../utils/logger';
@@ -46,6 +46,22 @@ function getFirebaseApp(): App | null {
 /** Test-only: forces the next call to re-attempt initialization. */
 export function resetFirebaseAppForTests(): void {
   firebaseApp = undefined;
+}
+
+/**
+ * Test-only seam for the Messaging client `sendPushNotification` sends
+ * through. `jest.mock('firebase-admin/messaging', ...)` cannot reach this
+ * module's own binding: every test file implicitly loads `setup.ts` via
+ * Jest's `setupFilesAfterEnv`, which imports `app.ts` (and transitively this
+ * module) BEFORE the test file's own `jest.mock()` calls ever run — so the
+ * real SDK is already bound here by the time a test file's mock registers.
+ * Overriding the client directly sidesteps that ordering problem entirely.
+ */
+let messagingOverride: Messaging | null = null;
+
+/** Test-only: force sendPushNotification to use a fake Messaging client. Pass null to restore the real SDK. */
+export function setMessagingForTests(messaging: Messaging | null): void {
+  messagingOverride = messaging;
 }
 
 /**
@@ -115,7 +131,8 @@ export async function sendPushNotification(
   }
 
   try {
-    const response = await getMessaging(app).sendEachForMulticast({
+    const messaging = messagingOverride ?? getMessaging(app);
+    const response = await messaging.sendEachForMulticast({
       tokens: devices.map((device) => device.token),
       notification: { title, body },
       data,

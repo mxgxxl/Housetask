@@ -1,44 +1,72 @@
-// These jest.mock() calls MUST be the very first statements in this file —
-// ts-jest preserves source order (unlike babel-jest, it does NOT hoist
-// jest.mock() above imports), and `import './setup'` below transitively
-// requires notification.service.ts (via app.ts -> device.routes ->
-// device.controller). If any import ran first, that chain would capture a
-// binding to the REAL firebase-admin/app before these mocks ever registered
-// — confirmed the hard way: it produced a real "Failed to parse private
-// key." error from firebase-admin's own credential parser instead of using
-// the mock.
-jest.mock('firebase-admin/app', () => ({
-  initializeApp: jest.fn(() => ({ name: 'mock-app' })),
-  getApps: jest.fn(() => []),
-  cert: jest.fn((serviceAccount: unknown) => serviceAccount),
-}));
-
-jest.mock('firebase-admin/messaging', () => ({
-  getMessaging: jest.fn(),
-}));
-
 import { Types } from 'mongoose';
+import type { Messaging } from 'firebase-admin/messaging';
 
 import './setup';
 import { DeviceTokenModel } from '../models/DeviceToken';
 import { logger } from '../utils/logger';
-import { getApps, initializeApp } from 'firebase-admin/app';
-import { getMessaging } from 'firebase-admin/messaging';
 import {
   registerDeviceToken,
   removeDeviceToken,
   resetFirebaseAppForTests,
   sendPushNotification,
+  setMessagingForTests,
 } from '../services/notification.service';
+
+// A real (but throwaway, unregistered with any Firebase project) RSA key —
+// NOT a mock. `jest.mock('firebase-admin/app'/'firebase-admin/messaging',
+// ...)` cannot work in this suite: every test file implicitly loads
+// `setup.ts` via Jest's `setupFilesAfterEnv`, which imports `app.ts` (and
+// transitively notification.service.ts) BEFORE this file's own jest.mock()
+// calls ever run — the real SDK is already bound in notification.service.ts
+// by the time a mock would register (confirmed the hard way: it produced a
+// real "Failed to parse private key." error instead of using the mock).
+// A syntactically valid key lets the real (harmless, no-network)
+// cert()/initializeApp() succeed; setMessagingForTests (see
+// notification.service.ts) is the seam that avoids ever making a real FCM
+// network call for the send itself.
+const FAKE_PRIVATE_KEY =
+  '-----BEGIN PRIVATE KEY-----\n' +
+  'MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCl7L6QNNRQFO9D\n' +
+  'X/lUiFOaTlpGO87eWC0GzVxGEWNLBKKaVSIkKsN6y4ymveZDkMzxU0CSvXr/f4sy\n' +
+  'NG8SGYNk2bIVeOY1jTenX5nlxrINsJBv4nhVAKMhavSgEIjJYW2KSqGeKDlvXwkW\n' +
+  'Vqr/LpiiNaBG1kqQWpmZPtWXpJ/bNDTTvHVKlxvzyOv3EmufZHXTmRlVck1tnXw0\n' +
+  'swClxwgDlesyuipQtPQEevLx0Lut2Pe4W+Hd8OqqmbSdRL33L27uT7+3SAGoiEal\n' +
+  'PtASPgfEyihIGM+ss0DfvXA+2ctdyRLiY7+i/Npbwg6XzU2vc7KBM4CVtPfjcuQ5\n' +
+  'KG+EJhQlAgMBAAECggEACd5DdCysLuob09A+sjQccsozrMcsVcV9QhEPKpyooOLQ\n' +
+  '7+hdzDRd5Wz7O8SCECUpxzWKGuAZk14Iz47WR0eMrMAUyxmiaW9xbqstKkEPwGgu\n' +
+  'ovTfbsDHsvpbO7TYCdAZVXb8Vz1xswm+Lt2vNFeXXNhfJK9khmLZDUfzKJ5yInWH\n' +
+  'JXSgMo/9FFruYCO5JTg3NMcyzlMHdrRfZmYWPOVksR6RYG8q7eovnGxHFDojjWF/\n' +
+  'oaZKnomwbQUds988FSwmvcq7H4jG2HpNiFowkXJyRUPPjocajkQmm5o0Osdv808E\n' +
+  'ql+MZD6Y6NxCvcU6Zt6Xvz9xEdzfkjBSQBLBteQtSQKBgQDQZyhfy243yHcJ5hOL\n' +
+  'qBhLLjYSuJgO5C0Ct9TPPj6B2QB34tJysMQVqjMbwmOLNac6VNZmo+1JLJNSZB9M\n' +
+  'B1L+sBESRclqwy02QHL0bo163UztRJNjKcCXKCdIsj1dHxldi6+d3QWzNVk97qSO\n' +
+  'OfgSTWMWaxdEaYMzSID4xlz3CQKBgQDL0fw5aSUjZTtGPQ9GoDuanNJtnLcvh8JF\n' +
+  'UiUI/yDHSUFVGYUkZmo904PJ812BriE4grUhUsmnt9HTcCPa9rFXojn0Ruy5dYtF\n' +
+  'jPX2n9zm+BFZI11rgIVIckqNe+rrFZb/lFRJ+36W0sn6+O2gI9xc+V0pAmhoMBIt\n' +
+  'NiRZnpQ/PQKBgQCdJu0fL7xxfE2nvUPH8H5BUxubim+/6vi2MAHeNcXVDNp5jSW9\n' +
+  'Lubun2Xi7Pc7pr3wEsGKrNrmbyK44p9nKa7AN+znppB4Xa3eV0NYZ3VwzSiRU0EB\n' +
+  'ah683Z6iByaW7jimfgt0M5N0zCn7tdWJGtWil5C8+wyUniw9o9L9xjecYQKBgFuq\n' +
+  'Coc/VGaAxpGmMFKRCX1VfgWx72i+444NjX5oTzORLIK7QXfHX4yCrciLXMhPqb0i\n' +
+  'e5eLBgoZz5IJ4vY88DD7UpkbtKcLyCD1bkEGUHDHq/Wsw/zvBgI49HKBAnvLb+dt\n' +
+  'rCLBqoLmNdRbU3Mr7ZUayN0CqjYBOIuAyAROH1n5AoGAXz2SxynKEu97oIQMhZWR\n' +
+  'pd5a85WTHM1k6mVo6btCoeZOmKWPqO+E7Eu2i2Hvu9LHPHN3TKUMityxxlvRtSZ+\n' +
+  'VKfQ9NSCt2Z0O+WqikA2cObcj0I4VyklvfKY52MjUTijzmiIA2IZCcpLr5hueDIT\n' +
+  'RVdCdf8xx/i5g7qgZjOxrqg=\n' +
+  '-----END PRIVATE KEY-----\n';
 
 const FAKE_SERVICE_ACCOUNT = JSON.stringify({
   project_id: 'homesync-test',
   client_email: 'firebase-adminsdk@homesync-test.iam.gserviceaccount.com',
-  private_key: '-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n',
+  private_key: FAKE_PRIVATE_KEY,
 });
 
 function userId(): string {
   return new Types.ObjectId().toString();
+}
+
+/** A Messaging double: only sendEachForMulticast is ever called by the service. */
+function fakeMessaging(sendEachForMulticast: jest.Mock): Messaging {
+  return { sendEachForMulticast } as unknown as Messaging;
 }
 
 describe('notification.service (PDR-008)', () => {
@@ -46,10 +74,10 @@ describe('notification.service (PDR-008)', () => {
 
   beforeEach(() => {
     resetFirebaseAppForTests();
-    (getApps as jest.Mock).mockReturnValue([]);
   });
 
   afterEach(() => {
+    setMessagingForTests(null);
     if (originalEnv === undefined) delete process.env.FIREBASE_SERVICE_ACCOUNT;
     else process.env.FIREBASE_SERVICE_ACCOUNT = originalEnv;
   });
@@ -63,7 +91,6 @@ describe('notification.service (PDR-008)', () => {
 
       expect(result).toEqual({ sent: 0, failed: 0 });
       expect(info).toHaveBeenCalledWith('Push notifications disabled: no FIREBASE_SERVICE_ACCOUNT');
-      expect(getMessaging).not.toHaveBeenCalled();
       info.mockRestore();
     });
 
@@ -81,13 +108,15 @@ describe('notification.service (PDR-008)', () => {
       error.mockRestore();
     });
 
-    it('should return zero counts without touching Firebase when the user has no registered devices', async () => {
+    it('should return zero counts without ever calling Messaging when the user has no registered devices', async () => {
       process.env.FIREBASE_SERVICE_ACCOUNT = FAKE_SERVICE_ACCOUNT;
+      const sendEachForMulticast = jest.fn();
+      setMessagingForTests(fakeMessaging(sendEachForMulticast));
 
       const result = await sendPushNotification(userId(), 'Title', 'Body');
 
       expect(result).toEqual({ sent: 0, failed: 0 });
-      expect(getMessaging).not.toHaveBeenCalled();
+      expect(sendEachForMulticast).not.toHaveBeenCalled();
     });
 
     it('should send a multicast to every device token registered for the user and report counts', async () => {
@@ -101,7 +130,7 @@ describe('notification.service (PDR-008)', () => {
         failureCount: 0,
         responses: [{ success: true }, { success: true }],
       });
-      (getMessaging as jest.Mock).mockReturnValue({ sendEachForMulticast });
+      setMessagingForTests(fakeMessaging(sendEachForMulticast));
 
       const result = await sendPushNotification(
         uid,
@@ -114,7 +143,6 @@ describe('notification.service (PDR-008)', () => {
       );
 
       expect(result).toEqual({ sent: 2, failed: 0 });
-      expect(initializeApp).toHaveBeenCalledTimes(1);
       expect(sendEachForMulticast).toHaveBeenCalledWith({
         tokens: expect.arrayContaining(['token-a', 'token-b']),
         notification: { title: 'Nueva tarea asignada', body: 'Cristina te asignó: X' },
@@ -144,7 +172,7 @@ describe('notification.service (PDR-008)', () => {
           responses,
         });
       });
-      (getMessaging as jest.Mock).mockReturnValue({ sendEachForMulticast });
+      setMessagingForTests(fakeMessaging(sendEachForMulticast));
 
       const result = await sendPushNotification(uid, 'Title', 'Body');
 
@@ -160,7 +188,7 @@ describe('notification.service (PDR-008)', () => {
       const error = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
 
       const sendEachForMulticast = jest.fn().mockRejectedValue(new Error('FCM unavailable'));
-      (getMessaging as jest.Mock).mockReturnValue({ sendEachForMulticast });
+      setMessagingForTests(fakeMessaging(sendEachForMulticast));
 
       const result = await sendPushNotification(uid, 'Title', 'Body');
 
