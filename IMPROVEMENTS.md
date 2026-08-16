@@ -43,6 +43,12 @@ Living document capturing operational learnings from the Mac↔Mobile workflow e
 - **DSN de frontend NO va en variables de entorno** — entra por `--dart-define=SENTRY_DSN=...` en builds de release, para que builds de debug locales sigan no-op.
 - **Alerts recomendados para apps pequeñas:** solo email, sin GitHub issues automáticos (ruido en repo).
 
+### CI/CD: path-based skip (2026-08-16)
+
+- **Problema:** PR #15 (docs-only: IMPROVEMENTS.md + PR template) corrió el workflow completo (backend + frontend), gastando ~10 min de CI en verificar código que no cambió.
+- **Fix:** job `changes` (dorny/paths-filter@v3) al inicio de `.github/workflows/ci.yml`; los jobs `backend`/`frontend` ahora tienen `needs: changes` + `if: needs.changes.outputs.<job> == 'true'` y se saltan cuando sus paths no cambiaron. El propio `.github/workflows/ci.yml` está incluido en ambos filtros a propósito — un cambio al workflow siempre re-verifica ambas suites en vez de confiar ciegamente en el edit.
+- **Lección:** un PR que solo toca `.github/workflows/ci.yml` (como el que introdujo este fix) sigue corriendo el CI completo por ese mismo motivo — no es "instantáneo", es la validación intencional del propio cambio de CI.
+
 ### Hipótesis refutadas
 
 - **2026-08-16 (TD-047):** "Home no muestra tareas hasta refresh" → resultó no ser un bug de load inicial; era combinación de dos bugs previos (timeline stale + creación 400). Documentado como "Resolved — hypothesis refuted" en docs/TECH_DEBT.md.

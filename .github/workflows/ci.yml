@@ -17,8 +17,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Path-based skip: a docs-only PR (e.g. #15, IMPROVEMENTS.md + PR template)
+  # otherwise burns ~10 min running the full backend+frontend suites for
+  # nothing. Each job's own filter list also includes this workflow file
+  # itself, so an edit to ci.yml always re-runs both suites for verification
+  # instead of trusting the change unverified.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - '.github/workflows/ci.yml'
+            frontend:
+              - 'frontend/**'
+              - '.github/workflows/ci.yml'
+
   backend:
     name: Backend (typecheck, build, test)
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -50,6 +75,8 @@ jobs:
 
   frontend:
     name: Frontend (analyze, test, build apk)
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     defaults:
