@@ -60,5 +60,9 @@ dependencies {
 }
 
 // TD-049: applies the Firebase config read from google-services.json
-// (gitignored, placed manually in this directory per setup docs).
-apply plugin: 'com.google.gms.google-services'
+// (gitignored, placed manually in this directory per setup docs). Guarded
+// on the file's presence — CI never has it, and the plugin hard-fails the
+// build without it.
+if (file('google-services.json').exists()) {
+    apply plugin: 'com.google.gms.google-services'
+}
