@@ -260,7 +260,13 @@ describe('POST /api/auth/refresh', () => {
     expect(rotated.status).toBe(200);
     const freshToken = rotated.body.data.refreshToken as string;
 
-    // A thief replays the token that rotation already consumed.
+    // A thief replays the token that rotation already consumed. This is a
+    // SEQUENTIAL replay (awaited after `rotated` fully completed), so
+    // `freshToken`'s row was created before this replay request started —
+    // TD-050's createdAt filter still catches it. This is deliberately
+    // distinct from the concurrent-refresh case below, where the winner's
+    // new token is created AFTER the losing requests started and must
+    // survive.
     const replay = await request(app)
       .post('/api/auth/refresh')
       .send({ refreshToken: user.refreshToken });
@@ -274,6 +280,42 @@ describe('POST /api/auth/refresh', () => {
       .post('/api/auth/refresh')
       .send({ refreshToken: freshToken });
     expect(afterRevocation.status).toBe(401);
+  });
+
+  it('should NOT log the user out when the same token is submitted by concurrent refresh requests (TD-050)', async () => {
+    const user = await createTestUser(app);
+
+    // Simulates a mobile client that retries a refresh after a slow/timed-out
+    // response (the first attempt already succeeded server-side) or fires two
+    // in-flight requests off the back of separate 401s: several requests
+    // race with the SAME still-valid token. Exactly one wins the atomic
+    // rotation; the rest see a "missing row" and, pre-TD-050, would have
+    // nuked the winner's brand-new token too.
+    const results = await Promise.all([
+      request(app).post('/api/auth/refresh').send({ refreshToken: user.refreshToken }),
+      request(app).post('/api/auth/refresh').send({ refreshToken: user.refreshToken }),
+      request(app).post('/api/auth/refresh').send({ refreshToken: user.refreshToken }),
+    ]);
+
+    const winners = results.filter((r) => r.status === 200);
+    const losers = results.filter((r) => r.status === 401);
+    expect(winners.length).toBe(1);
+    expect(losers.length).toBe(results.length - 1);
+
+    // The winner's new refresh token must still be redeemable — no phantom
+    // logout from the losing requests' replay-revocation branch.
+    const winnerNewRefreshToken = winners[0].body.data.refreshToken as string;
+    const followUp = await request(app)
+      .post('/api/auth/refresh')
+      .send({ refreshToken: winnerNewRefreshToken });
+    expect(followUp.status).toBe(200);
+
+    // DB-level assertion of the createdAt filter itself: only the winner's
+    // token (created after every request in the race started) should be
+    // left for this user — the old tokens the losers targeted are gone, but
+    // nothing created during the race was swept up with them.
+    const remaining = await RefreshTokenModel.countDocuments({ userId: user.id });
+    expect(remaining).toBe(1);
   });
 
   it('should NOT revoke anything when the replayed token has an invalid signature', async () => {

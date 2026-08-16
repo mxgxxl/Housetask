@@ -115,11 +115,25 @@ export async function login(
 }
 
 /**
- * Revoke every refresh token belonging to a user, ending all their sessions.
- * Used when a replayed (already-rotated) token is detected.
+ * Revoke refresh tokens belonging to a user, ending their session(s). Used
+ * when a replayed (already-rotated) token is detected.
+ *
+ * `createdBefore`, when given, scopes the revocation to tokens that already
+ * existed when the triggering request started (TD-050, owner-approved
+ * Option A, 2026-08-17): it excludes the brand-new row a concurrent,
+ * legitimate rotation may have just created a few milliseconds earlier in
+ * the same race, so an ordinary concurrent refresh (client retry, two
+ * in-flight requests after a 401) no longer logs the user out. A genuine
+ * replay — the stolen token used well after the legitimate rotation — still
+ * predates the replaying request, so it is still caught. Omit it for
+ * tampering (signature/userId mismatch, see `refresh`), which is not a race
+ * and must still purge every token unconditionally.
  */
-async function revokeAllUserTokens(userId: string): Promise<void> {
-  await RefreshTokenModel.deleteMany({ userId: new Types.ObjectId(userId) });
+async function revokeAllUserTokens(userId: string, createdBefore?: Date): Promise<void> {
+  await RefreshTokenModel.deleteMany({
+    userId: new Types.ObjectId(userId),
+    ...(createdBefore ? { createdAt: { $lt: createdBefore } } : {}),
+  });
 }
 
 /**
@@ -127,11 +141,21 @@ async function revokeAllUserTokens(userId: string): Promise<void> {
  * exists, deletes it, and issues a new pair (rotation prevents reuse).
  *
  * Replay handling: a token with a valid signature but no DB row has already
- * been rotated, so the entire token family for that user is revoked. A token
- * whose signature does not verify is simply rejected — an attacker must never
- * be able to log a victim out by posting garbage with their user id.
+ * been rotated, so every token in that user's family that predates this
+ * request is revoked (TD-050 narrowed this from "entire family" to "family
+ * as of when this request started", so a concurrent legitimate rotation's
+ * brand-new token survives). A token whose signature does not verify is
+ * simply rejected — an attacker must never be able to log a victim out by
+ * posting garbage with their user id.
  */
 export async function refresh(refreshToken: string): Promise<TokenPair> {
+  // Captured before any async work (TD-050, 2026-08-17): the reference point
+  // for the concurrency-safe revocation filter below — see
+  // revokeAllUserTokens's doc comment for why this must be a "before this
+  // request began" timestamp rather than, say, the time the missing-row
+  // check runs.
+  const requestStartedAt = new Date();
+
   let payload: { userId: string; tokenId: string };
   try {
     payload = verifyRefreshToken(refreshToken);
@@ -162,12 +186,14 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
       userId: payload.userId,
       trigger: 'missing_row',
     });
-    await revokeAllUserTokens(payload.userId);
+    await revokeAllUserTokens(payload.userId, requestStartedAt);
     throw new AppError('Invalid or expired refresh token', 401);
   }
 
   // Signature says one user, the stored row says another: tampering, not a
-  // race. Same response, same revocation.
+  // race — the mismatch is inherent in the token, not a timing artifact, so
+  // this branch keeps the unconditional full-family revocation. Same
+  // response, same revocation.
   if (stored.userId.toString() !== payload.userId) {
     logger.warn('refresh-token replay detected', {
       userId: payload.userId,
