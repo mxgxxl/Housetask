@@ -4,6 +4,7 @@ import 'package:homesync/config/pet_config.dart';
 import 'package:homesync/core/errors/failures.dart';
 import 'package:homesync/data/models/economy.dart';
 import 'package:homesync/data/models/household.dart';
+import 'package:homesync/data/models/household_stats.dart';
 import 'package:homesync/data/models/member.dart';
 import 'package:homesync/data/models/paginated_response.dart';
 import 'package:homesync/data/models/pet.dart';
@@ -358,6 +359,16 @@ class FakeShoppingRepository implements ShoppingRepository {
 /// construct but the test only cares about state it sets directly via
 /// emit() — none of these methods are expected to be called.
 class FakeHouseholdRepository implements HouseholdRepository {
+  /// Stats keyed by period, configured by the test. [stats] throws
+  /// [Failure] when the requested period has no entry.
+  final Map<StatsPeriod, HouseholdStats> statsByPeriod;
+
+  /// Every period requested via [stats], in call order — lets a test assert
+  /// the period toggle actually refetches.
+  final List<StatsPeriod> statsCalls = [];
+
+  FakeHouseholdRepository({this.statsByPeriod = const {}});
+
   @override
   Future<Household> create(String name) async => throw UnimplementedError();
 
@@ -373,6 +384,16 @@ class FakeHouseholdRepository implements HouseholdRepository {
   @override
   Future<Household> removeMember(String householdId, String userId) async =>
       throw UnimplementedError();
+
+  @override
+  Future<HouseholdStats> stats(String householdId, StatsPeriod period) async {
+    statsCalls.add(period);
+    final result = statsByPeriod[period];
+    if (result == null) {
+      throw const ServerFailure('No stats configured for this period');
+    }
+    return result;
+  }
 
   @override
   Future<String?> currentHouseholdId() async => null;
