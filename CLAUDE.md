@@ -759,3 +759,9 @@ Las decisiones de producto (monetización, gamificación, UX de alto nivel) vive
 | `frontend/lib/presentation/pages/calendar_page.dart` | Mes/Semana selector; week view reuses spanning bars logic from month view |
 | `frontend/lib/presentation/pages/recurring_tasks_page.dart` | Recurrentes tab (TD-035): one row per recurring series (`TaskCubit.recurringTasks`), reusing `TaskTile` + `TaskFormPage` navigation |
 | `frontend/lib/presentation/pages/stats_page.dart` | Household stats view (PDR-007), reached from Profile's AppBar (bar_chart icon); period toggle (30 días/Todo) via `StatsCubit` |
+
+## Agentes externos y flujo de fallback
+
+- `AGENTS.md` es el punto de entrada para agentes de coding externos.
+- `docs/AGENT_FALLBACK.md` define el flujo de Codex como agente secundario.
+- Ambos deben leerse junto con este archivo antes de trabajar en el repo.
