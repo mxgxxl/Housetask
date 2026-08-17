@@ -1,3 +1,27 @@
+# NEXT_SESSION_MAC
+
+## Decisión activa
+
+- Claude Code sigue siendo herramienta principal.
+- OpenAI Codex será agente secundario para rotar cuando Claude alcance límites.
+
+## Próxima sesión
+
+1. Confirmar activación/instalación de Codex (pendiente: validar plan free vs premium).
+2. Crear AGENTS.md.
+3. Crear docs/AGENT_FALLBACK.md.
+4. Registrar decisión en docs/PRODUCT_DECISIONS.md.
+5. Probar Codex con una tarea pequeña, preferiblemente documentación o bug acotado.
+6. Evaluar resultado antes de asignar tareas de código más sensibles.
+
+## Reglas durante piloto Codex
+
+- Codex trabaja por rama/PR.
+- No push directo a main.
+- No tocar TDs abiertos.
+- CI verde obligatorio.
+- Commits atómicos.
+
 # Próxima sesión de Mac
 
 Generado durante el backlog grooming del 2026-08-16 (sesión móvil, `chore/backlog-grooming`). Ver `docs/TECH_DEBT.md` para el registro completo con la columna Priority nueva.

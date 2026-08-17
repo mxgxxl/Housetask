@@ -91,3 +91,28 @@ Los PDRs registran decisiones de producto con Context / Decision / Consequences,
   - Recordatorios de tareas próximas (PDR-003 lo menciona como "futuro") NO están en este round — solo asignación y completado.
   - Sin navegación a la tarea específica al tocar el push: no existe todavía una ruta de deep-link por tarea, así que `onMessageOpenedApp` navega al shell principal (pestaña de tareas) en vez de abrir la tarea exacta.
   - Sin manejo de mensajes en background/terminated (`onBackgroundMessage`/`getInitialMessage`) — solo foreground (banner local) y background→foreground vía tap. Candidato de un round futuro si se detecta necesidad real.
+
+## 2026-08-17 — Codex como agente secundario para límites de Claude Code
+
+### Decisión
+
+Mantener Claude Code como herramienta principal de desarrollo en HomeSync y contratar OpenAI Codex como agente secundario para rotar cuando Claude alcance límites de sesión o semanales.
+
+### Razón
+
+Claude Pro puede alcanzar límites de uso y bloquear la ejecución. Añadir Codex como segundo carril permite mantener continuidad operativa sin renunciar a Claude como herramienta principal para tareas complejas.
+
+### Modelo operativo
+
+- Claude Code sigue siendo la herramienta principal para arquitectura, debugging complejo, refactors delicados y decisiones sensibles.
+- Codex se usará como fallback para tareas acotadas, mecánicas, tests, documentación, bugs pequeños y PRs validables por CI.
+- Las tareas complejas que no puedan dividirse con seguridad se dejarán en cola para Claude si Codex no ofrece garantías suficientes.
+
+### Reglas
+
+- Codex no modificará TDs abiertos sin instrucción explícita.
+- Commits atómicos.
+- Durante el pilotaje, Codex trabajará por rama y PR.
+- CI verde antes de merge.
+- El dueño aprueba decisiones, push y merge.
+- Al finalizar cada tarea se sincronizan los archivos de contexto.
