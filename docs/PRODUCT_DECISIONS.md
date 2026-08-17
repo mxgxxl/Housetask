@@ -116,3 +116,13 @@ Claude Pro puede alcanzar límites de uso y bloquear la ejecución. Añadir Code
 - CI verde antes de merge.
 - El dueño aprueba decisiones, push y merge.
 - Al finalizar cada tarea se sincronizan los archivos de contexto.
+
+## 2026-08-17 — Cierre del piloto Codex y flujo definitivo
+
+### Decisión
+
+Cerrar el piloto de Codex con resultado positivo y definir el flujo definitivo: en Mac, Codex CLI trabaja igual que Claude Code (commits directos a main, push aprobado por el dueño); en móvil/cloud, Codex app/web trabaja por rama + PR + CI + aprobación del dueño.
+
+### Razón
+
+El piloto (#32, #34) demostró respeto de scope, commits atómicos y buenas decisiones autónomas. El flujo directo en Mac elimina la fricción de worktrees y PRs locales; el flujo PR se mantiene donde no hay toolchain (móvil/cloud).

@@ -45,13 +45,21 @@ Permitir continuidad operativa cuando Claude Code alcanza límites de sesión o 
 
 ## Flujo de trabajo
 
+### Mac — Codex CLI
+
+1. Trabajar directamente sobre main.
+2. Aplicar el cambio mínimo y hacer commits atómicos.
+3. El dueño aprueba el push.
+4. Sincronizar los archivos de contexto.
+
+### Móvil/cloud — Codex app/web
+
 1. Crear rama desde main.
-2. Aplicar cambio mínimo.
-3. Hacer commits atómicos.
-4. Abrir PR.
-5. CI debe pasar.
-6. El dueño aprueba el merge.
-7. Sincronizar archivos de contexto.
+2. Aplicar el cambio mínimo y hacer commits atómicos.
+3. Abrir PR.
+4. CI debe pasar.
+5. El dueño aprueba el merge.
+6. Sincronizar los archivos de contexto.
 
 ## Archivos de contexto
 
@@ -69,5 +77,5 @@ Permitir continuidad operativa cuando Claude Code alcanza límites de sesión o 
 - Mantener estilo existente.
 - Si se cambia comportamiento de producto, documentarlo.
 - Si se añaden tests, deben ser relevantes y estables.
-- No hacer push directo a main durante el pilotaje de Codex.
-- CI verde obligatorio antes de merge.
+- El push siempre requiere aprobación del dueño.
+- CI verde obligatorio antes de merge en el flujo móvil/cloud.
