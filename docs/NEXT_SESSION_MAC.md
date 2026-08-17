@@ -7,12 +7,17 @@
 
 ## Próxima sesión
 
-1. Confirmar activación/instalación de Codex (pendiente: validar plan free vs premium).
-2. Crear AGENTS.md.
-3. Crear docs/AGENT_FALLBACK.md.
-4. Registrar decisión en docs/PRODUCT_DECISIONS.md.
-5. Probar Codex con una tarea pequeña, preferiblemente documentación o bug acotado.
-6. Evaluar resultado antes de asignar tareas de código más sensibles.
+1. ✅ Confirmar activación/instalación de Codex (pendiente: validar plan free vs premium).
+2. ✅ Crear AGENTS.md.
+3. ✅ Crear docs/AGENT_FALLBACK.md.
+4. ✅ Registrar decisión en docs/PRODUCT_DECISIONS.md.
+5. ✅ Probar Codex con una tarea pequeña, preferiblemente documentación o bug acotado.
+6. ✅ Evaluar resultado antes de asignar tareas de código más sensibles.
+   Resultado piloto: Codex respetó scope, commits atómicos, preservó legacy, propuso mejora de proceso. Aprobado para tareas acotadas.
+
+## Siguiente tarea
+
+Integración de AGENTS.legacy.md con AGENTS.md (esta tarea).
 
 ## Reglas durante piloto Codex
 
@@ -22,7 +27,9 @@
 - CI verde obligatorio.
 - Commits atómicos.
 
-# Próxima sesión de Mac
+---
+
+## Contexto de la sesión de Mac
 
 Generado durante el backlog grooming del 2026-08-16 (sesión móvil, `chore/backlog-grooming`). Ver `docs/TECH_DEBT.md` para el registro completo con la columna Priority nueva.
 
