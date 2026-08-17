@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io' show FileSystemException;
 
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,6 +8,7 @@ import 'package:homesync/data/datasources/remote/api_service.dart';
 import 'package:homesync/data/models/pending_operation.dart';
 import 'package:homesync/data/models/task.dart';
 import 'package:homesync/data/repositories/task_repository.dart';
+import 'package:homesync/presentation/cubit/task_cubit.dart';
 import 'package:homesync/services/cache_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -96,6 +98,8 @@ void main() {
   group('best-effort policy', bestEffortTests);
 
   group('propagation policy', propagationTests);
+
+  group('cubit feedback', cubitFeedbackTests);
 
   group('writes stay visible synchronously (the TD-059 keystore trap)', () {
     // Hive applies a put to its in-memory keystore synchronously and returns
@@ -281,5 +285,24 @@ void propagationTests() {
     expect(restored.isDeleted, isFalse,
         reason: 'the delete mark must be undone, not left applied');
     expect(restored.isSynced, isTrue);
+  });
+}
+
+/// The cubit must turn a local-persistence failure into a distinct, visible
+/// message — not swallow it, and not word it like an offline success.
+void cubitFeedbackTests() {
+  test('createTask surfaces the local-write message, not the offline notice',
+      () async {
+    final repo = FakeTaskRepository()
+      ..throwOnCreate = const FileSystemException('no space left on device');
+    final cubit = TaskCubit(repo, FakeNotificationService());
+    await cubit.load('h1');
+
+    final task = await cubit.createTask({'title': 'Tarea'});
+
+    expect(task, isNull);
+    expect(cubit.state.error, kLocalWriteErrorMessage);
+    expect(cubit.state.error, isNot(kOfflineNoticeMessage),
+        reason: 'a lost write must never read as a queued one');
   });
 }

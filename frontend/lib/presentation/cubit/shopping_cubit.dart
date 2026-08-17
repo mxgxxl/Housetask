@@ -12,6 +12,10 @@ enum ShoppingStatusUi { initial, loading, loaded, error }
 /// Shown once (via BlocListener) after a mutation the repository could only
 /// perform optimistically, offline (TD-003). Mirrors kOfflineNoticeMessage in
 /// task_cubit.dart — kept separate so the two cubits stay independent.
+/// See kLocalWriteErrorMessage in task_cubit.dart — same policy, same text.
+const kShoppingLocalWriteErrorMessage =
+    'No se pudo guardar en este dispositivo. Puede que no quede espacio.';
+
 const kShoppingOfflineNoticeMessage =
     'Guardado offline, se sincronizará cuando haya conexión';
 
@@ -225,6 +229,11 @@ class ShoppingCubit extends Cubit<ShoppingState> {
       _upsert(item, offlineNotice: item.isSynced ? null : kShoppingOfflineNoticeMessage);
     } on Failure catch (f) {
       emit(state.copyWith(error: f.message));
+    } catch (_) {
+      // Not a Failure: the repository could not persist the write
+      // locally (TD-059). Caught here or it would escape the cubit
+      // entirely and leave the UI with no feedback at all.
+      emit(state.copyWith(error: kShoppingLocalWriteErrorMessage));
     }
   }
 
@@ -235,6 +244,11 @@ class ShoppingCubit extends Cubit<ShoppingState> {
       _upsert(item, offlineNotice: item.isSynced ? null : kShoppingOfflineNoticeMessage);
     } on Failure catch (f) {
       emit(state.copyWith(error: f.message));
+    } catch (_) {
+      // Not a Failure: the repository could not persist the write
+      // locally (TD-059). Caught here or it would escape the cubit
+      // entirely and leave the UI with no feedback at all.
+      emit(state.copyWith(error: kShoppingLocalWriteErrorMessage));
     }
   }
 
@@ -248,6 +262,11 @@ class ShoppingCubit extends Cubit<ShoppingState> {
           offlineNotice: updated.isSynced ? null : kShoppingOfflineNoticeMessage);
     } on Failure catch (f) {
       emit(state.copyWith(error: f.message));
+    } catch (_) {
+      // Not a Failure: the repository could not persist the write
+      // locally (TD-059). Caught here or it would escape the cubit
+      // entirely and leave the UI with no feedback at all.
+      emit(state.copyWith(error: kShoppingLocalWriteErrorMessage));
     }
   }
 
@@ -265,6 +284,11 @@ class ShoppingCubit extends Cubit<ShoppingState> {
       }
     } on Failure catch (f) {
       emit(state.copyWith(error: f.message));
+    } catch (_) {
+      // Not a Failure: the repository could not persist the write
+      // locally (TD-059). Caught here or it would escape the cubit
+      // entirely and leave the UI with no feedback at all.
+      emit(state.copyWith(error: kShoppingLocalWriteErrorMessage));
     }
   }
 

@@ -84,6 +84,10 @@ class FakeTaskRepository implements TaskRepository {
   final Failure? failListWith;
   final Failure? failCreateWith;
 
+  /// Non-[Failure] error thrown by [create] — used to exercise the TD-059
+  /// local-persistence branch, which is deliberately not a Failure.
+  Object? throwOnCreate;
+
   /// Cursors received by [list], in order — lets a test assert paging.
   final List<String?> receivedCursors = [];
 
@@ -196,6 +200,7 @@ class FakeTaskRepository implements TaskRepository {
   @override
   Future<Task> create(String householdId, Map<String, dynamic> payload) async {
     receivedCreatePayloads.add(payload);
+    if (throwOnCreate != null) throw throwOnCreate!;
     if (failCreateWith != null) throw failCreateWith!;
     return buildTask(
       'created',

@@ -14,6 +14,17 @@ import '../../services/sentry_service.dart';
 const kOfflineNoticeMessage =
     'Guardado offline, se sincronizará cuando haya conexión';
 
+/// Shown when a write could not be persisted to this device at all (TD-059).
+///
+/// Deliberately distinct from [kOfflineNoticeMessage]: "offline" means the
+/// change is safely queued and will sync later, which is reassuring and
+/// correct. This one means the opposite — the change did NOT survive — so
+/// wording it like a network problem would repeat exactly the false promise
+/// TD-059 exists to remove. Nothing here is retryable by us: a full disk is
+/// the user's to fix.
+const kLocalWriteErrorMessage =
+    'No se pudo guardar en este dispositivo. Puede que no quede espacio.';
+
 enum TaskStatusUi { initial, loading, loaded, error }
 
 /// Which slice of the household's tasks a tab is showing.
@@ -723,6 +734,12 @@ class TaskCubit extends Cubit<TaskState> {
     } on Failure catch (f) {
       emit(state.copyWith(error: f.message));
       return null;
+    } catch (_) {
+      // Not a Failure: the repository could not persist the write
+      // locally (TD-059). Caught here or it would escape the cubit
+      // entirely and leave the UI with no feedback at all.
+      emit(state.copyWith(error: kLocalWriteErrorMessage));
+      return null;
     }
   }
 
@@ -735,6 +752,11 @@ class TaskCubit extends Cubit<TaskState> {
       await _notifications.scheduleTaskStartReminder(task);
     } on Failure catch (f) {
       emit(state.copyWith(error: f.message));
+    } catch (_) {
+      // Not a Failure: the repository could not persist the write
+      // locally (TD-059). Caught here or it would escape the cubit
+      // entirely and leave the UI with no feedback at all.
+      emit(state.copyWith(error: kLocalWriteErrorMessage));
     }
   }
 
@@ -752,6 +774,11 @@ class TaskCubit extends Cubit<TaskState> {
       await _notifications.cancelTaskStartReminder(taskId);
     } on Failure catch (f) {
       emit(state.copyWith(error: f.message));
+    } catch (_) {
+      // Not a Failure: the repository could not persist the write
+      // locally (TD-059). Caught here or it would escape the cubit
+      // entirely and leave the UI with no feedback at all.
+      emit(state.copyWith(error: kLocalWriteErrorMessage));
     }
   }
 
@@ -772,6 +799,11 @@ class TaskCubit extends Cubit<TaskState> {
       await _notifications.cancelTaskStartReminder(taskId);
     } on Failure catch (f) {
       emit(state.copyWith(error: f.message));
+    } catch (_) {
+      // Not a Failure: the repository could not persist the write
+      // locally (TD-059). Caught here or it would escape the cubit
+      // entirely and leave the UI with no feedback at all.
+      emit(state.copyWith(error: kLocalWriteErrorMessage));
     }
   }
 
