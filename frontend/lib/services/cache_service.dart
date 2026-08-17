@@ -104,19 +104,26 @@ class CacheService {
   /// by definition cannot include it — must never be treated as authority to
   /// delete it from the cache. It is superseded normally once its own
   /// pending operation syncs and a later list refresh includes it for real.
-  void saveTasks(String householdId, List<Task> tasks) {
+  // NOT an `async` body, deliberately. Hive applies a put/delete to its
+  // in-memory keystore synchronously and returns a Future only for the disk
+  // flush, so today's callers — which do not await — still observe the write
+  // immediately. An `async` body would suspend at the first `await` and defer
+  // every write past the caller's next synchronous read, which silently broke
+  // 6 tests when this was first written that way. Issuing the operations
+  // synchronously and returning their combined Future keeps the visible
+  // behaviour byte-identical while making durability awaitable.
+  Future<void> saveTasks(String householdId, List<Task> tasks) {
     final staleKeys = _tasks.keys.where((k) {
       final cached = _tasks.get(k);
       return cached != null &&
           cached.householdId == householdId &&
           cached.isSynced;
     }).toList();
-    for (final key in staleKeys) {
-      _tasks.delete(key);
-    }
-    for (final task in tasks) {
-      _tasks.put(task.id, task);
-    }
+    final writes = <Future<void>>[
+      for (final key in staleKeys) _tasks.delete(key),
+      for (final task in tasks) _tasks.put(task.id, task),
+    ];
+    return Future.wait(writes);
   }
 
   List<Task> getTasks(String householdId) =>
@@ -132,52 +139,51 @@ class CacheService {
   /// from the offline cache. Each incoming task overwrites its own id; every
   /// other cached task — including ones in a different status, or on a page
   /// of this same filter not yet fetched — is left exactly as it was.
-  void mergeTasks(List<Task> tasks) {
-    for (final task in tasks) {
-      _tasks.put(task.id, task);
-    }
-  }
+  Future<void> mergeTasks(List<Task> tasks) => Future.wait(
+      [for (final task in tasks) _tasks.put(task.id, task)]);
 
   /// Cache (or update) a single task, e.g. after an optimistic offline write.
-  void saveTask(Task task) => _tasks.put(task.id, task);
+  Future<void> saveTask(Task task) => _tasks.put(task.id, task);
 
-  void deleteTaskFromCache(String id) => _tasks.delete(id);
+  Future<void> deleteTaskFromCache(String id) => _tasks.delete(id);
 
   // ---- Shopping ----
 
   /// Same unsynced-preserving rule as [saveTasks].
-  void saveShopping(String householdId, List<ShoppingItem> items) {
+  /// Same synchronous-issue / awaitable-flush shape as [saveTasks] — see the
+  /// comment there for why this must not become an `async` body.
+  Future<void> saveShopping(String householdId, List<ShoppingItem> items) {
     final staleKeys = _shopping.keys.where((k) {
       final cached = _shopping.get(k);
       return cached != null &&
           cached.householdId == householdId &&
           cached.isSynced;
     }).toList();
-    for (final key in staleKeys) {
-      _shopping.delete(key);
-    }
-    for (final item in items) {
-      _shopping.put(item.id, item);
-    }
+    final writes = <Future<void>>[
+      for (final key in staleKeys) _shopping.delete(key),
+      for (final item in items) _shopping.put(item.id, item),
+    ];
+    return Future.wait(writes);
   }
 
   List<ShoppingItem> getShopping(String householdId) =>
       _shopping.values.where((i) => i.householdId == householdId).toList();
 
-  void saveShoppingItem(ShoppingItem item) => _shopping.put(item.id, item);
+  Future<void> saveShoppingItem(ShoppingItem item) =>
+      _shopping.put(item.id, item);
 
-  void deleteShoppingItemFromCache(String id) => _shopping.delete(id);
+  Future<void> deleteShoppingItemFromCache(String id) => _shopping.delete(id);
 
   // ---- Households ----
 
-  void saveHousehold(Household household) =>
+  Future<void> saveHousehold(Household household) =>
       _households.put(household.id, household);
 
   List<Household> getHouseholds() => _households.values.toList();
 
   // ---- Pending operations queue ----
 
-  void addPendingOperation(PendingOperation operation) =>
+  Future<void> addPendingOperation(PendingOperation operation) =>
       _pendingOperations.put(operation.id, operation);
 
   /// Queued operations in the order they were made — replay must be FIFO so
@@ -189,9 +195,10 @@ class CacheService {
     return ops;
   }
 
-  void removePendingOperation(String id) => _pendingOperations.delete(id);
+  Future<void> removePendingOperation(String id) =>
+      _pendingOperations.delete(id);
 
-  void updatePendingOperation(PendingOperation operation) =>
+  Future<void> updatePendingOperation(PendingOperation operation) =>
       _pendingOperations.put(operation.id, operation);
 
   /// Synchronous snapshot of the queue size. Kept for callers that only need
