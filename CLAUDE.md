@@ -447,7 +447,6 @@ The full registry (~47 entries, all history) lives in [Full Technical Debt Regis
 | TD-040 | flutter test hangs on loaded hosts (offline_banner_test.dart) | Low | Mitigated in CI; root cause still open |
 | TD-049 | No real Firebase project connected for push notifications (PDR-008) — code is in place, no push actually delivers until a Firebase project + `flutterfire configure` + APNs key are set up manually | High | Planned (before beta push notifications can work) |
 | TD-054 | Access token stays valid up to 15 min after logout (stateless-JWT tradeoff, documented not fixed) | Low | Planned |
-| TD-056 | `TaskState.timelineCursor` is nulled by nearly every `emit`, so the PDR-003 timeline can never page within its window | High | Open (frontend scan round 2) |
 | TD-057 | Offline sync loses an update/delete whose create synced in an earlier batch (`idRemap` is per-call, not persisted) | High | Open (frontend scan round 2) |
 
 ---

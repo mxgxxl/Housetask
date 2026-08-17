@@ -6,6 +6,7 @@
 
 | Fecha | PR/Commit | Descripción | Impacto |
 |-------|-----------|-------------|---------|
+| 2026-08-17 | fix/td-056-taskstate-copywith | TD-056 resuelto, cierra también F7: `TaskState.copyWith` reemplaza la asignación incondicional de campos nullable por el sentinel `clearX` (`error`, `timelineCursor`, `timelineError`, `recurringError`, `trashError`) — solo `offlineNotice` sigue incondicional, por diseño. `clearOfflineNotice()` pasa a ser `emit(state.copyWith())`. Test de timeline reforzado (F11) + 4 tests nuevos. 228 tests frontend en verde (validado localmente) | Calidad — el hallazgo High más sutil de la ronda 2: la timeline "Todas" ya puede paginar de verdad dentro de su ventana |
 | 2026-08-17 | fix/td-055-058-session-lifecycle | TD-055 + TD-058 resueltos: nuevo widget `SessionListeners` (app.dart) reacciona a toda transición `unauthenticated` — desconecta el socket, resetea los 5 cubits de dominio, navega a login — sin importar qué página esté en pantalla. `reset()` añadido a Task/Shopping/Pet/Stats cubits. 224 tests frontend en verde (validado localmente con Flutter 3.44.9, no solo en CI) | UX + privacidad — cierra los dos High de mayor visibilidad de la ronda 2 (sesión muerta sin ruta de vuelta; datos de la cuenta anterior visibles tras logout) |
 | 2026-08-17 | scan/frontend-state-management | Ronda 2 de escaneo: auditoría de state management (7 Cubits, repositories, caché offline, socket). 14 hallazgos; 4 High registrados como TD-055..TD-058, 10 Medium/Low documentados en IMPROVEMENTS.md. Sin cambios de código de producción | Calidad — descubre 2 bugs funcionales silenciosos (timeline sin paginar, escritura offline perdida) y 2 de ciclo de vida de sesión |
 | 2026-08-17 | PR #28 (fix/td-051-053-explicit-security-configs, mergeado) | TD-051/TD-052/TD-053 resueltos: JWT algorithm explícito (sign+verify), assert `JWT_SECRET !== JWT_REFRESH_SECRET` en producción, comparación bcrypt dummy en login para eliminar el side-channel de timing | Seguridad — cierra los tres Medium restantes del scan de auth, ya no dependen de defaults de dependencias |
@@ -21,9 +22,9 @@
 - **Bloqueante:** requiere iPhone real (no reproducible en simulador para el diálogo de permisos nativo).
 - **Siguiente paso:** el dueño prueba la app; si confirma que la pantalla en blanco no reaparece, se abre un PR de limpieza que quita los `debugPrint('[bootstrap] ...')` marcados `TODO(tech-debt)` en `main.dart`.
 
-### Fix TD-055 + TD-058 — validación en CI
-- **Estado:** código + tests implementados y pusheados a `fix/td-055-058-session-lifecycle`. Validado localmente end-to-end (no solo typecheck): se instaló Flutter 3.44.9 en esta sesión, `flutter analyze` limpio y los 224 tests frontend (excepto `offline_banner_test.dart`, igual que CI) en verde.
-- **Bloqueante:** ninguno — a diferencia de las rondas de backend, esta sí se pudo validar completa localmente. Falta solo que CI lo confirme independientemente antes de mergear.
+### Fix TD-056 — validación en CI
+- **Estado:** código + tests implementados y pusheados a `fix/td-056-taskstate-copywith`. Validado localmente end-to-end: `flutter analyze` limpio, los 228 tests frontend (excepto `offline_banner_test.dart`, igual que CI) en verde.
+- **Bloqueante:** ninguno. Falta solo que CI lo confirme independientemente antes de mergear.
 - **Siguiente paso:** revisar el resultado de GitHub Actions en el PR y, si CI está verde, el dueño decide si mergea.
 
 ## Próximas Prioridades (ordenado)
@@ -31,9 +32,9 @@
 | # | ID | Descripción | Esfuerzo | Bloqueante |
 |---|----|-------------|----------|------------|
 | 1 | Validación PR #24 | Probar fix white screen en iPhone físico + limpiar debugPrints de diagnóstico | Bajo | Dispositivo físico |
-| 2 | TD-055 + TD-058 (CI) | Confirmar CI verde en `fix/td-055-058-session-lifecycle` y mergear | Bajo | Ninguno — solo esperar el run de GitHub Actions |
-| 3 | TD-056 | Sentinel `clearTimelineCursor` en `TaskState.copyWith` — arregla también F7 (errores de vista borrados) | Bajo | Ninguno — Flutter ya validado localmente en esta sesión |
-| 4 | TD-057 | Persistir el remap de ids en la cola offline (pérdida silenciosa de escrituras) | Medio | Ninguno |
+| 2 | TD-056 (CI) | Confirmar CI verde en `fix/td-056-taskstate-copywith` y mergear | Bajo | Ninguno — solo esperar el run de GitHub Actions |
+| 3 | TD-057 | Persistir el remap de ids en la cola offline (pérdida silenciosa de escrituras) | Medio | Ninguno |
+| 4 | ShoppingCubit copyWith (IMPROVEMENTS) | Mismo bug que TD-056/F7 confirmado en vivo en `ShoppingCubit.clearOfflineNotice`/`nextCursor` — mismo fix ya probado en esta ronda | Bajo | Ninguno |
 | 5 | F10 (IMPROVEMENTS) | Tests para SocketCubit / HouseholdCubit / StatsCubit (hoy sin cobertura) | Medio | Ninguno |
 | 6 | TD-040 | Investigar cuelgue de `offline_banner_test.dart` en hosts cargados | Medio | Mac + CPU idle |
 | 7 | TD-054 | Ventana de token de acceso post-logout (bajo impacto, solo si el modelo de amenaza lo requiere) | Bajo | Ninguno — es el único TD del scan de auth backend que sigue abierto |
