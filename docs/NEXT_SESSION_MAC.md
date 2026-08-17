@@ -32,12 +32,21 @@
 
 ## Siguiente tarea
 
-Sin pendientes de proceso: el check de CI documental quedó implementado el
-2026-08-17 (job `docs` + `scripts/check_docs.sh`, ver `IMPROVEMENTS.md`).
+El check de CI documental quedó implementado el 2026-08-17 (job `docs` +
+`scripts/check_docs.sh`, PR #35 fusionado — ver `IMPROVEMENTS.md`), así que no
+queda ningún pendiente de proceso bloqueante.
 
-Los siguientes candidatos son trabajo real de código, el Top 3 de Mac que ya
-está detallado más abajo:
+1. **Decidir siguiente tarea del backlog:**
+   - ~~Quick-win TD-016 (CORS fail-fast) desde móvil~~ — **descartado: TD-016
+     ya está Resolved**, implementado en el PR #22 y verificado el 2026-08-16
+     (`utils/env.ts`, `validateProductionEnv`; ver `docs/TECH_DEBT.md` y la
+     Hard Rule 15). Figuraba como quick-win en el grooming del 2026-08-16 y
+     quedó obsoleto ese mismo día.
+   - Top-3 de Mac: TD-040 (cuelgue `offline_banner_test`), TD-001 (migración
+     `members`), TD-007 (optimistic updates). Ver "Pendientes arrastrados"
+     arriba.
 
-1. **TD-040** — investigar el cuelgue de `offline_banner_test.dart`.
-2. **TD-001** — migrar `members` embebido a una colección separada.
-3. **TD-007** — optimistic updates en frontend.
+### Pendientes menores
+
+- Extender el check de enlaces de docs a `CLAUDE.md` (enlaza `docs/ADRs.md`,
+  entre otros). Hoy `scripts/check_docs.sh` solo valida los de `AGENTS.md`.

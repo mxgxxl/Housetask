@@ -279,7 +279,7 @@ Propuesto por: Codex en PR #32.
 
 Motivo: evitar referencias rotas en el contexto de agentes.
 
-Estado: **Implementado (2026-08-17)**. Job `docs` en `.github/workflows/ci.yml` ejecutando `scripts/check_docs.sh` (bash puro, sin dependencias), en todo PR y en push a `main`.
+Estado: **Implementado (2026-08-17, PR #35)**. Job `docs` en `.github/workflows/ci.yml` ejecutando `scripts/check_docs.sh` (bash puro, sin dependencias), en todo PR y en push a `main`.
 
 Alcance final, los tres checks:
 
@@ -294,3 +294,11 @@ Decisión de diseño: marcadores HTML en vez de un diff por encabezados. Un diff
 El job va fuera del filtro de rutas `changes` a propósito: la deriva que detecta la producen precisamente los cambios solo-docs, que es lo que ese filtro se salta. El coste es de segundos, así que no contradice TD-008.
 
 Pendiente menor: el check 1 solo mira `AGENTS.md`. Extenderlo a los enlaces de `CLAUDE.md` (que apunta a `docs/ADRs.md`, entre otros) es una línea más de script, pero quedó fuera del alcance pedido.
+
+---
+
+## 2026-08-17 — Actualizar actions/checkout@v4 a Node 24
+
+GitHub avisa en logs de CI que `actions/checkout@v4` corre sobre Node 20, pero ya han pasado a Node 24 por defecto. Afecta a los 5 jobs del workflow, hoy no rompe nada. Requiere actualizar las acciones y verificar que todo sigue funcionando. Prioridad baja.
+
+Detectado en el run de CI del PR #35 (mensaje literal: "Node 20 is being deprecated. This workflow is running with Node 24 by default"). Afecta también a `actions/setup-node@v4`, `actions/setup-java@v4`, `actions/cache@v4`, `dorny/paths-filter@v3` y `subosito/flutter-action@v2`, no solo a `checkout`. Ojo al tocar el job `frontend`: TD-041 fija la versión de Flutter a propósito, así que la actualización de acciones no debe arrastrar cambios de pin.
