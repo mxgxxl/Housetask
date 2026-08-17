@@ -92,6 +92,18 @@ Los PDRs registran decisiones de producto con Context / Decision / Consequences,
   - Sin navegación a la tarea específica al tocar el push: no existe todavía una ruta de deep-link por tarea, así que `onMessageOpenedApp` navega al shell principal (pestaña de tareas) en vez de abrir la tarea exacta.
   - Sin manejo de mensajes en background/terminated (`onBackgroundMessage`/`getInitialMessage`) — solo foreground (banner local) y background→foreground vía tap. Candidato de un round futuro si se detecta necesidad real.
 
+## PDR-009: Durabilidad de la caché Hive antes que los optimistic updates (TD-059 antes que TD-007)
+
+**Status:** Accepted (2026-08-17)
+
+- **Context:** Al cerrar TD-040 el 2026-08-17 se descubrió que los seis escritores de Hive de `CacheService` (`addPendingOperation`, `updatePendingOperation`, `removePendingOperation`, `saveTasks`, `saveShopping`, `saveHousehold`) están declarados `void` y descartan el `Future` que devuelve Hive. La escritura se lanza y nadie puede esperarla, ni siquiera un llamador que quisiera. Eso fue exactamente lo que colgó `offline_banner_test.dart`, y quedó registrado como TD-059. El siguiente ítem previsto del Top-3 de Mac era TD-007 (optimistic updates).
+- **Decision:** TD-059 (fase de durabilidad Hive) se ejecuta **antes** que TD-007 (optimistic updates), alterando el orden del Top-3 fijado en el grooming del 2026-08-16.
+- **Razón:** un optimistic update es, por definición, pintar en la UI un estado que todavía no está confirmado por el servidor, confiando en que la escritura local sobreviva hasta que la cola de sincronización la reproduzca. Construir eso sobre una persistencia fire-and-forget significa que el caso de fallo del optimistic update —el usuario ve su cambio aplicado y luego desaparece— ya no sería un bug del optimistic update sino de la capa de debajo, con dos sospechosos en vez de uno. Arreglar primero la durabilidad hace que TD-007 se pueda razonar y testear contra una base fiable, y evita tener que rehacer parte de su diseño después. El coste de invertir el orden es bajo: TD-059 es acotado (seis firmas y sus llamadores), mientras que TD-007 toca varios Cubits y su interacción con la cola offline.
+- **Consequences:**
+  - El Top-3 de Mac pasa a ser: TD-059 → TD-007 → TD-001.
+  - TD-057 (la cola offline pierde un update/delete cuyo create ya sincronizó) comparte capa con TD-059; conviene revisar si parte de su fix cae de forma natural al hacer awaitable la escritura, aunque son entradas distintas y no se fusionan aquí.
+  - No cambia ninguna decisión de producto de cara al usuario: es una decisión de secuenciación de trabajo técnico, registrada aquí porque altera un plan previamente acordado.
+
 ## 2026-08-17 — Codex como agente secundario para límites de Claude Code
 
 ### Decisión
