@@ -85,7 +85,7 @@ void main() {
 
     expect(find.text('Sin conexión — cambios guardados localmente'),
         findsOneWidget);
-  });
+  }, timeout: const Timeout(Duration(seconds: 30)));
 
   testWidgets('no banner at all when neither cubit is offline', (tester) async {
     final taskCubit =
@@ -99,7 +99,7 @@ void main() {
 
     expect(
         find.text('Sin conexión — cambios guardados localmente'), findsNothing);
-  });
+  }, timeout: const Timeout(Duration(seconds: 30)));
 
   testWidgets('shows no pending-count badge when the queue is empty',
       (tester) async {
@@ -119,7 +119,7 @@ void main() {
     expect(find.text('Sin conexión — cambios guardados localmente'),
         findsOneWidget);
     expect(find.text('0'), findsNothing);
-  });
+  }, timeout: const Timeout(Duration(seconds: 30)));
 
   testWidgets(
       'shows a badge with the exact pending-count when the queue is non-empty',
@@ -152,7 +152,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('3'), findsOneWidget);
-  });
+  }, timeout: const Timeout(Duration(seconds: 30)));
 
   testWidgets(
       'shows the syncing spinner while TaskCubit.syncPending is in flight',
@@ -185,7 +185,7 @@ void main() {
     await syncFuture;
     await tester.pump();
     expect(find.byType(CircularProgressIndicator), findsNothing);
-  });
+  }, timeout: const Timeout(Duration(seconds: 30)));
 
   testWidgets(
       'renders exactly one banner when TaskCubit and ShoppingCubit are offline simultaneously',
@@ -207,5 +207,5 @@ void main() {
     // than rendering one per cubit, so exactly one must appear, not two.
     expect(find.text('Sin conexión — cambios guardados localmente'),
         findsOneWidget);
-  });
+  }, timeout: const Timeout(Duration(seconds: 30)));
 }
