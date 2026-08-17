@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:hive_flutter/hive_flutter.dart';
 
 import '../data/models/household.dart';
@@ -69,6 +70,43 @@ class CacheService {
         await Hive.openBox<PendingOperation>(_pendingOperationsBoxName);
 
     _initialized = true;
+  }
+
+  /// Test-only seam (TD-059): swap the open boxes for doubles.
+  ///
+  /// The durability work needs tests that exercise what happens when a Hive
+  /// write *fails* — disk full, box closed. Real Hive gives no way to force
+  /// that, and this class is a singleton holding its boxes privately, so
+  /// without a seam the whole error-handling policy would be untestable.
+  ///
+  /// Only the boxes are swappable, not the logic: every method under test is
+  /// the real one. Production never calls this — [init] is the only path that
+  /// assigns the boxes outside tests.
+  @visibleForTesting
+  void debugInjectBoxes({
+    Box<Task>? tasks,
+    Box<ShoppingItem>? shopping,
+    Box<Household>? households,
+    Box<PendingOperation>? pendingOperations,
+  }) {
+    if (tasks != null) _tasksBox = tasks;
+    if (shopping != null) _shoppingBox = shopping;
+    if (households != null) _householdsBox = households;
+    if (pendingOperations != null) _pendingOperationsBox = pendingOperations;
+    _initialized = true;
+  }
+
+  /// Test-only: drop every injected box so a later [init] re-opens the real
+  /// ones. A test that injects MUST call this in its teardown, or it leaks the
+  /// double into whatever runs next in the same process — the singleton
+  /// outlives the test.
+  @visibleForTesting
+  void debugResetBoxes() {
+    _tasksBox = null;
+    _shoppingBox = null;
+    _householdsBox = null;
+    _pendingOperationsBox = null;
+    _initialized = false;
   }
 
   Box<Task> get _tasks {

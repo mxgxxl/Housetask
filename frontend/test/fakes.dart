@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io' show FileSystemException;
 
+import 'package:hive_flutter/hive_flutter.dart';
 import 'package:homesync/config/pet_config.dart';
 import 'package:homesync/core/errors/failures.dart';
 import 'package:homesync/data/models/economy.dart';
@@ -618,4 +620,70 @@ class FakePetRepository implements PetRepository {
     pet = updated;
     return updated;
   }
+}
+
+/// In-memory [Box] double that can be told to fail its writes (TD-059).
+///
+/// Reads are served from a plain map so a test can assert what survived a
+/// failed write; `put`/`delete` either apply to that map (mirroring Hive's
+/// synchronous in-memory keystore) or reject with [failure], depending on
+/// [failWrites]. Everything the production code does not call falls through
+/// to `noSuchMethod`.
+class FakeBox<E> implements Box<E> {
+  FakeBox({this.failWrites = false});
+
+  /// Flip mid-test to make only *some* writes fail — e.g. let the entity
+  /// write succeed and fail the pending-operation write, which is the
+  /// rollback scenario.
+  bool failWrites;
+
+  /// Thrown (as a rejected Future) by every write while [failWrites] is set.
+  Object failure = const FileSystemException('no space left on device');
+
+  final Map<dynamic, E> entries = <dynamic, E>{};
+  final StreamController<BoxEvent> _events = StreamController<BoxEvent>.broadcast();
+
+  Future<void> _write(void Function() apply) {
+    if (failWrites) return Future<void>.error(failure);
+    apply();
+    return Future<void>.value();
+  }
+
+  @override
+  Future<void> put(dynamic key, E value) => _write(() {
+        entries[key] = value;
+        _events.add(BoxEvent(key, value, false));
+      });
+
+  @override
+  Future<void> delete(dynamic key) => _write(() {
+        entries.remove(key);
+        _events.add(BoxEvent(key, null, true));
+      });
+
+  @override
+  Future<int> clear() async {
+    final removed = entries.length;
+    entries.clear();
+    return removed;
+  }
+
+  @override
+  E? get(dynamic key, {E? defaultValue}) => entries[key] ?? defaultValue;
+
+  @override
+  Iterable<dynamic> get keys => entries.keys;
+
+  @override
+  Iterable<E> get values => entries.values;
+
+  @override
+  int get length => entries.length;
+
+  @override
+  Stream<BoxEvent> watch({dynamic key}) => _events.stream;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      super.noSuchMethod(invocation);
 }
