@@ -51,7 +51,7 @@ class ShoppingRepository {
         ShoppingItem.fromJson,
       );
       if (cursor == null) {
-        _cache.saveShopping(householdId, page.items);
+        await _cache.saveShopping(householdId, page.items);
       }
       lastListWasFromCache = false;
       return page;
@@ -90,7 +90,7 @@ class ShoppingRepository {
         headers: {'Idempotency-Key': idempotencyKey},
       );
       final item = ShoppingItem.fromJson(data as Map<String, dynamic>);
-      _cache.saveShoppingItem(item);
+      await _cache.saveShoppingItem(item);
       return item;
     } on Failure catch (f) {
       if (!isOfflineWorthy(f)) rethrow;
@@ -136,7 +136,7 @@ class ShoppingRepository {
           body: payload,
         );
         final item = ShoppingItem.fromJson(data as Map<String, dynamic>);
-        _cache.saveShoppingItem(item);
+        await _cache.saveShoppingItem(item);
         return item;
       } on Failure catch (f) {
         if (!isOfflineWorthy(f)) rethrow;
@@ -155,7 +155,7 @@ class ShoppingRepository {
       try {
         final data = await _api.patch('/households/$householdId/shopping/$itemId/purchase');
         final item = ShoppingItem.fromJson(data as Map<String, dynamic>);
-        _cache.saveShoppingItem(item);
+        await _cache.saveShoppingItem(item);
         return item;
       } on Failure catch (f) {
         if (!isOfflineWorthy(f)) rethrow;
@@ -200,7 +200,7 @@ class ShoppingRepository {
     if (await _connectivity.checkConnectivity()) {
       try {
         await _api.delete('/households/$householdId/shopping/$itemId');
-        _cache.deleteShoppingItemFromCache(itemId);
+        await _cache.deleteShoppingItemFromCache(itemId);
         return null;
       } on Failure catch (f) {
         if (!isOfflineWorthy(f)) rethrow;
@@ -264,9 +264,9 @@ class ShoppingRepository {
             final serverItem = ShoppingItem.fromJson(data as Map<String, dynamic>);
             if (op.entityId != null) {
               idRemap[op.entityId!] = serverItem.id;
-              _cache.deleteShoppingItemFromCache(op.entityId!);
+              await _cache.deleteShoppingItemFromCache(op.entityId!);
             }
-            _cache.saveShoppingItem(serverItem);
+            await _cache.saveShoppingItem(serverItem);
             break;
 
           case PendingOperationType.update:
@@ -274,22 +274,22 @@ class ShoppingRepository {
               '/households/${op.householdId}/shopping/$resolvedEntityId',
               body: op.payload,
             );
-            _cache.saveShoppingItem(ShoppingItem.fromJson(data as Map<String, dynamic>));
+            await _cache.saveShoppingItem(ShoppingItem.fromJson(data as Map<String, dynamic>));
             break;
 
           case PendingOperationType.delete:
             await _api.delete('/households/${op.householdId}/shopping/$resolvedEntityId');
-            _cache.deleteShoppingItemFromCache(resolvedEntityId!);
+            await _cache.deleteShoppingItemFromCache(resolvedEntityId!);
             break;
         }
 
-        _cache.removePendingOperation(op.id);
+        await _cache.removePendingOperation(op.id);
         processed++;
       } on Failure catch (f) {
         if (isOfflineWorthy(f)) break;
         final retried = op.copyWith(retryCount: op.retryCount + 1);
         if (retried.retryCount > 3) {
-          _cache.removePendingOperation(op.id);
+          await _cache.removePendingOperation(op.id);
           SentryService.captureException(f, context: {
             'pendingOperationId': op.id,
             'type': op.type.name,
@@ -297,7 +297,7 @@ class ShoppingRepository {
             'retryCount': retried.retryCount,
           });
         } else {
-          _cache.updatePendingOperation(retried);
+          await _cache.updatePendingOperation(retried);
         }
       }
     }

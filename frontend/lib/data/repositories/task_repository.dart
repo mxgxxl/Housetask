@@ -103,9 +103,9 @@ class TaskRepository {
         // id instead of replacing — a full replace here would evict every
         // other status already cached for the household (TD-045).
         if (status == null) {
-          _cache.saveTasks(householdId, page.items);
+          await _cache.saveTasks(householdId, page.items);
         } else {
-          _cache.mergeTasks(page.items);
+          await _cache.mergeTasks(page.items);
         }
       }
       lastListWasFromCache = false;
@@ -154,7 +154,7 @@ class TaskRepository {
         headers: {'Idempotency-Key': idempotencyKey},
       );
       final task = Task.fromJson(data as Map<String, dynamic>);
-      _cache.saveTask(task);
+      await _cache.saveTask(task);
       return task;
     } on Failure catch (f) {
       if (!isOfflineWorthy(f)) rethrow;
@@ -202,7 +202,7 @@ class TaskRepository {
           body: payload,
         );
         final task = Task.fromJson(data as Map<String, dynamic>);
-        _cache.saveTask(task);
+        await _cache.saveTask(task);
         return task;
       } on Failure catch (f) {
         if (!isOfflineWorthy(f)) rethrow;
@@ -220,7 +220,7 @@ class TaskRepository {
     if (await _connectivity.checkConnectivity()) {
       try {
         final task = await _completeRemote(householdId, taskId);
-        _cache.saveTask(task);
+        await _cache.saveTask(task);
         return task;
       } on Failure catch (f) {
         if (!isOfflineWorthy(f)) rethrow;
@@ -269,7 +269,7 @@ class TaskRepository {
     if (await _connectivity.checkConnectivity()) {
       try {
         await _api.delete('/households/$householdId/tasks/$taskId');
-        _cache.deleteTaskFromCache(taskId);
+        await _cache.deleteTaskFromCache(taskId);
         return null;
       } on Failure catch (f) {
         if (!isOfflineWorthy(f)) rethrow;
@@ -307,7 +307,7 @@ class TaskRepository {
   Future<Task> restore(String householdId, String taskId) async {
     final data = await _api.post('/households/$householdId/tasks/$taskId/restore');
     final task = Task.fromJson(data as Map<String, dynamic>);
-    _cache.saveTask(task);
+    await _cache.saveTask(task);
     return task;
   }
 
@@ -369,9 +369,9 @@ class TaskRepository {
             final serverTask = Task.fromJson(data as Map<String, dynamic>);
             if (op.entityId != null) {
               idRemap[op.entityId!] = serverTask.id;
-              _cache.deleteTaskFromCache(op.entityId!);
+              await _cache.deleteTaskFromCache(op.entityId!);
             }
-            _cache.saveTask(serverTask);
+            await _cache.saveTask(serverTask);
             break;
 
           case PendingOperationType.update:
@@ -383,16 +383,16 @@ class TaskRepository {
                     '/households/${op.householdId}/tasks/$resolvedEntityId',
                     body: op.payload,
                   ) as Map<String, dynamic>);
-            _cache.saveTask(task);
+            await _cache.saveTask(task);
             break;
 
           case PendingOperationType.delete:
             await _api.delete('/households/${op.householdId}/tasks/$resolvedEntityId');
-            _cache.deleteTaskFromCache(resolvedEntityId!);
+            await _cache.deleteTaskFromCache(resolvedEntityId!);
             break;
         }
 
-        _cache.removePendingOperation(op.id);
+        await _cache.removePendingOperation(op.id);
         processed++;
       } on Failure catch (f) {
         if (isOfflineWorthy(f)) {
@@ -401,7 +401,7 @@ class TaskRepository {
         }
         final retried = op.copyWith(retryCount: op.retryCount + 1);
         if (retried.retryCount > 3) {
-          _cache.removePendingOperation(op.id);
+          await _cache.removePendingOperation(op.id);
           SentryService.captureException(f, context: {
             'pendingOperationId': op.id,
             'type': op.type.name,
@@ -409,7 +409,7 @@ class TaskRepository {
             'retryCount': retried.retryCount,
           });
         } else {
-          _cache.updatePendingOperation(retried);
+          await _cache.updatePendingOperation(retried);
         }
       }
     }
