@@ -17,7 +17,13 @@
 
 ## Siguiente tarea
 
-Integración de AGENTS.legacy.md con AGENTS.md (esta tarea).
+Verificado 2026-08-17: la tabla corta de CLAUDE.md ya no lista TD-002 ni TD-015; limpieza cerrada sin cambios (ver este PR).
+
+Siguiente tarea: Cross-ref en CLAUDE.md hacia AGENTS.md y docs/AGENT_FALLBACK.md.
+
+## Nota de tooling
+
+Codex (app) no ve gh (PATH de apps GUI en macOS); usará el conector de GitHub para PRs. Claude Code usa gh desde terminal.
 
 ## Reglas durante piloto Codex
 
