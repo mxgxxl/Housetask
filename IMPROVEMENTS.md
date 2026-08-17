@@ -121,6 +121,72 @@ Living document capturing operational learnings from the Mac↔Mobile workflow e
 
 ---
 
+## Ronda 2 Escaneo Frontend: State Management (2026-08-17)
+
+**Scope:** auditoría exhaustiva de los 7 Cubits (`auth`, `household`, `task`, `shopping`, `socket`, `pet`, `stats`), sus repositories, `ApiService`, `CacheService`, `ConnectivityService`, `SocketService`, el composition root (`app.dart`/`main.dart`) y las páginas que orquestan carga de datos. Solo identificación y documentación — **no se tocó código de producción** en esta ronda.
+
+**Método y su límite:** revisión de código, no ejecución. Este entorno no tiene toolchain de Flutter (`flutter: command not found`), así que ningún hallazgo se reprodujo en runtime ni se escribió un test que falle para demostrarlo. Cada uno se sostiene sobre la lectura del flujo de datos y está descrito con el escenario concreto que lo dispara, para que sea falsable por quien lo verifique con toolchain. La ronda 1 (backend auth) tuvo la misma limitación por otra causa (proxy bloqueando `mongodb-memory-server`) — ver la sección "Bloqueo de npm test desde móvil".
+
+### Tabla de hallazgos
+
+| # | Categoría | Descripción | Archivo | Sev. | Prio. | Fix propuesto |
+|---|-----------|-------------|---------|------|-------|---------------|
+| F1 | Error handling / Arquitectura | Expiración de sesión emite `unauthenticated` pero ningún widget montado lo escucha (solo `SplashPage`, ya desmontada) → el usuario se queda en el shell sin tokens | `auth_cubit.dart:104`, `app.dart:81`, `splash_page.dart:46` | **High** | **High** | `BlocListener` global en `app.dart` + navegación vía `Routes.navigatorKey` → **TD-055** |
+| F2 | Race / consistencia de estado | `TaskState.timelineCursor` se pone a null en casi todos los `emit` (solo 2 de ~18 lo re-pasan) → la timeline PDR-003 nunca pagina dentro de su ventana | `task_cubit.dart:267` + call sites | **High** | **High** | Sentinel `clearTimelineCursor` estilo `clearError` → **TD-056** |
+| F3 | Caché/sync (pérdida de datos) | `idRemap` es local a cada llamada de `syncPendingOperations`; si el create sincroniza y un op posterior corta por red, el update/delete queda apuntando al `local-<uuid>` → 404 → 3 reintentos → descartado | `task_repository.dart:354` (idéntico en `shopping_repository.dart`) | **High** | **High** | Persistir el remap reescribiendo los ops encolados → **TD-057** |
+| F4 | Arquitectura / privacidad | Task/Shopping/Pet/Stats cubits conservan los datos de la cuenta anterior tras logout (solo `HouseholdCubit` tiene `reset()`) | `profile_page.dart:240-242` | **High** | **High** | `reset()` en los 4 cubits, llamado desde el listener global de F1 → **TD-058** |
+| F5 | Caché/sync | `_wasOnline = true` asume que la app arranca online; si arranca sin red y `connectivity_plus` no reemite el estado actual al suscribirse, el primer `true` de reconexión no dispara `syncPending()` | `task_cubit.dart:328`, `shopping_cubit.dart:123` | Medium | Medium | Sembrar `_wasOnline` desde `await checkConnectivity()` en el constructor |
+| F6 | Socket/realtime | `SocketService.connect()` crea un socket NUEVO, pero `_bindListeners()` está guardado por `_listenersBound`, que solo se limpia en `disconnect()` → un segundo `connectAndListen()` sin `disconnect()` deja un socket conectado y unido a la sala pero **sin listeners de dominio** (`onConnect`/`onDisconnect` sí se rebindean, así que la UI muestra "conectado" mientras el realtime está muerto) | `socket_cubit.dart:20,48-59`, `socket_service.dart:19-39` | Medium | Medium | Bindear dentro de `connect()`, o resetear `_listenersBound` en `connectAndListen()`. **Hoy es latente** (todo re-login pasa por `profile_page._logout`, que sí llama `disconnect()`) — pero arreglar F1/TD-055 lo vuelve alcanzable si el fix no desconecta también |
+| F7 | Error handling | Misma raíz que F2: `clearOfflineNotice()` (y cualquier `emit` que no los re-pase) borra `timelineError`, `recurringError` y `trashError` → un error visible en Papelera/Recurrentes desaparece al consumir un aviso offline no relacionado | `task_cubit.dart:273,278,283,366` | Medium | Medium | Mismo sentinel de F2 |
+| F8 | Race condition | `syncPending()` no tiene guard de reentrada; un parpadeo de conectividad (o un retry manual solapado con el automático) puede lanzar dos replays concurrentes sobre la misma cola Hive. Los creates están protegidos por el `Idempotency-Key` persistido; updates/deletes no. Además el primer `finally` apaga el spinner del segundo run | `task_cubit.dart:352`, `shopping_cubit.dart:146` | Medium | Medium | `bool _syncing` con early-return |
+| F9 | Race condition | `load()`/`setFilter()`/`refresh()` no descartan respuestas obsoletas. `MainScaffold` dispara `load` + `catchUpRecurringTasks`(→`load`) en paralelo, y `tasks:batch_created` añade un `refresh()` — dos `load` concurrentes con distinto filtro escriben ambos `activeFilter`, y el más lento gana, pudiendo devolver al usuario a una pestaña que ya abandonó | `task_cubit.dart:379`, `main_scaffold.dart:60-83` | Medium | Medium | Contador de generación de request; descartar respuestas de una generación vieja |
+| F10 | Test gap | Cero cobertura para `SocketCubit`, `HouseholdCubit` y `StatsCubit` — exactamente donde viven F1, F6 y F9 | `test/` | Medium | Medium | Añadir `socket_cubit_test.dart`, `household_cubit_test.dart`, `stats_cubit_test.dart` |
+| F11 | Test gap | El test de paginación de timeline pasa porque llama `loadTimeline()` y `loadMoreTimeline()` seguidos, sin ningún `emit` intermedio — justo la condición que oculta F2 | `test/task_cubit_test.dart:685` | Medium | Medium | Interponer un `_upsert`/`loadRecurringTasks` en el test |
+| F12 | Complejidad / perf | `HouseholdCubit.applyRealtime` hace un GET completo del hogar **y** un `setCurrentHouseholdId` (escritura a disco) por cada evento de miembro | `household_cubit.dart:124-130` | Low | Medium | Aplicar el payload del evento en vez de refetch; no reescribir el id persistido si no cambió |
+| F13 | Error handling | `catchUpRecurringTasks` usa `catch (_)` sin log: un fallo real (JSON inesperado, bug de parseo) es invisible, no solo el fallo de red que justifica el swallow | `task_cubit.dart:564` | Low | Low | Dejar el swallow pero añadir un breadcrumb de Sentry |
+| F14 | Arquitectura | `MainScaffold._loadForHousehold` orquesta 6 llamadas a cubits desde la capa de widgets | `main_scaffold.dart:60-83` | Low | Low | Aceptable para un shell; anotado, no accionable hoy |
+
+### Análisis por Cubit
+
+- **AuthCubit** — *Responsabilidad:* sesión, login/register/logout, perfil. *Correcto:* breadcrumbs sin PII; `logout()` ordena bien las operaciones (unregister del token FCM **antes** de borrar el access token, wipe de caché documentado). *Problemas:* F1 (el `onSessionExpired` que emite al vacío), F4 (no coordina el reset de los demás cubits). *Recomendación:* que `logout()` y `onSessionExpired` converjan en un único camino de teardown en vez de que `profile_page` haga el suyo a mano.
+- **TaskCubit** — *Responsabilidad:* buckets por filtro, timeline PDR-003, recurrentes, papelera, cola offline. Es con diferencia el más grande (≈1000 líneas, 24 campos de estado) y el que concentra F2, F7, F8, F9, F13. *Correcto:* `TaskBucket` por filtro con cursor independiente (bien razonado), `_adjustedTotal` con semántica null correcta, disciplina de re-pasar `TaskBucket.nextCursor` en todos los sitios. *Recomendación:* la misma disciplina que se aplicó a `TaskBucket.nextCursor` falta en `TaskState.timelineCursor` — en vez de replicarla a mano, cambiar el patrón a sentinel (F2). Es candidato razonable a dividirse (timeline/papelera/recurrentes son casi tres cubits dentro de uno), pero eso es refactor grande, fuera del alcance de esta ronda.
+- **ShoppingCubit** — *Responsabilidad:* lista única paginada + cola offline. *Correcto:* re-pasa `nextCursor` en `_upsert`/`_remove` (justo lo que falta en la timeline de TaskCubit). *Problemas:* F5, F8; además los handlers `on Failure` (p. ej. `createItem`) no re-pasan `nextCursor`, así que un fallo de creación rompe la paginación — misma clase que F2, menor impacto.
+- **SocketCubit** — *Responsabilidad:* puente socket→cubits. *Problemas:* F6, y cero tests (F10). *Correcto:* rejoin de sala en `onConnect`, guard de idempotencia bien intencionado. *Recomendación:* es el único cubit sin cobertura que además tiene estado propio (`_listenersBound`) cuyo ciclo de vida no es obvio — prioritario para tests.
+- **HouseholdCubit** — *Responsabilidad:* hogar activo y miembros. *Correcto:* es el único con `reset()`. *Problemas:* F12, sin tests (F10).
+- **PetCubit** — *Responsabilidad:* mascota, adopción, economía. *Correcto:* `actionInProgress` previene doble-submit (el guard que a `TaskCubit.load` le falta, F9); guard de hogar en `applyRealtime`; independencia de `AuthCubit` bien argumentada. *Problemas:* F4 (sin `reset()`); recarga completa (2 requests) por cada evento realtime — documentado como deliberado, se deja como nota.
+- **StatsCubit** — *Responsabilidad:* stats de hogar (PDR-007). El más simple y limpio; usa el patrón `clearError` que F2/F7 recomiendan generalizar. *Problemas:* F4, sin tests (F10).
+
+### Patrones correctos encontrados
+
+Vale la pena registrarlos porque son la referencia contra la que se miden los hallazgos:
+
+- **Ciclo de vida de widgets impecable:** todos los `StatefulWidget` revisados liberan lo suyo — `TextEditingController`s, `ScrollController`s (incluida la lista completa en `tasks_page.dart`), `TabController`, y el `Timer.periodic` de `_LiveCareStats` con guard `mounted`. **No se encontró ni un solo memory leak de widget**, que era una de las hipótesis principales del encargo.
+- **`TaskCubit`/`ShoppingCubit` cancelan su `StreamSubscription` de conectividad en `close()`** — el override de `close()` está bien hecho en ambos.
+- **`CacheService.pendingOperationsCount`** es un broadcast stream cacheado con `onListen`/`onCancel` que monta y desmonta el `box.watch()` correctamente, con el tradeoff de replay documentado.
+- **Single-flight de refresh en `ApiService`** (`_refreshCompleter`): correcto — el check-and-set no tiene `await` entre medias, así que es atómico en el modelo monohilo de Dart, y `Idempotency-Key` viaja en `RequestOptions` de modo que el retry tras 401 reusa la misma clave (esto es lo que hace el reintento seguro).
+- **`Idempotency-Key` persistido junto a la operación encolada** — sobrevive a reinicios de app, no solo a reintentos en memoria. Es más de lo que suele hacerse.
+- **`CacheService.saveTasks` preserva entradas no sincronizadas** al reemplazar, con el razonamiento escrito en el propio comentario.
+- **Guard de hogar en los cuatro `applyRealtime`** — un evento de otro hogar nunca contamina el estado cargado.
+- **Distinción `NetworkFailure` vs. 4xx real** en `_mapDioError`: es lo que permite que "cae a caché / encola" no se dispare ante un rechazo legítimo del servidor.
+
+### Lecciones aprendidas
+
+1. **El patrón "campo nullable de asignación incondicional" en `copyWith` no escala.** Funciona para one-shots genuinos (`error`, `offlineNotice`: se consumen y se van), pero aplicarlo a estado que debe persistir (`timelineCursor`) convierte cada `emit` no relacionado en un borrado silencioso. El proyecto ya tiene el patrón correcto para esto — el sentinel `clearError` de `AuthState`/`HouseholdState`/`StatsState` — solo que no se usó en `TaskState`. F2 y F7 son la misma raíz.
+2. **Los tests que ejercitan una secuencia apretada esconden bugs de interleaving.** El test de F11 llama a las dos funciones seguidas; la app real intercala media docena de emits entre ellas. Para cubits con estado compartido, un test debería reproducir el orden real de `MainScaffold`, no el mínimo.
+3. **La ronda 1 (backend) encontró sobre todo protecciones implícitas; la ronda 2 encuentra sobre todo estado compartido mal delimitado.** Son dos fallos distintos del mismo tipo: algo correcto por convención en vez de por construcción.
+4. **La hipótesis de partida del encargo (memory leaks, cubits sin `close()`) resultó infundada** — esa parte del código está bien. El riesgo real estaba en consistencia de estado y en el ciclo de vida de la *sesión*, no en el de los widgets. Vale la pena anotarlo: el escaneo confirmó salud donde se sospechaba y encontró problemas donde no se buscaba.
+
+### Próximos pasos recomendados (ordenados)
+
+1. **TD-055 + TD-058 juntos** — comparten el fix (un listener global de `unauthenticated` que desconecta el socket y resetea los cubits). Hacerlos por separado significa tocar `app.dart` dos veces, y arreglar TD-055 sin TD-058 deja al usuario B viendo datos de A al aterrizar en login→main.
+2. **TD-056 + F7** — misma raíz, un solo cambio de patrón en `TaskState.copyWith` los cierra ambos.
+3. **TD-057** — el de mayor impacto real por usuario (pérdida silenciosa de una escritura offline), pero también el que más requiere tests con toolchain para validar; conviene hacerlo en una sesión que pueda correr `flutter test`.
+4. **F6 antes o junto con TD-055** — es la trampa que TD-055 arma si se arregla sin mirarla.
+5. **F10 (tests de Socket/Household/Stats cubits)** — habilita verificar los anteriores.
+6. F5, F8, F9, F12, F13 — mejoras de robustez sin urgencia.
+
+---
+
 ## Próximas mejoras pendientes
 
 - **IMPROVEMENTS.md mismo:** documentar decisiones de PDR faltantes (002, 003, 005) cuando se creen.
