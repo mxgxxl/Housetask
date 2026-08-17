@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import '../../config/routes.dart';
 import '../../config/theme.dart';
 import '../cubit/auth_cubit.dart';
 import '../cubit/household_cubit.dart';
@@ -237,12 +236,10 @@ class ProfilePage extends StatelessWidget {
     );
     if (ok != true || !context.mounted) return;
 
-    context.read<SocketCubit>().disconnect();
-    context.read<HouseholdCubit>().reset();
+    // Socket teardown, cubit resets, and navigation to login all happen in
+    // reaction to the AuthState this emits — see the app-wide listener in
+    // app.dart (TD-055/TD-058) — so this page only has to trigger it.
     await context.read<AuthCubit>().logout();
-    if (context.mounted) {
-      Navigator.of(context).pushNamedAndRemoveUntil(Routes.login, (_) => false);
-    }
   }
 }
 

@@ -39,14 +39,14 @@ class _SplashPageState extends State<SplashPage> {
   @override
   Widget build(BuildContext context) {
     return BlocListener<AuthCubit, AuthState>(
-      listenWhen: (prev, curr) => prev.status != curr.status,
-      listener: (context, state) {
-        if (state.status == AuthStatus.authenticated) {
-          _onAuthenticated();
-        } else if (state.status == AuthStatus.unauthenticated) {
-          Navigator.of(context).pushReplacementNamed(Routes.login);
-        }
-      },
+      // The unauthenticated -> login transition (no session found, or
+      // checkAuth() failing outright) is handled by the app-wide listener
+      // in app.dart (TD-055) — it fires for every page, not just this one.
+      // This local listener only needs the page-specific setup work that
+      // belongs to a successful session restore.
+      listenWhen: (prev, curr) =>
+          prev.status != curr.status && curr.status == AuthStatus.authenticated,
+      listener: (context, state) => _onAuthenticated(),
       child: Scaffold(
         backgroundColor: AppColors.primary,
         body: Center(

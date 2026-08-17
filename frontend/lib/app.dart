@@ -17,6 +17,7 @@ import 'presentation/cubit/shopping_cubit.dart';
 import 'presentation/cubit/socket_cubit.dart';
 import 'presentation/cubit/stats_cubit.dart';
 import 'presentation/cubit/task_cubit.dart';
+import 'presentation/widgets/session_listeners.dart';
 import 'services/notification_service.dart';
 import 'services/socket_service.dart';
 
@@ -72,16 +73,13 @@ class HomeSyncApp extends StatelessWidget {
             ),
           ),
         ],
-        // PDR-008: requests push permission and registers the device's FCM
-        // token the moment the user is authenticated (fresh login/register,
-        // or an auto-login from a cached session) — NotificationService
-        // itself no-ops past the first successful call, so repeated
-        // `authenticated` emissions (e.g. a profile update) don't re-request
-        // permission or double-subscribe listeners.
-        child: BlocListener<AuthCubit, AuthState>(
-          listenWhen: (previous, current) =>
-              current.status == AuthStatus.authenticated,
-          listener: (context, state) => notifications.initPushNotifications(),
+        // TD-055/TD-058: SessionListeners reacts to every AuthCubit
+        // transition app-wide (push registration on login, socket teardown +
+        // cubit resets + routing to login on logout/session-expiry) — see
+        // its own doc comment for why this lives above MaterialApp rather
+        // than inside AuthCubit or any one page.
+        child: SessionListeners(
+          notifications: notifications,
           child: MaterialApp(
             title: 'HomeSync',
             debugShowCheckedModeBanner: false,

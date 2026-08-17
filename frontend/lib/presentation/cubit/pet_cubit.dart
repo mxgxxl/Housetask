@@ -136,6 +136,16 @@ class PetCubit extends Cubit<PetState> {
     await load(_householdId!, _currentUserId!);
   }
 
+  /// Drop the loaded pet/adoption/economy state — called on logout/session-
+  /// expiry (TD-058), mirroring [TaskCubit.reset]. Forgets the household and
+  /// user ids too, so a stale [refresh] queued from before the reset cannot
+  /// fire against the wrong account.
+  void reset() {
+    _householdId = null;
+    _currentUserId = null;
+    emit(const PetState());
+  }
+
   /// Apply an incoming realtime pet/adoption/economy socket event (PDR-001
   /// A4: pet:adopt_requested, pet:adopted, pet:adopt_cancelled, pet:updated).
   /// Pet/AdoptionRequest/Economy are each a single value per household — no
