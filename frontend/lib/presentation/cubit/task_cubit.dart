@@ -122,9 +122,12 @@ class TaskState extends Equatable {
   final bool isOffline;
 
   /// One-shot "saved offline" notice for a create/update/delete that could
-  /// only be applied optimistically. Cleared like [error]: every emit resets
-  /// it to null unless explicitly re-passed, so a BlocListener only sees it
-  /// exactly once, then calls [TaskCubit.clearOfflineNotice].
+  /// only be applied optimistically. Deliberately the ONLY field [copyWith]
+  /// still assigns unconditionally (TD-056): every emit resets it to null
+  /// unless explicitly re-passed, so a BlocListener only sees it exactly
+  /// once, then calls [TaskCubit.clearOfflineNotice]. Every other nullable
+  /// field below is sticky — set once, it survives unrelated emits until a
+  /// call site explicitly clears it via its `clearX` [copyWith] parameter.
   final String? offlineNotice;
 
   /// True while [TaskCubit.syncPending] is replaying the offline queue —
@@ -226,9 +229,18 @@ class TaskState extends Equatable {
   /// their views too.
   List<Task> get allTasks => bucket(TaskFilter.all).items;
 
+  /// TD-056: every nullable field except [offlineNotice] is sticky — passing
+  /// nothing preserves the current value (via `??`), and clearing one to
+  /// null requires its dedicated `clearX` flag. Before this, [copyWith]
+  /// assigned every nullable field unconditionally, so any emit that didn't
+  /// happen to re-pass e.g. [timelineCursor] silently wiped it — 16 of the
+  /// 18 emit sites in this file didn't. See TD-056 in docs/TECH_DEBT.md and
+  /// the `clearError` pattern StatsCubit/HouseholdCubit/AuthCubit already
+  /// used, which this replicates.
   TaskState copyWith({
     TaskStatusUi? status,
     String? error,
+    bool clearError = false,
     TaskFilter? activeFilter,
     Map<TaskFilter, TaskBucket>? buckets,
     bool? isOffline,
@@ -237,50 +249,51 @@ class TaskState extends Equatable {
     Map<DateTime, List<Task>>? timelineDays,
     List<Task>? timelineUndated,
     String? timelineCursor,
+    bool clearTimelineCursor = false,
     bool? timelineHasMore,
     DateTime? timelineWindowFrom,
     DateTime? timelineWindowTo,
     bool? timelineLoading,
     bool? timelineLoadingMore,
     String? timelineError,
+    bool clearTimelineError = false,
     List<Task>? recurringTasks,
     bool? recurringLoading,
     bool? recurringLoaded,
     String? recurringError,
+    bool clearRecurringError = false,
     List<Task>? trashTasks,
     bool? trashLoading,
     bool? trashLoaded,
     String? trashError,
+    bool clearTrashError = false,
   }) {
     return TaskState(
       status: status ?? this.status,
-      error: error,
+      error: clearError ? null : (error ?? this.error),
       activeFilter: activeFilter ?? this.activeFilter,
       buckets: buckets ?? this.buckets,
       isOffline: isOffline ?? this.isOffline,
+      // Deliberately unconditional — see the field's own doc comment.
       offlineNotice: offlineNotice,
       isSyncing: isSyncing ?? this.isSyncing,
       timelineDays: timelineDays ?? this.timelineDays,
       timelineUndated: timelineUndated ?? this.timelineUndated,
-      // Explicitly nullable, like TaskBucket.nextCursor: the window running
-      // out of pages must be able to clear it.
-      timelineCursor: timelineCursor,
+      timelineCursor: clearTimelineCursor ? null : (timelineCursor ?? this.timelineCursor),
       timelineHasMore: timelineHasMore ?? this.timelineHasMore,
       timelineWindowFrom: timelineWindowFrom ?? this.timelineWindowFrom,
       timelineWindowTo: timelineWindowTo ?? this.timelineWindowTo,
       timelineLoading: timelineLoading ?? this.timelineLoading,
       timelineLoadingMore: timelineLoadingMore ?? this.timelineLoadingMore,
-      timelineError: timelineError,
+      timelineError: clearTimelineError ? null : (timelineError ?? this.timelineError),
       recurringTasks: recurringTasks ?? this.recurringTasks,
       recurringLoading: recurringLoading ?? this.recurringLoading,
       recurringLoaded: recurringLoaded ?? this.recurringLoaded,
-      // Explicitly nullable, like timelineError/error: must clear on success.
-      recurringError: recurringError,
+      recurringError: clearRecurringError ? null : (recurringError ?? this.recurringError),
       trashTasks: trashTasks ?? this.trashTasks,
       trashLoading: trashLoading ?? this.trashLoading,
       trashLoaded: trashLoaded ?? this.trashLoaded,
-      // Explicitly nullable, like recurringError: must clear on success.
-      trashError: trashError,
+      trashError: clearTrashError ? null : (trashError ?? this.trashError),
     );
   }
 
@@ -373,9 +386,11 @@ class TaskCubit extends Cubit<TaskState> {
   }
 
   /// Consume the one-shot [TaskState.offlineNotice] after the UI has shown
-  /// it, without disturbing [TaskState.error].
+  /// it, without disturbing anything else (F7 — this used to also silently
+  /// clear [TaskState.timelineError]/[TaskState.recurringError]/
+  /// [TaskState.trashError] via the same bug TD-056 fixed in [copyWith]).
   void clearOfflineNotice() {
-    emit(state.copyWith(error: state.error));
+    emit(state.copyWith());
   }
 
   Map<TaskFilter, TaskBucket> _withBucket(
@@ -394,7 +409,7 @@ class TaskCubit extends Cubit<TaskState> {
     emit(state.copyWith(
       status: TaskStatusUi.loading,
       activeFilter: target,
-      error: null,
+      clearError: true,
     ));
 
     try {
@@ -507,7 +522,7 @@ class TaskCubit extends Cubit<TaskState> {
     final from = _startOfLocalDay(now.subtract(const Duration(days: _timelineLookbackDays)));
     final to = _endOfLocalDay(now.add(const Duration(days: _timelineInitialForwardDays)));
 
-    emit(state.copyWith(timelineLoading: true, timelineError: null));
+    emit(state.copyWith(timelineLoading: true, clearTimelineError: true));
     try {
       final result = await _repo.list(householdId, from: from, to: to);
       final grouped = _groupTasksByLocalDay(result.items);
@@ -515,7 +530,11 @@ class TaskCubit extends Cubit<TaskState> {
         timelineLoading: false,
         timelineDays: grouped.days,
         timelineUndated: grouped.undated,
+        // result.nextCursor legitimately being null (no more pages) must
+        // still overwrite a previous cursor, not just be ignored as "not
+        // specified" — see copyWith's clearTimelineCursor.
         timelineCursor: result.nextCursor,
+        clearTimelineCursor: result.nextCursor == null,
         timelineHasMore: result.hasMore,
         timelineWindowFrom: from,
         timelineWindowTo: to,
@@ -554,7 +573,10 @@ class TaskCubit extends Cubit<TaskState> {
         timelineLoadingMore: false,
         timelineDays: merged.days,
         timelineUndated: merged.undated,
+        // Same reasoning as loadTimeline's success emit: a null nextCursor
+        // must overwrite, not be treated as "not specified".
         timelineCursor: result.nextCursor,
+        clearTimelineCursor: result.nextCursor == null,
         timelineHasMore: result.hasMore,
         timelineWindowTo: to,
       ));
@@ -596,7 +618,7 @@ class TaskCubit extends Cubit<TaskState> {
   /// one iteration when there is no connectivity.
   Future<void> loadRecurringTasks(String householdId) async {
     _householdId = householdId;
-    emit(state.copyWith(recurringLoading: true, recurringError: null));
+    emit(state.copyWith(recurringLoading: true, clearRecurringError: true));
     try {
       final all = <Task>[];
       String? cursor;
@@ -625,7 +647,7 @@ class TaskCubit extends Cubit<TaskState> {
   /// everything needed, just mixed with active tasks.
   Future<void> loadTrashTasks(String householdId) async {
     _householdId = householdId;
-    emit(state.copyWith(trashLoading: true, trashError: null));
+    emit(state.copyWith(trashLoading: true, clearTrashError: true));
     try {
       final all = <Task>[];
       String? cursor;
