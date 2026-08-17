@@ -175,16 +175,20 @@ class TaskRepository {
       'isSynced': false,
     });
     await _cache.saveTask(task);
-    await _cache.addPendingOperation(PendingOperation(
-      id: _uuid.v4(),
-      type: PendingOperationType.create,
-      entity: PendingOperationEntity.task,
-      householdId: householdId,
+    await _queueOfflineWrite(
+      PendingOperation(
+        id: _uuid.v4(),
+        type: PendingOperationType.create,
+        entity: PendingOperationEntity.task,
+        householdId: householdId,
+        entityId: localId,
+        payload: payload,
+        timestamp: DateTime.now(),
+        idempotencyKey: idempotencyKey,
+      ),
       entityId: localId,
-      payload: payload,
-      timestamp: DateTime.now(),
-      idempotencyKey: idempotencyKey,
-    ));
+      previous: null,
+    );
     return task;
   }
 
@@ -245,16 +249,20 @@ class TaskRepository {
       'isSynced': false,
     });
     await _cache.saveTask(merged);
-    await _cache.addPendingOperation(PendingOperation(
-      id: _uuid.v4(),
-      type: PendingOperationType.update,
-      entity: PendingOperationEntity.task,
-      householdId: householdId,
+    await _queueOfflineWrite(
+      PendingOperation(
+        id: _uuid.v4(),
+        type: PendingOperationType.update,
+        entity: PendingOperationEntity.task,
+        householdId: householdId,
+        entityId: taskId,
+        payload: payload,
+        timestamp: DateTime.now(),
+        idempotencyKey: _uuid.v4(),
+      ),
       entityId: taskId,
-      payload: payload,
-      timestamp: DateTime.now(),
-      idempotencyKey: _uuid.v4(),
-    ));
+      previous: base,
+    );
     return merged;
   }
 
@@ -280,22 +288,27 @@ class TaskRepository {
 
   Future<Task> _deleteOffline(String householdId, String taskId) async {
     final cached = _cache.getTasks(householdId).where((t) => t.id == taskId).toList();
-    final marked = (cached.isEmpty ? null : cached.first)?.copyWith(
+    final previous = cached.isEmpty ? null : cached.first;
+    final marked = previous?.copyWith(
           isDeleted: true,
           isSynced: false,
         ) ??
         Task(id: taskId, householdId: householdId, title: '', isSynced: false, isDeleted: true);
     await _cache.saveTask(marked);
-    await _cache.addPendingOperation(PendingOperation(
-      id: _uuid.v4(),
-      type: PendingOperationType.delete,
-      entity: PendingOperationEntity.task,
-      householdId: householdId,
+    await _queueOfflineWrite(
+      PendingOperation(
+        id: _uuid.v4(),
+        type: PendingOperationType.delete,
+        entity: PendingOperationEntity.task,
+        householdId: householdId,
+        entityId: taskId,
+        payload: const {},
+        timestamp: DateTime.now(),
+        idempotencyKey: _uuid.v4(),
+      ),
       entityId: taskId,
-      payload: const {},
-      timestamp: DateTime.now(),
-      idempotencyKey: _uuid.v4(),
-    ));
+      previous: previous,
+    );
     return marked;
   }
 
@@ -431,6 +444,48 @@ class TaskRepository {
     }
 
     return processed;
+  }
+
+  /// Queue [operation] for an optimistic offline write whose entity has just
+  /// been cached, undoing that entity write if the queue write fails.
+  ///
+  /// Both halves must land or neither: an entity cached with `isSynced:false`
+  /// but no queued operation renders to the user as a pending local change
+  /// that can never sync — strictly worse than a clean failure, because
+  /// nothing will ever retry it or tell them. Hive has no cross-box
+  /// transaction, so this is a compensating write rather than a rollback
+  /// proper; that is proportionate for a failure that in practice means the
+  /// disk is full.
+  ///
+  /// [previous] is the entity as it was cached before this write, or null if
+  /// it did not exist (a create), which decides whether undoing means
+  /// restoring or deleting.
+  Future<void> _queueOfflineWrite(
+    PendingOperation operation, {
+    required String entityId,
+    required Task? previous,
+  }) async {
+    try {
+      await _cache.addPendingOperation(operation);
+    } catch (_) {
+      try {
+        if (previous != null) {
+          await _cache.saveTask(previous);
+        } else {
+          await _cache.deleteTaskFromCache(entityId);
+        }
+      } catch (rollbackError, stackTrace) {
+        // Second-order failure in an already-degraded situation: report it
+        // and still surface the original error, which is the actionable one.
+        SentryService.captureException(rollbackError,
+            stackTrace: stackTrace,
+            context: {
+              'entityId': entityId,
+              'policy': 'offline-write rollback failed — TD-059',
+            });
+      }
+      rethrow;
+    }
   }
 
   /// Await a cache write whose data the server already holds.

@@ -111,16 +111,20 @@ class ShoppingRepository {
       'isSynced': false,
     });
     await _cache.saveShoppingItem(item);
-    await _cache.addPendingOperation(PendingOperation(
-      id: _uuid.v4(),
-      type: PendingOperationType.create,
-      entity: PendingOperationEntity.shopping,
-      householdId: householdId,
+    await _queueOfflineWrite(
+      PendingOperation(
+        id: _uuid.v4(),
+        type: PendingOperationType.create,
+        entity: PendingOperationEntity.shopping,
+        householdId: householdId,
+        entityId: localId,
+        payload: payload,
+        timestamp: DateTime.now(),
+        idempotencyKey: idempotencyKey,
+      ),
       entityId: localId,
-      payload: payload,
-      timestamp: DateTime.now(),
-      idempotencyKey: idempotencyKey,
-    ));
+      previous: null,
+    );
     return item;
   }
 
@@ -179,16 +183,20 @@ class ShoppingRepository {
       'isSynced': false,
     });
     await _cache.saveShoppingItem(merged);
-    await _cache.addPendingOperation(PendingOperation(
-      id: _uuid.v4(),
-      type: PendingOperationType.update,
-      entity: PendingOperationEntity.shopping,
-      householdId: householdId,
+    await _queueOfflineWrite(
+      PendingOperation(
+        id: _uuid.v4(),
+        type: PendingOperationType.update,
+        entity: PendingOperationEntity.shopping,
+        householdId: householdId,
+        entityId: itemId,
+        payload: payload,
+        timestamp: DateTime.now(),
+        idempotencyKey: _uuid.v4(),
+      ),
       entityId: itemId,
-      payload: payload,
-      timestamp: DateTime.now(),
-      idempotencyKey: _uuid.v4(),
-    ));
+      previous: base,
+    );
     return merged;
   }
 
@@ -211,7 +219,8 @@ class ShoppingRepository {
 
   Future<ShoppingItem> _deleteOffline(String householdId, String itemId) async {
     final cached = _cache.getShopping(householdId).where((i) => i.id == itemId).toList();
-    final marked = (cached.isEmpty ? null : cached.first)?.copyWith(
+    final previous = cached.isEmpty ? null : cached.first;
+    final marked = previous?.copyWith(
           isDeleted: true,
           isSynced: false,
         ) ??
@@ -223,16 +232,20 @@ class ShoppingRepository {
           isDeleted: true,
         );
     await _cache.saveShoppingItem(marked);
-    await _cache.addPendingOperation(PendingOperation(
-      id: _uuid.v4(),
-      type: PendingOperationType.delete,
-      entity: PendingOperationEntity.shopping,
-      householdId: householdId,
+    await _queueOfflineWrite(
+      PendingOperation(
+        id: _uuid.v4(),
+        type: PendingOperationType.delete,
+        entity: PendingOperationEntity.shopping,
+        householdId: householdId,
+        entityId: itemId,
+        payload: const {},
+        timestamp: DateTime.now(),
+        idempotencyKey: _uuid.v4(),
+      ),
       entityId: itemId,
-      payload: const {},
-      timestamp: DateTime.now(),
-      idempotencyKey: _uuid.v4(),
-    ));
+      previous: previous,
+    );
     return marked;
   }
 
@@ -314,6 +327,34 @@ class ShoppingRepository {
     }
 
     return processed;
+  }
+
+  /// Shopping twin of TaskRepository._queueOfflineWrite — see the rationale
+  /// there. Both halves of an optimistic offline write must land or neither.
+  Future<void> _queueOfflineWrite(
+    PendingOperation operation, {
+    required String entityId,
+    required ShoppingItem? previous,
+  }) async {
+    try {
+      await _cache.addPendingOperation(operation);
+    } catch (_) {
+      try {
+        if (previous != null) {
+          await _cache.saveShoppingItem(previous);
+        } else {
+          await _cache.deleteShoppingItemFromCache(entityId);
+        }
+      } catch (rollbackError, stackTrace) {
+        SentryService.captureException(rollbackError,
+            stackTrace: stackTrace,
+            context: {
+              'entityId': entityId,
+              'policy': 'offline-write rollback failed — TD-059',
+            });
+      }
+      rethrow;
+    }
   }
 
   /// Await a cache write whose data the server already holds.

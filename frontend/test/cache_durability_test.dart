@@ -95,6 +95,8 @@ void main() {
 
   group('best-effort policy', bestEffortTests);
 
+  group('propagation policy', propagationTests);
+
   group('writes stay visible synchronously (the TD-059 keystore trap)', () {
     // Hive applies a put to its in-memory keystore synchronously and returns
     // a Future only for the disk flush, so a caller that does not await still
@@ -204,5 +206,80 @@ void bestEffortTests() {
     final task = await r.create('h1', {'title': 'Tarea'});
 
     expect(task.id, 'server-1');
+  });
+}
+
+/// Propagation policy (TD-059): an offline write the user was promised would
+/// sync must NOT report success if it could not be persisted.
+void propagationTests() {
+  late FakeBox<Task> tasks;
+  late FakeBox<PendingOperation> pending;
+  late FakeConnectivityService connectivity;
+
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+    tasks = FakeBox<Task>();
+    pending = FakeBox<PendingOperation>();
+    connectivity = FakeConnectivityService()..online = false;
+    CacheService().debugInjectBoxes(tasks: tasks, pendingOperations: pending);
+  });
+
+  tearDown(() => CacheService().debugResetBoxes());
+
+  TaskRepository repo() {
+    final dio = Dio(BaseOptions(baseUrl: 'http://test.local/api'))
+      ..httpClientAdapter = _StubAdapter(const {'success': true, 'data': {}});
+    return TaskRepository(ApiService(AuthLocalDataSource(), dio: dio),
+        connectivity: connectivity);
+  }
+
+  test('offline create succeeds normally when both writes land', () async {
+    final task = await repo().create('h1', {'title': 'Tarea'});
+
+    expect(task.isSynced, isFalse);
+    expect(tasks.entries, hasLength(1));
+    expect(pending.entries, hasLength(1),
+        reason: 'entity and queued operation both persisted');
+  });
+
+  test('offline create throws when the entity write fails', () async {
+    tasks.failWrites = true;
+
+    await expectLater(
+        repo().create('h1', {'title': 'Tarea'}), throwsA(anything));
+    expect(pending.entries, isEmpty,
+        reason: 'nothing queued for an entity that never landed');
+  });
+
+  test('offline create rolls the entity back when queueing fails', () async {
+    pending.failWrites = true;
+
+    await expectLater(
+        repo().create('h1', {'title': 'Tarea'}), throwsA(anything));
+    expect(tasks.entries, isEmpty,
+        reason: 'an unsynced entity with no queued operation could never sync, '
+            'so it must not be left behind');
+  });
+
+  test('offline delete restores the previous entity when queueing fails',
+      () async {
+    await CacheService().saveTask(const Task(
+      id: 't1',
+      householdId: 'h1',
+      title: 'Original',
+      status: 'pending',
+      priority: 'medium',
+      category: 'other',
+      assignedTo: [],
+      isSynced: true,
+    ));
+    pending.failWrites = true;
+
+    await expectLater(repo().delete('h1', 't1'), throwsA(anything));
+
+    final restored = tasks.entries['t1'] as Task;
+    expect(restored.isDeleted, isFalse,
+        reason: 'the delete mark must be undone, not left applied');
+    expect(restored.isSynced, isTrue);
   });
 }
