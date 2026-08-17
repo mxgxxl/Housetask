@@ -270,3 +270,15 @@ Funcionalidad identificada pero fuera de alcance de las rondas que la mencionaro
 - **Deep-link a tarea específica desde push notification (PDR-008):** hoy tocar una notificación que abrió la app desde background (`onMessageOpenedApp`) solo navega al shell principal (pestaña de tareas) — no existe todavía una ruta de deep-link por tarea, así que no abre la tarea exacta.
 - **Background/terminated message handling para push notifications (PDR-008):** hoy `NotificationService` solo maneja foreground (banner local vía `showLocalNotification`) y background→foreground vía tap (`onMessageOpenedApp`). Falta `onBackgroundMessage`/`getInitialMessage` para el caso de mensaje recibido con la app en background o terminada.
 - **Recordatorios de tareas próximas vía push (PDR-003):** PDR-003 lo menciona como "futuro" — requiere lógica de scheduling server-side (hoy los recordatorios de `flutter_local_notifications` son solo locales, calculados client-side a partir de `dueDate`/`startsAt`, sin contraparte de push server-driven).
+
+---
+
+## 2026-08-17 — CI: validar que los docs enlazados por AGENTS.md existen
+
+Propuesto por: Codex en PR #32.
+
+Motivo: evitar referencias rotas en el contexto de agentes.
+
+Estado: pendiente. Requiere check adicional en `ci.yml` que verifique que `CLAUDE.md`, `docs/AGENT_FALLBACK.md`, `docs/PRODUCT_DECISIONS.md`, `docs/TECH_DEBT.md`, `docs/ROADMAP.md`, `docs/NEXT_SESSION_MAC.md` existan antes de permitir merge.
+
+Ampliación (integración AGENTS.legacy.md → AGENTS.md, 2026-08-17): el mismo check puede cubrir un segundo riesgo introducido por esa integración. Las secciones normativas (Hard Rules, convenciones de TypeScript/Dart, modelos de BD, Testing Standards, Git Workflow, seed data) están ahora duplicadas literalmente en `AGENTS.md` y `CLAUDE.md`, así que pueden divergir sin que nada avise. Un `diff` de esos bloques entre ambos archivos, fallando si no coinciden, cerraría el hueco por el mismo precio que el check de existencia.
