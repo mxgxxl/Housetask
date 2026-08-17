@@ -40,6 +40,24 @@ jobs:
               - 'frontend/**'
               - '.github/workflows/ci.yml'
 
+  # Documentation consistency (IMPROVEMENTS.md, 2026-08-17): AGENTS.md's
+  # "read this first" links resolve, CLAUDE.md's short open-TD table agrees
+  # with docs/TECH_DEBT.md, and the convention blocks AGENTS.md duplicates
+  # from CLAUDE.md are still byte-identical.
+  #
+  # Deliberately NOT behind the `changes` filter above, unlike backend and
+  # frontend: the drift this catches is caused precisely by docs-only edits,
+  # which is exactly what a path filter would skip. Affordable because it is
+  # pure bash — no toolchain to install, no cache to restore, no service
+  # container, a few seconds per run (TD-008: keep this workflow lightweight).
+  docs:
+    name: Docs (links, TD registry, duplicated blocks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/check_docs.sh
+
   backend:
     name: Backend (typecheck, build, test)
     needs: changes
