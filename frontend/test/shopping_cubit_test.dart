@@ -355,4 +355,18 @@ void main() {
       expect(repo.syncCalls, 0);
     });
   });
+
+  group('ShoppingCubit.reset (TD-058)', () {
+    test('drops every item back to the initial state', () async {
+      final cubit = ShoppingCubit(FakeShoppingRepository(pages: [page([buildItem('1')])]));
+      await cubit.load('h1');
+      expect(cubit.state.items, isNotEmpty);
+      expect(cubit.householdId, 'h1');
+
+      cubit.reset();
+
+      expect(cubit.state, const ShoppingState());
+      expect(cubit.householdId, isNull);
+    });
+  });
 }

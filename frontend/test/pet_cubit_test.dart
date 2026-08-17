@@ -206,4 +206,28 @@ void main() {
       expect(repo.getPetCalls, 2);
     });
   });
+
+  group('PetCubit.reset (TD-058)', () {
+    test('drops the loaded pet back to the initial state', () async {
+      final cubit = PetCubit(FakePetRepository(pet: buildPet('p1')));
+      await cubit.load('h1', 'me');
+      expect(cubit.state.pet, isNotNull);
+
+      cubit.reset();
+
+      expect(cubit.state, const PetState());
+    });
+
+    test('forgets the household/user ids, so refresh() stays a no-op until a fresh load()',
+        () async {
+      final repo = FakePetRepository(pet: buildPet('p1'));
+      final cubit = PetCubit(repo);
+      await cubit.load('h1', 'me');
+
+      cubit.reset();
+      await cubit.refresh();
+
+      expect(repo.getPetCalls, 1, reason: 'only the original load() should have reached the repo');
+    });
+  });
 }
