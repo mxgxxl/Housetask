@@ -4,12 +4,12 @@ HomeSync usa como fuente principal de contexto el archivo CLAUDE.md.
 
 Cualquier agente que trabaje en este repositorio debe leer antes:
 
-- CLAUDE.md
-- docs/AGENT_FALLBACK.md
-- docs/PRODUCT_DECISIONS.md
-- docs/TECH_DEBT.md
-- docs/ROADMAP.md
-- docs/NEXT_SESSION_MAC.md
+- [CLAUDE.md](CLAUDE.md)
+- [docs/AGENT_FALLBACK.md](docs/AGENT_FALLBACK.md)
+- [docs/PRODUCT_DECISIONS.md](docs/PRODUCT_DECISIONS.md)
+- [docs/TECH_DEBT.md](docs/TECH_DEBT.md)
+- [docs/ROADMAP.md](docs/ROADMAP.md)
+- [docs/NEXT_SESSION_MAC.md](docs/NEXT_SESSION_MAC.md)
 
 ## Reglas críticas
 
@@ -67,6 +67,7 @@ y sigue siendo lectura obligatoria.
 
 ---
 
+<!-- sync-start: hard-rules -->
 ## 🚫 Hard Rules (Never Break These)
 
 1. NEVER store passwords in plain text or return them in responses
@@ -87,6 +88,7 @@ y sigue siendo lectura obligatoria.
 16. NEVER leave orphaned references when a member leaves a household: their pending assigned tasks MUST be unassigned (removed from `assignedTo`), tasks they created MUST be preserved, and the UI MUST render "Ex-miembro" for a former assignee. (Enforced since the TD-018 commit; see household.service.ts's unassignDepartedMemberTasks and task_tile.dart's AvatarStack)
 17. NEVER allow edit/delete of a task by anyone other than the creator or an admin; any member may complete tasks and purchase shopping items. (Enforced since the TD-011 commit; see tasks.test.ts permission tests)
 18. NEVER render user-supplied text in any HTML-capable surface (future web client, email templates, push deep-links) without escaping at render time; mobile Text() widgets are safe by construction, storage stays raw per ADR-009
+<!-- sync-end: hard-rules -->
 
 ---
 
@@ -109,6 +111,7 @@ y sigue siendo lectura obligatoria.
 
 ---
 
+<!-- sync-start: api-conventions -->
 ## 📋 API Conventions
 
 ### Response Envelope
@@ -145,9 +148,11 @@ Error:    { "success": false, "error": "Human-readable message" }
 - Use `copyWith` pattern for state updates
 - No business logic in widgets — delegate to Cubits
 - All async operations in Cubits must handle errors explicitly
+<!-- sync-end: api-conventions -->
 
 ---
 
+<!-- sync-start: database-models -->
 ## 🗄️ Database Models
 
 Tables below mirror `backend/src/models/*.ts` field by field. All five schemas use
@@ -244,9 +249,11 @@ single-field indexes on `householdId` and `isPurchased`.
 
 Does **not** apply `jsonSchemaOptions`: these documents are internal and never serialized
 to clients.
+<!-- sync-end: database-models -->
 
 ---
 
+<!-- sync-start: testing-standards -->
 ## 🧪 Testing Standards
 
 Testing stack installed: Jest + Supertest + mongodb-memory-server (backend); flutter_test + bloc_test (frontend). CI runs the full suite on every PR — 298 backend tests (20 suites), 216 frontend tests in the main blocking step, plus `test/widgets/offline_banner_test.dart` run separately with allow-failure (TD-040).
@@ -268,9 +275,11 @@ Testing stack installed: Jest + Supertest + mongodb-memory-server (backend); flu
 4. Idempotency of write operations under retry (401 refresh retry, socket reconnect)
 5. Member-leave lifecycle (unassign pending tasks on leave/removal, preserve created tasks, last-admin protection) — covered by households.test.ts (TD-018 resolved).
 6. Widget rendering of offline/sync states (TaskTile unsynced/deleted, offline banner with pending count)
+<!-- sync-end: testing-standards -->
 
 ---
 
+<!-- sync-start: git-workflow -->
 ## 🌿 Git Workflow
 
 - **Branch naming:** `feat/description`, `fix/description`, `chore/description`, `refactor/description`
@@ -303,12 +312,14 @@ Should show only `project.pbxproj` with a lowercase 'h' prefix (assume-unchanged
 To temporarily allow commits (rare, only for legitimate changes):
 ```bash
 git update-index --no-assume-unchanged <file>
+<!-- sync-end: git-workflow -->
 # make change, commit
 git update-index --assume-unchanged <file>
 ```
 
 ---
 
+<!-- sync-start: local-dev-setup -->
 ## 🏃 Local Development Setup
 
 ### Backend
@@ -336,6 +347,7 @@ flutter run
 ```bash
 cd backend
 npx ts-node src/scripts/seed.ts
+<!-- sync-end: local-dev-setup -->
 # Creates: user test@test.com / password123, household "Casa de prueba" (code CASADEMO)
 ```
 
@@ -344,6 +356,7 @@ Swagger UI available at: `http://localhost:3000/api/docs`
 
 ---
 
+<!-- sync-start: frontend-theme -->
 ## 🎨 Frontend Theme
 
 - **Primary:** Indigo `#6366F1`
@@ -352,6 +365,7 @@ Swagger UI available at: `http://localhost:3000/api/docs`
 - **Design system:** Material 3
 - **Font:** Inter (via `google_fonts`)
 - **Language:** Spanish UI labels, date formatting with `intl` package
+<!-- sync-end: frontend-theme -->
 
 ---
 
@@ -370,6 +384,7 @@ These proposals don't need to be implemented immediately, but they MUST be docum
 
 ---
 
+<!-- sync-start: working-with-ai -->
 ## 🤖 Working with AI Assistants
 
 When generating code for this project:
@@ -386,6 +401,7 @@ When generating code for this project:
 10. **Test your changes** — verify existing tests still pass
 11. **Propose improvements** — always include "💡 Proposed Improvements" section
 12. **Think in production** — consider security, performance, scalability, observability
+<!-- sync-end: working-with-ai -->
 
 ---
 
