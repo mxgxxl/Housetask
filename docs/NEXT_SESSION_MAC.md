@@ -32,5 +32,12 @@
 
 ## Siguiente tarea
 
-1. Check de CI documental (enlaces de AGENTS.md, divergencia AGENTS/CLAUDE,
-   tabla TDs de CLAUDE vs TECH_DEBT) — requiere aprobación.
+Sin pendientes de proceso: el check de CI documental quedó implementado el
+2026-08-17 (job `docs` + `scripts/check_docs.sh`, ver `IMPROVEMENTS.md`).
+
+Los siguientes candidatos son trabajo real de código, el Top 3 de Mac que ya
+está detallado más abajo:
+
+1. **TD-040** — investigar el cuelgue de `offline_banner_test.dart`.
+2. **TD-001** — migrar `members` embebido a una colección separada.
+3. **TD-007** — optimistic updates en frontend.

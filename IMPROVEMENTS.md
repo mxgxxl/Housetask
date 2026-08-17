@@ -279,6 +279,18 @@ Propuesto por: Codex en PR #32.
 
 Motivo: evitar referencias rotas en el contexto de agentes.
 
-Estado: pendiente. Requiere check adicional en `ci.yml` que verifique que `CLAUDE.md`, `docs/AGENT_FALLBACK.md`, `docs/PRODUCT_DECISIONS.md`, `docs/TECH_DEBT.md`, `docs/ROADMAP.md`, `docs/NEXT_SESSION_MAC.md` existan antes de permitir merge.
+Estado: **Implementado (2026-08-17)**. Job `docs` en `.github/workflows/ci.yml` ejecutando `scripts/check_docs.sh` (bash puro, sin dependencias), en todo PR y en push a `main`.
 
-Ampliación (integración AGENTS.legacy.md → AGENTS.md, 2026-08-17): el mismo check puede cubrir un segundo riesgo introducido por esa integración. Las secciones normativas (Hard Rules, convenciones de TypeScript/Dart, modelos de BD, Testing Standards, Git Workflow, seed data) están ahora duplicadas literalmente en `AGENTS.md` y `CLAUDE.md`, así que pueden divergir sin que nada avise. Un `diff` de esos bloques entre ambos archivos, fallando si no coinciden, cerraría el hueco por el mismo precio que el check de existencia.
+Alcance final, los tres checks:
+
+1. **Enlaces:** todo `[texto](ruta.md)` de `AGENTS.md` debe resolver. Se validan enlaces markdown reales, no menciones en prosa — así `AGENTS.legacy.md`, citado en la nota de decisión y borrado a propósito, no se exige que exista, y la regla no necesita allowlist.
+2. **Registro de TDs:** ningún TD de la tabla corta "Currently open TDs" de `CLAUDE.md` puede figurar como Resolved en `docs/TECH_DEBT.md`, y todos deben existir allí. Cubre la ampliación descrita abajo y el caso real de TD-002/TD-015.
+3. **Bloques duplicados:** los ocho bloques envueltos en `<!-- sync-start: <slug> -->` / `<!-- sync-end: <slug> -->` deben ser idénticos byte a byte entre `AGENTS.md` y `CLAUDE.md`.
+
+Ampliación (integración AGENTS.legacy.md → AGENTS.md, 2026-08-17): el mismo check cubre un segundo riesgo introducido por esa integración. Las secciones normativas (Hard Rules, convenciones de TypeScript/Dart, modelos de BD, Testing Standards, Git Workflow, seed data) quedaron duplicadas literalmente en `AGENTS.md` y `CLAUDE.md`, así que podían divergir sin que nada avisara. Resuelto por el check 3.
+
+Decisión de diseño: marcadores HTML en vez de un diff por encabezados. Un diff posicional depende de que los encabezados no se renombren, no se re-aniden y no se muevan; cualquiera de esas tres cosas cambiaría en silencio qué se compara. Los marcadores son explícitos, invisibles en markdown renderizado, y convierten un marcador borrado por accidente en un fallo ruidoso en vez de en una comprobación que se salta sin avisar.
+
+El job va fuera del filtro de rutas `changes` a propósito: la deriva que detecta la producen precisamente los cambios solo-docs, que es lo que ese filtro se salta. El coste es de segundos, así que no contradice TD-008.
+
+Pendiente menor: el check 1 solo mira `AGENTS.md`. Extenderlo a los enlaces de `CLAUDE.md` (que apunta a `docs/ADRs.md`, entre otros) es una línea más de script, pero quedó fuera del alcance pedido.
