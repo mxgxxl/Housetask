@@ -162,11 +162,11 @@ class TaskRepository {
     }
   }
 
-  Task _createOffline(
+  Future<Task> _createOffline(
     String householdId,
     Map<String, dynamic> payload,
     String idempotencyKey,
-  ) {
+  ) async {
     final localId = 'local-${_uuid.v4()}';
     final task = Task.fromJson({
       ...payload,
@@ -174,8 +174,8 @@ class TaskRepository {
       'householdId': householdId,
       'isSynced': false,
     });
-    _cache.saveTask(task);
-    _cache.addPendingOperation(PendingOperation(
+    await _cache.saveTask(task);
+    await _cache.addPendingOperation(PendingOperation(
       id: _uuid.v4(),
       type: PendingOperationType.create,
       entity: PendingOperationEntity.task,
@@ -234,7 +234,7 @@ class TaskRepository {
     return Task.fromJson(data as Map<String, dynamic>);
   }
 
-  Task _mutateOffline(String householdId, String taskId, Map<String, dynamic> payload) {
+  Future<Task> _mutateOffline(String householdId, String taskId, Map<String, dynamic> payload) async {
     final cached = _cache.getTasks(householdId).where((t) => t.id == taskId).toList();
     final base = cached.isEmpty ? null : cached.first;
     final merged = Task.fromJson({
@@ -244,8 +244,8 @@ class TaskRepository {
       'householdId': householdId,
       'isSynced': false,
     });
-    _cache.saveTask(merged);
-    _cache.addPendingOperation(PendingOperation(
+    await _cache.saveTask(merged);
+    await _cache.addPendingOperation(PendingOperation(
       id: _uuid.v4(),
       type: PendingOperationType.update,
       entity: PendingOperationEntity.task,
@@ -278,15 +278,15 @@ class TaskRepository {
     return _deleteOffline(householdId, taskId);
   }
 
-  Task _deleteOffline(String householdId, String taskId) {
+  Future<Task> _deleteOffline(String householdId, String taskId) async {
     final cached = _cache.getTasks(householdId).where((t) => t.id == taskId).toList();
     final marked = (cached.isEmpty ? null : cached.first)?.copyWith(
           isDeleted: true,
           isSynced: false,
         ) ??
         Task(id: taskId, householdId: householdId, title: '', isSynced: false, isDeleted: true);
-    _cache.saveTask(marked);
-    _cache.addPendingOperation(PendingOperation(
+    await _cache.saveTask(marked);
+    await _cache.addPendingOperation(PendingOperation(
       id: _uuid.v4(),
       type: PendingOperationType.delete,
       entity: PendingOperationEntity.task,

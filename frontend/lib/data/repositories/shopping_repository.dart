@@ -98,11 +98,11 @@ class ShoppingRepository {
     }
   }
 
-  ShoppingItem _createOffline(
+  Future<ShoppingItem> _createOffline(
     String householdId,
     Map<String, dynamic> payload,
     String idempotencyKey,
-  ) {
+  ) async {
     final localId = 'local-${_uuid.v4()}';
     final item = ShoppingItem.fromJson({
       ...payload,
@@ -110,8 +110,8 @@ class ShoppingRepository {
       'householdId': householdId,
       'isSynced': false,
     });
-    _cache.saveShoppingItem(item);
-    _cache.addPendingOperation(PendingOperation(
+    await _cache.saveShoppingItem(item);
+    await _cache.addPendingOperation(PendingOperation(
       id: _uuid.v4(),
       type: PendingOperationType.create,
       entity: PendingOperationEntity.shopping,
@@ -164,11 +164,11 @@ class ShoppingRepository {
     return _mutateOffline(householdId, itemId, const {'isPurchased': true});
   }
 
-  ShoppingItem _mutateOffline(
+  Future<ShoppingItem> _mutateOffline(
     String householdId,
     String itemId,
     Map<String, dynamic> payload,
-  ) {
+  ) async {
     final cached = _cache.getShopping(householdId).where((i) => i.id == itemId).toList();
     final base = cached.isEmpty ? null : cached.first;
     final merged = ShoppingItem.fromJson({
@@ -178,8 +178,8 @@ class ShoppingRepository {
       'householdId': householdId,
       'isSynced': false,
     });
-    _cache.saveShoppingItem(merged);
-    _cache.addPendingOperation(PendingOperation(
+    await _cache.saveShoppingItem(merged);
+    await _cache.addPendingOperation(PendingOperation(
       id: _uuid.v4(),
       type: PendingOperationType.update,
       entity: PendingOperationEntity.shopping,
@@ -209,7 +209,7 @@ class ShoppingRepository {
     return _deleteOffline(householdId, itemId);
   }
 
-  ShoppingItem _deleteOffline(String householdId, String itemId) {
+  Future<ShoppingItem> _deleteOffline(String householdId, String itemId) async {
     final cached = _cache.getShopping(householdId).where((i) => i.id == itemId).toList();
     final marked = (cached.isEmpty ? null : cached.first)?.copyWith(
           isDeleted: true,
@@ -222,8 +222,8 @@ class ShoppingRepository {
           isSynced: false,
           isDeleted: true,
         );
-    _cache.saveShoppingItem(marked);
-    _cache.addPendingOperation(PendingOperation(
+    await _cache.saveShoppingItem(marked);
+    await _cache.addPendingOperation(PendingOperation(
       id: _uuid.v4(),
       type: PendingOperationType.delete,
       entity: PendingOperationEntity.shopping,
