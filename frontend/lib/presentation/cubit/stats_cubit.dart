@@ -60,4 +60,10 @@ class StatsCubit extends Cubit<StatsState> {
       emit(state.copyWith(status: StatsStatusUi.error, error: f.message));
     }
   }
+
+  /// Drop the loaded stats — called on logout/session-expiry (TD-058),
+  /// mirroring [TaskCubit.reset]. Unlike the other domain cubits, StatsCubit
+  /// never persists a household id between calls, so there is nothing else
+  /// to forget.
+  void reset() => emit(const StatsState());
 }

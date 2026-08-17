@@ -129,5 +129,8 @@ class HouseholdCubit extends Cubit<HouseholdState> {
     }
   }
 
+  /// Drop the active household — called on logout/session-expiry (TD-058),
+  /// alongside the equivalent `reset()` on TaskCubit/ShoppingCubit/PetCubit/
+  /// StatsCubit.
   void reset() => emit(const HouseholdState());
 }

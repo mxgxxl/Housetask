@@ -1215,6 +1215,50 @@ void main() {
       expect(cubit.state.trashTasks, seeded);
     });
   });
+
+  group('TaskCubit.reset (TD-058)', () {
+    test('drops every bucket/timeline/recurring/trash entry back to the initial state', () async {
+      final cubit = TaskCubit(
+        FakeTaskRepository(
+          pages: [page([buildTask('1')])],
+          timelinePages: [page([buildTask('1', dueDate: DateTime.now())])],
+        ),
+        FakeNotificationService(),
+      );
+      await cubit.load('h1');
+      await cubit.loadTimeline('h1');
+      cubit.emit(cubit.state.copyWith(
+        recurringTasks: [buildTask('r1', isRecurring: true)],
+        trashTasks: [buildTask('d1', isDeleted: true)],
+      ));
+      expect(cubit.state.allTasks, isNotEmpty);
+      expect(cubit.state.timelineDays, isNotEmpty);
+      expect(cubit.householdId, 'h1');
+
+      cubit.reset();
+
+      expect(cubit.state, const TaskState());
+      expect(cubit.householdId, isNull);
+    });
+
+    test('a load() after reset() starts a fresh fetch rather than being treated as a no-op',
+        () async {
+      final repo = FakeTaskRepository(pages: [
+        page([buildTask('1')]),
+        page([buildTask('1')]),
+      ]);
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+      cubit.reset();
+
+      await cubit.load('h1');
+
+      // Two real fetches: reset() must not leave stale "already loaded"
+      // bucket state that would make the second load() a silent no-op.
+      expect(repo.listCalls, 2);
+      expect(cubit.state.allTasks, isNotEmpty);
+    });
+  });
 }
 
 /// First page succeeds, second fails — models a mid-scroll network drop.

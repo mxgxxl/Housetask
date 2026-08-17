@@ -161,7 +161,7 @@ Detailed ADRs live in docs/ADRs.md. Index:
 2. **Access token** sent as `Authorization: Bearer <token>` header
 3. **Refresh token** stored SHA-256 hashed in the refreshtokens collection (rotated on use, deleted on logout); a DB leak never yields usable sessions
 4. **Frontend** auto-refreshes on 401 with single-flight pattern (deduplicates concurrent refresh calls)
-5. **If refresh fails** → force logout via `onSessionExpired` callback
+5. **If refresh fails** → force logout via `onSessionExpired` callback; `SessionListeners` (`frontend/lib/presentation/widgets/session_listeners.dart`, wrapping `MaterialApp` in `app.dart`) reacts to the resulting `unauthenticated` `AuthState` app-wide — disconnects the socket, resets every domain cubit (Task/Shopping/Household/Pet/Stats), and routes to login via `Routes.navigatorKey`, regardless of which page happens to be on screen (TD-055/TD-058, 2026-08-17; previously only `SplashPage` reacted, so a mid-session expiry left the user stranded)
 
 **Security rules:**
 - Passwords hashed with bcrypt, never returned in responses
@@ -447,10 +447,8 @@ The full registry (~47 entries, all history) lives in [Full Technical Debt Regis
 | TD-040 | flutter test hangs on loaded hosts (offline_banner_test.dart) | Low | Mitigated in CI; root cause still open |
 | TD-049 | No real Firebase project connected for push notifications (PDR-008) — code is in place, no push actually delivers until a Firebase project + `flutterfire configure` + APNs key are set up manually | High | Planned (before beta push notifications can work) |
 | TD-054 | Access token stays valid up to 15 min after logout (stateless-JWT tradeoff, documented not fixed) | Low | Planned |
-| TD-055 | Session expiry emits `unauthenticated` but no mounted widget listens for it — the user is never routed back to login | High | Open (frontend scan round 2) |
 | TD-056 | `TaskState.timelineCursor` is nulled by nearly every `emit`, so the PDR-003 timeline can never page within its window | High | Open (frontend scan round 2) |
 | TD-057 | Offline sync loses an update/delete whose create synced in an earlier batch (`idRemap` is per-call, not persisted) | High | Open (frontend scan round 2) |
-| TD-058 | Task/Shopping/Pet/Stats cubits keep the previous account's data in memory across logout | High | Open (frontend scan round 2) |
 
 ---
 
@@ -754,6 +752,7 @@ Las decisiones de producto (monetización, gamificación, UX de alto nivel) vive
 | `frontend/lib/data/datasources/remote/api_service.dart` | Dio client with auth interceptors |
 | `frontend/lib/services/socket_service.dart` | Socket.io singleton |
 | `frontend/lib/services/notification_service.dart` | Local task reminders + FCM push registration/foreground display (PDR-008) |
+| `frontend/lib/presentation/widgets/session_listeners.dart` | App-wide `AuthCubit` reactions (push registration on login; socket teardown + domain-cubit resets + routing to login on logout/session-expiry, TD-055/TD-058) — wraps `MaterialApp` in `app.dart` |
 | `frontend/lib/presentation/cubit/task_cubit.dart` | Task state management |
 | `frontend/lib/presentation/cubit/pet_cubit.dart` | Pet/adoption/economy state management |
 | `frontend/lib/presentation/pages/pet_page.dart` | Pet tab: adoption flow, care view (feed/play) |

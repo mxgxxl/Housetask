@@ -141,6 +141,14 @@ class ShoppingCubit extends Cubit<ShoppingState> {
 
   String? get householdId => _householdId;
 
+  /// Drop every item and the active household — called on logout/session-
+  /// expiry (TD-058), mirroring [TaskCubit.reset]. The connectivity
+  /// subscription is left running (cubit-lifetime, torn down in [close]).
+  void reset() {
+    _householdId = null;
+    emit(const ShoppingState());
+  }
+
   /// Replay the queued offline operations, then refresh from the server if
   /// anything was actually applied — called automatically on reconnection.
   Future<void> syncPending() async {

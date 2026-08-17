@@ -346,6 +346,17 @@ class TaskCubit extends Cubit<TaskState> {
 
   String? get householdId => _householdId;
 
+  /// Drop every task, timeline/recurring/trash entry and pagination cursor
+  /// and forget the active household — called on logout/session-expiry
+  /// (TD-058) so the next login's first frame never renders the previous
+  /// account's tasks while its own [load] is still in flight. The
+  /// connectivity subscription set up in the constructor is left running
+  /// (it is a cubit-lifetime resource torn down in [close], not per-session).
+  void reset() {
+    _householdId = null;
+    emit(const TaskState());
+  }
+
   /// Replay the queued offline operations, then refresh from the server if
   /// anything was actually applied — called automatically on reconnection,
   /// and available for a manual "retry sync" action in the UI.
