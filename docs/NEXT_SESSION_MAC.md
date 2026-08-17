@@ -36,15 +36,28 @@ El check de CI documental quedó implementado el 2026-08-17 (job `docs` +
 `scripts/check_docs.sh`, PR #35 fusionado — ver `IMPROVEMENTS.md`), así que no
 queda ningún pendiente de proceso bloqueante.
 
-1. **Decidir siguiente tarea del backlog:**
-   - ~~Quick-win TD-016 (CORS fail-fast) desde móvil~~ — **descartado: TD-016
-     ya está Resolved**, implementado en el PR #22 y verificado el 2026-08-16
-     (`utils/env.ts`, `validateProductionEnv`; ver `docs/TECH_DEBT.md` y la
-     Hard Rule 15). Figuraba como quick-win en el grooming del 2026-08-16 y
-     quedó obsoleto ese mismo día.
-   - Top-3 de Mac: TD-040 (cuelgue `offline_banner_test`), TD-001 (migración
-     `members`), TD-007 (optimistic updates). Ver "Pendientes arrastrados"
-     arriba.
+1. **TD-007 — optimistic updates en frontend.** Es el siguiente del Top-3 de
+   Mac ahora que TD-040 está cerrado. Toca `TaskCubit` y `ShoppingCubit` y su
+   interacción con la cola offline (TD-003 / ADR-010).
+2. **TD-001 — migrar `members` embebido a colección separada.** La migración
+   más grande del backlog abierto.
+
+### Cerrado en esta sesión
+
+**TD-040 — Resolved (2026-08-17), resultado A: la causa raíz era nuestra, no
+del toolchain.** El 4º test de `offline_banner_test.dart` escribía en Hive
+(`Box.put()`, escritura real a disco) dentro de la zona fake-async de
+`testWidgets`; el callback de finalización queda agendado en el reloj falso,
+que deja de bombearse al terminar el cuerpo del test, así que la escritura
+nunca completa y el lock de la box no se libera — y el `clearAll()` del
+`tearDown` se queda esperándolo para siempre. De ahí el 0% de CPU sin fallo de
+aserción. Fix de una línea en el propio test (`tester.runAsync`); los 6 tests
+pasan en <1s y la suite completa (234 tests) en verde. Ver `docs/TECH_DEBT.md`.
+
+**Pendiente de aprobación del dueño:** retirar el `continue-on-error` del paso
+aislado de `offline_banner_test.dart` en `.github/workflows/ci.yml` y plegarlo
+al paso bloqueante. No se tocó `ci.yml` en esta sesión por la regla de
+aprobación previa.
 
 ### Pendientes menores
 
