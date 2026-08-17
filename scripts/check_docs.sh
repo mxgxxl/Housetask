@@ -110,13 +110,20 @@ else
       }
     ' "$TECH_DEBT")
 
+    # Comparison form: leading markdown emphasis/whitespace removed.
+    status_text=$(printf '%s' "$status" | sed -E 's/^[*_[:space:]]+//')
+
     if [ -z "$status" ]; then
       fail "$td está en la tabla corta de $CLAUDE pero no existe en $TECH_DEBT"
     elif [ "$status" = "MALFORMED" ]; then
       fail "$td: fila con formato inesperado en $TECH_DEBT"
-    elif [ "${status#Resolved}" != "$status" ]; then
+    elif [ "${status_text#Resolved}" != "$status_text" ]; then
       # Prefix match: "Partially resolved (...)" is still open, and must not
       # trip this. Only a status that *starts* with "Resolved" counts.
+      # Leading markdown emphasis is stripped first -- "**Resolved (...)**"
+      # is the same status as "Resolved (...)", and comparing the raw string
+      # silently missed it (found the first time an entry was written in
+      # bold, 2026-08-17, TD-040).
       fail "$td figura como abierto en $CLAUDE pero Resolved en $TECH_DEBT"
     else
       ok "$td abierto en ambos (\"${status:0:40}...\")"
