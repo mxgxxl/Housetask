@@ -21,8 +21,14 @@
 
 - 2026-08-16: backlog grooming móvil; TD-002 y TD-015 Resolved.
 - 2026-08-17: PR #32 config fallback (Codex); PR #33 integración legacy
-  (Claude); PR #34 sync (Codex). Plan free de Codex activo y validado.
+  (Claude); PR #34 sync (Codex, cerrado como superseded sin merge). Plan free de Codex activo y validado.
   gh instalado; Codex CLI instalado y autenticado.
+
+## Pendientes arrastrados (grooming 2026-08-16)
+
+- TD-040: CI se cuelga en `offline_banner_test.dart` (runs 31932316995 y 31931761644, ~192 s, solo 3 tests completan).
+- TD-010: verificar backups en el dashboard de MongoDB Atlas/Railway.
+- Top-3 Mac: TD-040, TD-001 y TD-007.
 
 ## Siguiente tarea
 
