@@ -162,26 +162,17 @@ jobs:
       - run: flutter analyze --no-fatal-infos
 
       # TD-044: runs the full suite (test/ + test/widgets/) in one blocking
-      # step, except offline_banner_test.dart — TD-040's hang is specific to
-      # that one file (confirmed to reproduce even in complete isolation);
-      # every other file here already ran clustered together without issue,
-      # so there's no reason left to shard them into separate steps. find
+      # step. offline_banner_test.dart used to be carved out into its own
+      # allow-failure step because it hung; TD-040 was root-caused and fixed
+      # on 2026-08-17 (a real Hive write inside testWidgets' fake-async zone
+      # deadlocked tearDown — never a host stall), so the carve-out is gone
+      # and a regression there fails CI again instead of passing green. find
       # picks up new *_test.dart files automatically, so a future addition
       # under test/ or test/widgets/ needs no workflow edit to be covered.
-      - name: Test — test/ and test/widgets/ (except offline_banner_test.dart)
+      - name: Test — test/ and test/widgets/
         run: |
-          mapfile -t files < <(find test -name "*_test.dart" ! -name "offline_banner_test.dart")
+          mapfile -t files < <(find test -name "*_test.dart")
           flutter test "${files[@]}"
-
-      - name: Test — test/widgets/offline_banner_test.dart (TD-040 known issue, allow-failure)
-        # TD-040: this specific file hangs on loaded hosts even in complete
-        # isolation (frontend_server_aot's CPU time stalls) — a toolchain/host
-        # stall, not root-caused yet. Bounded timeout so a hang can't eat this
-        # job's whole budget, and continue-on-error so it can't block the
-        # rest of CI on an issue nothing in this repo's code can fix yet.
-        timeout-minutes: 3
-        continue-on-error: true
-        run: flutter test test/widgets/offline_banner_test.dart
 
       # Android smoke test: ubuntu-latest ships the Android SDK pre-installed,
       # so this needs no extra setup beyond the JDK above.
