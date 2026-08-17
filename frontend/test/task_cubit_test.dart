@@ -691,6 +691,20 @@ void main() {
       final cubit = TaskCubit(repo, FakeNotificationService());
       await cubit.loadTimeline('h1');
       final windowToAfterLoad = cubit.state.timelineWindowTo;
+      expect(cubit.state.timelineCursor, 'c1');
+
+      // F11: the original version of this test called loadMoreTimeline()
+      // immediately after loadTimeline(), with no emit in between — which
+      // hid TD-056 (copyWith wiping timelineCursor on any unrelated emit),
+      // since nothing else ever got a chance to clear it. An unrelated
+      // cubit action (any copyWith call that doesn't mention
+      // timelineCursor) interleaved here reproduces a real app's actual
+      // emit pattern — MainScaffold fires several loads back to back, and
+      // realtime events can land at any time — and must NOT lose the
+      // cursor, or loadMoreTimeline below would incorrectly widen the
+      // window instead of draining this page via the cursor.
+      cubit.clearOfflineNotice();
+      expect(cubit.state.timelineCursor, 'c1');
 
       await cubit.loadMoreTimeline();
 
@@ -1257,6 +1271,156 @@ void main() {
       // bucket state that would make the second load() a silent no-op.
       expect(repo.listCalls, 2);
       expect(cubit.state.allTasks, isNotEmpty);
+    });
+  });
+
+  group('TaskState.copyWith (TD-056)', () {
+    /// Every field populated with a distinguishable non-default value, so a
+    /// field silently reverting to its default (rather than being genuinely
+    /// preserved) would still be caught.
+    TaskState fullyPopulated() => TaskState(
+          status: TaskStatusUi.loaded,
+          error: 'some error',
+          activeFilter: TaskFilter.pending,
+          buckets: {
+            TaskFilter.all: TaskBucket(
+              items: [buildTask('1')],
+              nextCursor: 'bc1',
+              hasMore: true,
+              total: 3,
+              loaded: true,
+            ),
+          },
+          isOffline: true,
+          offlineNotice: 'saved offline',
+          isSyncing: true,
+          timelineDays: {
+            DateTime(2026, 1, 1): [buildTask('2')],
+          },
+          timelineUndated: [buildTask('3')],
+          timelineCursor: 'tc1',
+          timelineHasMore: true,
+          timelineWindowFrom: DateTime(2026, 1, 1),
+          timelineWindowTo: DateTime(2026, 1, 10),
+          timelineLoading: true,
+          timelineLoadingMore: true,
+          timelineError: 'timeline error',
+          recurringTasks: [buildTask('4', isRecurring: true)],
+          recurringLoading: true,
+          recurringLoaded: true,
+          recurringError: 'recurring error',
+          trashTasks: [buildTask('5', isDeleted: true)],
+          trashLoading: true,
+          trashLoaded: true,
+          trashError: 'trash error',
+        );
+
+    test('copyWith() with no arguments preserves every field except the '
+        'deliberately one-shot offlineNotice', () {
+      final original = fullyPopulated();
+
+      final copied = original.copyWith();
+
+      // Reconstructed by hand (not original.copyWith(offlineNotice: null))
+      // so this test does not lean on the very method it is verifying.
+      final expected = TaskState(
+        status: original.status,
+        error: original.error,
+        activeFilter: original.activeFilter,
+        buckets: original.buckets,
+        isOffline: original.isOffline,
+        offlineNotice: null,
+        isSyncing: original.isSyncing,
+        timelineDays: original.timelineDays,
+        timelineUndated: original.timelineUndated,
+        timelineCursor: original.timelineCursor,
+        timelineHasMore: original.timelineHasMore,
+        timelineWindowFrom: original.timelineWindowFrom,
+        timelineWindowTo: original.timelineWindowTo,
+        timelineLoading: original.timelineLoading,
+        timelineLoadingMore: original.timelineLoadingMore,
+        timelineError: original.timelineError,
+        recurringTasks: original.recurringTasks,
+        recurringLoading: original.recurringLoading,
+        recurringLoaded: original.recurringLoaded,
+        recurringError: original.recurringError,
+        trashTasks: original.trashTasks,
+        trashLoading: original.trashLoading,
+        trashLoaded: original.trashLoaded,
+        trashError: original.trashError,
+      );
+
+      expect(copied, expected);
+      expect(copied.offlineNotice, isNull,
+          reason: 'offlineNotice is the one deliberate exception (see its doc comment)');
+      expect(copied.timelineCursor, 'tc1', reason: 'TD-056: must survive an untargeted copyWith');
+    });
+
+    test('each clearX flag nulls exactly its own field and leaves the other sticky ones alone', () {
+      final original = fullyPopulated();
+
+      expect(original.copyWith(clearError: true).error, isNull);
+      expect(original.copyWith(clearError: true).timelineCursor, 'tc1');
+
+      expect(original.copyWith(clearTimelineCursor: true).timelineCursor, isNull);
+      expect(original.copyWith(clearTimelineCursor: true).error, 'some error');
+
+      expect(original.copyWith(clearTimelineError: true).timelineError, isNull);
+      expect(original.copyWith(clearTimelineError: true).recurringError, 'recurring error');
+
+      expect(original.copyWith(clearRecurringError: true).recurringError, isNull);
+      expect(original.copyWith(clearRecurringError: true).trashError, 'trash error');
+
+      expect(original.copyWith(clearTrashError: true).trashError, isNull);
+      expect(original.copyWith(clearTrashError: true).timelineError, 'timeline error');
+    });
+
+    test('passing a new value overwrites regardless of the clearX flag', () {
+      final original = fullyPopulated();
+
+      final copied = original.copyWith(error: 'new error', timelineCursor: 'tc2');
+
+      expect(copied.error, 'new error');
+      expect(copied.timelineCursor, 'tc2');
+    });
+  });
+
+  group('TaskCubit.clearOfflineNotice (F7)', () {
+    test('clears only offlineNotice — error/timelineCursor/timelineError/recurringError/'
+        'trashError all survive', () async {
+      final repo = FakeTaskRepository(
+        pages: [page([buildTask('1')])],
+        timelinePages: [
+          page([buildTask('1', dueDate: DateTime.now())], nextCursor: 'tc1', hasMore: true),
+        ],
+      );
+      final cubit = TaskCubit(repo, FakeNotificationService());
+
+      // Reach a state with every field clearOfflineNotice must NOT touch,
+      // via the cubit's own real operations where possible (load/
+      // loadTimeline), so this reflects a state the app can actually land
+      // in — F7 was specifically that these got wiped as a side effect of
+      // an unrelated, purely-cosmetic "dismiss the offline banner" action.
+      await cubit.load('h1');
+      await cubit.loadTimeline('h1');
+      expect(cubit.state.timelineCursor, 'tc1');
+      cubit.emit(cubit.state.copyWith(
+        error: 'boom',
+        timelineError: 'timeline boom',
+        recurringError: 'recurring boom',
+        trashError: 'trash boom',
+        offlineNotice: kOfflineNoticeMessage,
+      ));
+      expect(cubit.state.offlineNotice, kOfflineNoticeMessage);
+
+      cubit.clearOfflineNotice();
+
+      expect(cubit.state.offlineNotice, isNull);
+      expect(cubit.state.error, 'boom');
+      expect(cubit.state.timelineCursor, 'tc1');
+      expect(cubit.state.timelineError, 'timeline boom');
+      expect(cubit.state.recurringError, 'recurring boom');
+      expect(cubit.state.trashError, 'trash boom');
     });
   });
 }
