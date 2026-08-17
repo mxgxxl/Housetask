@@ -185,6 +185,30 @@ Vale la pena registrarlos porque son la referencia contra la que se miden los ha
 5. **F10 (tests de Socket/Household/Stats cubits)** — habilita verificar los anteriores.
 6. F5, F8, F9, F12, F13 — mejoras de robustez sin urgencia.
 
+### Fix TD-055 + TD-058: ciclo de vida de sesión (2026-08-17)
+
+**Problema:** `AuthCubit` emitía `unauthenticated` pero ningún widget montado lo escuchaba fuera de `SplashPage`, ya desmontada tras el arranque (TD-055). Los cubits de dominio (Task/Shopping/Pet/Stats) conservaban los datos de la cuenta anterior en memoria tras logout — solo `HouseholdCubit` tenía `reset()` (TD-058).
+
+**Patrón elegido:** un widget dedicado, `SessionListeners` (nuevo archivo `presentation/widgets/session_listeners.dart`), envolviendo `MaterialApp` en `app.dart` — reemplaza el `BlocListener` de un solo propósito (push notifications) que ya vivía ahí por un `MultiBlocListener` con dos listeners sobre `AuthCubit`. Se descartaron las otras dos opciones que planteaba la tarea original:
+- **Inyectar los cubits de dominio en AuthCubit:** roto por el orden de construcción — `app.dart` crea `AuthCubit` ANTES que `TaskCubit`/`ShoppingCubit`/`HouseholdCubit`/`PetCubit`/`StatsCubit` (y `SocketCubit`, que ya depende de los cuatro primeros, se crea el último). Invertir ese orden para poder inyectarlos habría sido un cambio de arquitectura mayor de lo que TD-055/058 pedían.
+- **Un evento de dominio separado:** el proyecto ya tiene un patrón establecido para "una página coordina varios cubits vía `context.read`" (`SplashPage`/`LoginPage` ya hacen `HouseholdCubit.init()` + `SocketCubit.connectAndListen()` tras `authenticated`) — un widget-listener a nivel de app es la extensión natural de ese mismo patrón para `unauthenticated`, no una abstracción nueva.
+
+Extraerlo a su propio widget (en vez de dejarlo inline en `app.dart`, que habría sido más rápido) tiene una razón concreta: permite un test que ejercita la lógica real contra cubits falsos, sin levantar los repositorios/red/almacenamiento reales de `HomeSyncApp` — `app.dart` no admite inyección de dependencias, así que probarlo inline habría significado o bien no probarlo con fakes, o duplicar la lógica del listener en el test (con riesgo de que diverja del real).
+
+**Cambios:**
+- `frontend/lib/presentation/widgets/session_listeners.dart` (nuevo): `SessionListeners`, con los dos `BlocListener<AuthCubit, AuthState>` (push registration en `authenticated`; desconexión de socket + reset de los 5 cubits de dominio + navegación a login en la transición A `unauthenticated`).
+- `frontend/lib/app.dart`: usa `SessionListeners` en vez del `BlocListener` inline.
+- `frontend/lib/presentation/cubit/{task,shopping,pet,stats}_cubit.dart`: método `reset()` nuevo en cada uno (`household_cubit.dart` ya lo tenía; se le añadió un comentario cruzado).
+- `frontend/lib/presentation/pages/splash_page.dart`: su listener local se acota a `authenticated` — el caso `unauthenticated` ahora lo cubre el listener global.
+- `frontend/lib/presentation/pages/profile_page.dart`: `_logout()` simplificado a una sola llamada a `AuthCubit.logout()` — ya no hace a mano el `SocketCubit.disconnect()` + `HouseholdCubit.reset()` + navegación que antes solo cubría un cubit de los cinco.
+- Tests: `test/widgets/session_listeners_test.dart` (nuevo, 3 tests — expiración de sesión, logout con reset+desconexión, "cuenta nueva no hereda datos"), más tests unitarios de `reset()` en `task_cubit_test.dart` (×2), `shopping_cubit_test.dart`, `pet_cubit_test.dart` (×2).
+
+**Efecto colateral (bueno) sobre F6:** el hallazgo F6 de la ronda 2 ("un segundo `connectAndListen()` sin `disconnect()` de por medio deja un socket sin listeners de dominio") queda mitigado de facto — antes solo `ProfilePage._logout` llamaba `SocketCubit.disconnect()`; ahora TODA transición a `unauthenticated` (incluida la expiración de sesión, que antes no desconectaba nada) pasa por `disconnect()`, así que el próximo `connectAndListen()` siempre parte de `_listenersBound = false`. F6 no se cerró formalmente (no tenía TD propio) pero su escenario de disparo más probable ya no ocurre.
+
+**Fricción de testing encontrada (documentada como lección, no como TD):** `test/widgets/session_listeners_test.dart` inicialmente colgaba de forma determinista (~33s, mismo punto exacto cada vez) al llamar `await authCubit.logout()` dentro de un `testWidgets` con el árbol de widgets ya montado. Causa raíz: `logout()` hace una llamada Dio real (stubbed a nivel HTTP, pero sigue siendo E/S async real), y `testWidgets` ejecuta el cuerpo del test bajo el reloj fake de `AutomatedTestWidgetsFlutterBinding` — I/O real ahí puede colgarse indefinidamente porque nada avanza el reloj salvo `tester.pump()`. `auth_cubit_test.dart` ya evita este problema usando `test()` en vez de `testWidgets()` para su test de logout, pero esta ronda SÍ necesitaba un árbol de widgets montado (para observar la navegación). Fix: `tester.runAsync(() => authCubit.logout())`, que sale temporalmente de la zona fake-async. Efecto secundario del propio fix: `tester.runAsync` expuso un `MissingPluginException` de `connectivity_plus` (la suscripción que `TaskCubit`/`ShoppingCubit` hacen en su constructor a `ConnectivityService()`, normalmente absorbida por el `runZonedGuarded` de `ConnectivityService` sin que el test lo note) — resuelto pasando `connectivity: FakeConnectivityService()` a esos cubits en los tests que usan `runAsync`. Ninguno de los dos problemas apareció al correr los cubits aislados en `test()` puro (como ya hacían `task_cubit_test.dart`/`shopping_cubit_test.dart`), solo en la combinación `testWidgets` + `runAsync` + logout real que esta ronda introdujo por primera vez.
+
+**Validación:** a diferencia de las rondas de backend, esta sí se pudo ejecutar completa — se descargó Flutter 3.44.9 (la versión que fija CI, ver TD-041) en este entorno y se corrieron `flutter analyze` (limpio, solo los `info` preexistentes) y la suite completa de 224 tests (excluyendo `offline_banner_test.dart`, igual que CI por TD-040), todos en verde.
+
 ---
 
 ## Próximas mejoras pendientes
