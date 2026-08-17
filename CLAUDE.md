@@ -455,6 +455,7 @@ The full registry (~47 entries, all history) lives in [Full Technical Debt Regis
 | TD-049 | No real Firebase project connected for push notifications (PDR-008) — code is in place, no push actually delivers until a Firebase project + `flutterfire configure` + APNs key are set up manually | High | Planned (before beta push notifications can work) |
 | TD-054 | Access token stays valid up to 15 min after logout (stateless-JWT tradeoff, documented not fixed) | Low | Planned |
 | TD-057 | Offline sync loses an update/delete whose create synced in an earlier batch (`idRemap` is per-call, not persisted) | High | Open (frontend scan round 2) |
+| TD-059 | CacheService's six Hive writers are declared `void` and discard the `Future` Hive returns, so no caller can await durability (root cause of TD-040) | High | Open (next up, PDR-009) |
 
 ---
 
@@ -632,6 +633,7 @@ Publishing the app first would make every list break for users until the backend
 - Android: applicationId `com.homesync.app`, minSdkVersion 23 (PDR-005)
 - iOS: Bundle ID `com.homesync.app`
 - Build with: `flutter build apk --release` / `flutter build ios --release`
+- **After adding or removing a pubspec.yaml plugin with native code**, run `flutter pub get` on a Mac and commit the regenerated `ios/Runner/GeneratedPluginRegistrant.m`. The mobile/cloud flow has no Flutter toolchain and never regenerates it, so the committed file silently falls behind — it did exactly that for `firebase_core`/`firebase_messaging` between PDR-008 and 2026-08-17. CI does not catch this: the iOS job runs `flutter pub get`, which regenerates the file before building.
 
 ---
 
