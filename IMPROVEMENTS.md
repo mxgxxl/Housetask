@@ -209,6 +209,31 @@ Extraerlo a su propio widget (en vez de dejarlo inline en `app.dart`, que habrí
 
 **Validación:** a diferencia de las rondas de backend, esta sí se pudo ejecutar completa — se descargó Flutter 3.44.9 (la versión que fija CI, ver TD-041) en este entorno y se corrieron `flutter analyze` (limpio, solo los `info` preexistentes) y la suite completa de 224 tests (excluyendo `offline_banner_test.dart`, igual que CI por TD-040), todos en verde.
 
+### Fix TD-056: copyWith de TaskState, cierra también F7 (2026-08-17)
+
+**Problema:** `TaskState.copyWith` asignaba incondicionalmente los campos nullable no pasados explícitamente, así que cualquier `emit` que cambiara UN campo (p. ej. `isSyncing`) borraba silenciosamente todos los demás — `timelineCursor` sobrevivía solo 2 de ~18 emits (TD-056). `clearOfflineNotice()`, que solo debía limpiar `offlineNotice`, se llevaba por delante `timelineError`/`recurringError`/`trashError` por el mismo bug (F7).
+
+**Patrón elegido:** réplica exacta del `clearError` que `StatsCubit`/`HouseholdCubit`/`AuthCubit` ya usaban — un bool `clearX` por campo (default `false`), y el campo pasa de `x,` (incondicional) a `clearX ? null : (x ?? this.x)`. Se aplicó a los 5 campos "sticky" que lo necesitaban: `error`, `timelineCursor`, `timelineError`, `recurringError`, `trashError`. `offlineNotice` se dejó **intencionalmente sin tocar** — es genuinamente one-shot por diseño (así lo documenta su propio comentario), y con el resto de campos ya arreglados, `clearOfflineNotice()` se simplifica a `emit(state.copyWith())` sin argumentos: limpia offlineNotice (el único campo incondicional que queda) y no toca nada más.
+
+**El matiz que casi se pasa por alto:** `timelineCursor` (y los demás) no son simplemente "opcional vs. sticky" — a veces el valor NUEVO es legítimamente `null` (el servidor dice "no hay más páginas") y eso SÍ debe sobrescribir, no preservarse como si no se hubiera especificado. `loadTimeline`/`loadMoreTimeline` ahora pasan `clearTimelineCursor: result.nextCursor == null` junto a `timelineCursor: result.nextCursor` para distinguir ambos casos. Es la misma ambigüedad que `TaskBucket.nextCursor` ya resuelve por convención (cada call site lo re-pasa siempre) — se dejó `TaskBucket` sin tocar, fuera del alcance literal de TD-056.
+
+**F11 (test que ocultaba el bug):** el test de `loadMoreTimeline` llamaba `loadTimeline()` y `loadMoreTimeline()` seguidos, sin ningún emit intermedio — exactamente la condición que ocultaba TD-056. Se añadió una llamada a `clearOfflineNotice()` entre ambos (una acción de cubit real, no un `emit()` fabricado) con aserción de que el cursor sobrevive, más un comentario explicando por qué.
+
+**Archivos modificados:**
+- `frontend/lib/presentation/cubit/task_cubit.dart`: `copyWith` (5 flags `clearX` nuevos), `clearOfflineNotice()`, y los 4 call sites que antes pasaban `campo: null` para limpiar al empezar una operación (`load`, `loadTimeline`, `loadRecurringTasks`, `loadTrashTasks`) ahora usan su `clearX: true`.
+- `frontend/test/task_cubit_test.dart`: test de `loadMoreTimeline` reforzado (F11); 3 tests nuevos de `TaskState.copyWith` (preserva todo salvo `offlineNotice`; cada `clearX` limpia solo lo suyo; un valor nuevo sobrescribe pase lo que pase el flag); 1 test nuevo de `clearOfflineNotice` confirmando que no toca `error`/`timelineCursor`/`timelineError`/`recurringError`/`trashError`.
+
+**Decisión del dueño:** fix inmediato por ser el más sutil de los 4 High y cerrar F7 de paso.
+
+**Lección (ya la señalaba el propio escaneo):** un test genérico "`copyWith()` sin argumentos no pierde nada" habría detectado esta clase de bug antes de que llegara a producción. Se añadió para `TaskState` en esta ronda; **no** se replicó en los otros 6 cubits (fuera de alcance de esta tarea, ver "Deuda técnica NO tocada" abajo) — el mismo patrón de auditoría podría aplicarse a cualquiera que use `copyWith` con campos nullable de asignación incondicional.
+
+**Deuda técnica NO tocada, a propósito:** el escaneo de la ronda 2 (F2) señaló que el mismo patrón de bug podría existir en otros cubits, y las restricciones de esta tarea decían explícitamente no arreglarlos aquí — solo documentar. Verificación de `Shopping/Pet/Stats/Household/Auth/Socket`Cubit al escribir este fix:
+- **`ShoppingCubit` tiene el mismo bug que F7, hoy, en producción.** `ShoppingState.copyWith` asigna `error` y `nextCursor` incondicionalmente (igual que `TaskState` antes de este fix). `ShoppingCubit.clearOfflineNotice()` es literalmente `emit(state.copyWith(error: state.error))` — el mismo patrón que tenía `TaskCubit.clearOfflineNotice()` antes de F7 — así que cada vez que se descarta el aviso "guardado offline" en la lista de compras, `nextCursor` se pierde silenciosamente. Efecto práctico: `loadMore()`'s guard (`state.nextCursor == null` → no-op) deja de poder paginar hasta el próximo `load()` completo, aunque `hasMore` siga en `true`. Además, los `on Failure` de `createItem`/`updateItem`/`togglePurchased`/`deleteItem` tampoco re-pasan `nextCursor` en su `emit(state.copyWith(error: f.message))`, así que un fallo de mutación rompe la paginación igual. Candidato directo a un fix idéntico al de esta ronda (mismo `clearError`/`clearNextCursor` sentinel), pero fuera de alcance aquí.
+- `Pet`/`Stats`/`Household`/`AuthState` ya usan el patrón `clearError` correcto — no tienen este problema.
+- `SocketCubit` no tiene un estado tipo `TaskState`/`ShoppingState` (su estado es un `bool`) — no aplica.
+
+No se abrió ningún TD nuevo por el hallazgo de `ShoppingCubit` — queda documentado aquí como el candidato más concreto para la próxima ronda que toque cubits, ya con el patrón de fix probado en esta.
+
 ---
 
 ## Próximas mejoras pendientes
