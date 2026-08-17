@@ -124,9 +124,21 @@ void main() {
   testWidgets(
       'shows a badge with the exact pending-count when the queue is non-empty',
       (tester) async {
-    CacheService().addPendingOperation(pendingOp('a'));
-    CacheService().addPendingOperation(pendingOp('b'));
-    CacheService().addPendingOperation(pendingOp('c'));
+    // runAsync, not a bare call: Box.put() is a real disk write, and inside
+    // testWidgets' fake-async zone its completion callback is scheduled on a
+    // clock that stops being pumped the moment this body returns. The write
+    // therefore never finishes and Hive's per-box lock is never released, so
+    // the next operation on that box — clearAll() in tearDown — waits on it
+    // forever: no assertion failure, no output, 0% CPU until the CI step's
+    // timeout kills it. That was TD-040. runAsync runs these on the real
+    // event loop, so the lock is free by the time tearDown needs it.
+    // cache_service_test.dart writes to the same box without this because it
+    // uses plain test(), which has no fake-async zone at all.
+    await tester.runAsync(() async {
+      CacheService().addPendingOperation(pendingOp('a'));
+      CacheService().addPendingOperation(pendingOp('b'));
+      CacheService().addPendingOperation(pendingOp('c'));
+    });
 
     final taskCubit = TaskCubit(
       FakeTaskRepository()..lastListWasFromCache = true,
