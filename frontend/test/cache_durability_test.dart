@@ -1,7 +1,14 @@
+import 'dart:convert';
+
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:homesync/data/datasources/local/auth_local_datasource.dart';
+import 'package:homesync/data/datasources/remote/api_service.dart';
 import 'package:homesync/data/models/pending_operation.dart';
 import 'package:homesync/data/models/task.dart';
+import 'package:homesync/data/repositories/task_repository.dart';
 import 'package:homesync/services/cache_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fakes.dart';
 
@@ -86,6 +93,8 @@ void main() {
     });
   });
 
+  group('best-effort policy', bestEffortTests);
+
   group('writes stay visible synchronously (the TD-059 keystore trap)', () {
     // Hive applies a put to its in-memory keystore synchronously and returns
     // a Future only for the disk flush, so a caller that does not await still
@@ -114,5 +123,86 @@ void main() {
       expect(pending.entries.keys, ['a']);
       return pendingWrite;
     });
+  });
+}
+
+/// Serves one canned HTTP response to every request.
+class _StubAdapter implements HttpClientAdapter {
+  _StubAdapter(this.body);
+  final Map<String, dynamic> body;
+
+  @override
+  Future<ResponseBody> fetch(RequestOptions o, Stream<List<int>>? s,
+          Future<void>? c) async =>
+      ResponseBody.fromString(jsonEncode(body), 200, headers: {
+        Headers.contentTypeHeader: [Headers.jsonContentType],
+      });
+
+  @override
+  void close({bool force = false}) {}
+}
+
+Map<String, dynamic> _pageEnvelope(List<Map<String, dynamic>> items) => {
+      'success': true,
+      'data': {
+        'items': items,
+        'nextCursor': null,
+        'hasMore': false,
+        'total': items.length,
+      },
+    };
+
+Map<String, dynamic> _taskJson(String id) => {
+      'id': id,
+      'householdId': 'h1',
+      'title': 'Tarea $id',
+      'status': 'pending',
+      'priority': 'medium',
+      'category': 'other',
+      'assignedTo': <dynamic>[],
+      'isRecurring': false,
+      'isDeleted': false,
+    };
+
+/// Best-effort policy (TD-059): the server already holds this data, so a
+/// failed cache write must be reported but must NOT fail the caller.
+void bestEffortTests() {
+  late FakeBox<Task> tasks;
+  late FakeBox<PendingOperation> pending;
+
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+    tasks = FakeBox<Task>();
+    pending = FakeBox<PendingOperation>();
+    CacheService().debugInjectBoxes(tasks: tasks, pendingOperations: pending);
+  });
+
+  tearDown(() => CacheService().debugResetBoxes());
+
+  TaskRepository repo(Map<String, dynamic> body) {
+    final dio = Dio(BaseOptions(baseUrl: 'http://test.local/api'))
+      ..httpClientAdapter = _StubAdapter(body);
+    return TaskRepository(ApiService(AuthLocalDataSource(), dio: dio));
+  }
+
+  test('list() still returns its page when the cache write fails', () async {
+    tasks.failWrites = true;
+    final r = repo(_pageEnvelope([_taskJson('a'), _taskJson('b')]));
+
+    final page = await r.list('h1');
+
+    expect(page.items.map((t) => t.id), ['a', 'b'],
+        reason: 'a disk that refuses writes must not break reading');
+    expect(tasks.entries, isEmpty);
+  });
+
+  test('create() online still returns the server task when caching fails',
+      () async {
+    tasks.failWrites = true;
+    final r = repo({'success': true, 'data': _taskJson('server-1')});
+
+    final task = await r.create('h1', {'title': 'Tarea'});
+
+    expect(task.id, 'server-1');
   });
 }

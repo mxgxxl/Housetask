@@ -103,9 +103,9 @@ class TaskRepository {
         // id instead of replacing — a full replace here would evict every
         // other status already cached for the household (TD-045).
         if (status == null) {
-          await _cache.saveTasks(householdId, page.items);
+          await _cacheBestEffort(_cache.saveTasks(householdId, page.items), 'saveTasks');
         } else {
-          await _cache.mergeTasks(page.items);
+          await _cacheBestEffort(_cache.mergeTasks(page.items), 'mergeTasks');
         }
       }
       lastListWasFromCache = false;
@@ -154,7 +154,7 @@ class TaskRepository {
         headers: {'Idempotency-Key': idempotencyKey},
       );
       final task = Task.fromJson(data as Map<String, dynamic>);
-      await _cache.saveTask(task);
+      await _cacheBestEffort(_cache.saveTask(task), 'saveTask');
       return task;
     } on Failure catch (f) {
       if (!isOfflineWorthy(f)) rethrow;
@@ -202,7 +202,7 @@ class TaskRepository {
           body: payload,
         );
         final task = Task.fromJson(data as Map<String, dynamic>);
-        await _cache.saveTask(task);
+        await _cacheBestEffort(_cache.saveTask(task), 'saveTask');
         return task;
       } on Failure catch (f) {
         if (!isOfflineWorthy(f)) rethrow;
@@ -220,7 +220,7 @@ class TaskRepository {
     if (await _connectivity.checkConnectivity()) {
       try {
         final task = await _completeRemote(householdId, taskId);
-        await _cache.saveTask(task);
+        await _cacheBestEffort(_cache.saveTask(task), 'saveTask');
         return task;
       } on Failure catch (f) {
         if (!isOfflineWorthy(f)) rethrow;
@@ -269,7 +269,7 @@ class TaskRepository {
     if (await _connectivity.checkConnectivity()) {
       try {
         await _api.delete('/households/$householdId/tasks/$taskId');
-        await _cache.deleteTaskFromCache(taskId);
+        await _cacheBestEffort(_cache.deleteTaskFromCache(taskId), 'deleteTaskFromCache');
         return null;
       } on Failure catch (f) {
         if (!isOfflineWorthy(f)) rethrow;
@@ -307,7 +307,7 @@ class TaskRepository {
   Future<Task> restore(String householdId, String taskId) async {
     final data = await _api.post('/households/$householdId/tasks/$taskId/restore');
     final task = Task.fromJson(data as Map<String, dynamic>);
-    await _cache.saveTask(task);
+    await _cacheBestEffort(_cache.saveTask(task), 'saveTask');
     return task;
   }
 
@@ -411,9 +411,49 @@ class TaskRepository {
         } else {
           await _cache.updatePendingOperation(retried);
         }
+      } catch (e, stackTrace) {
+        // A cache write failed (TD-059) — not a server Failure, so the
+        // branches above never see it. The operation is deliberately NOT
+        // discarded: replaying it on the next pass is safe because every
+        // create carries an Idempotency-Key and the backend returns the
+        // original resource with HTTP 200 without re-emitting socket events
+        // (Hard Rule 13). Break rather than continue, for the same reason the
+        // network branch does: if the disk is refusing writes, the rest of
+        // this batch will fail the same way.
+        SentryService.captureException(e, stackTrace: stackTrace, context: {
+          'pendingOperationId': op.id,
+          'type': op.type.name,
+          'entity': op.entity.name,
+          'policy': 'cache write failed mid-sync, queue preserved — TD-059',
+        });
+        break;
       }
     }
 
     return processed;
   }
+
+  /// Await a cache write whose data the server already holds.
+  ///
+  /// A failed write here loses nothing the user can see: the entity came from
+  /// (or was confirmed by) the server, so the next list refresh re-caches it.
+  /// Failing the caller's operation because the local cache could not be
+  /// updated would be worse than the problem — a user who cannot write to
+  /// disk would also stop being able to READ from the network.
+  ///
+  /// So this is deliberately fire-and-forget, but reported: TD-059's whole
+  /// point is that these failures used to be invisible. The write is issued
+  /// by the caller (the Future arrives already started), which keeps Hive's
+  /// synchronous in-memory visibility intact.
+  Future<void> _cacheBestEffort(Future<void> write, String operation) async {
+    try {
+      await write;
+    } catch (e, stackTrace) {
+      SentryService.captureException(e, stackTrace: stackTrace, context: {
+        'cacheOperation': operation,
+        'policy': 'best-effort (server holds the data) — TD-059',
+      });
+    }
+  }
+
 }

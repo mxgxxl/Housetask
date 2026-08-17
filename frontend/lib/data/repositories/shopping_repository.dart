@@ -51,7 +51,7 @@ class ShoppingRepository {
         ShoppingItem.fromJson,
       );
       if (cursor == null) {
-        await _cache.saveShopping(householdId, page.items);
+        await _cacheBestEffort(_cache.saveShopping(householdId, page.items), 'saveShopping');
       }
       lastListWasFromCache = false;
       return page;
@@ -90,7 +90,7 @@ class ShoppingRepository {
         headers: {'Idempotency-Key': idempotencyKey},
       );
       final item = ShoppingItem.fromJson(data as Map<String, dynamic>);
-      await _cache.saveShoppingItem(item);
+      await _cacheBestEffort(_cache.saveShoppingItem(item), 'saveShoppingItem');
       return item;
     } on Failure catch (f) {
       if (!isOfflineWorthy(f)) rethrow;
@@ -136,7 +136,7 @@ class ShoppingRepository {
           body: payload,
         );
         final item = ShoppingItem.fromJson(data as Map<String, dynamic>);
-        await _cache.saveShoppingItem(item);
+        await _cacheBestEffort(_cache.saveShoppingItem(item), 'saveShoppingItem');
         return item;
       } on Failure catch (f) {
         if (!isOfflineWorthy(f)) rethrow;
@@ -155,7 +155,7 @@ class ShoppingRepository {
       try {
         final data = await _api.patch('/households/$householdId/shopping/$itemId/purchase');
         final item = ShoppingItem.fromJson(data as Map<String, dynamic>);
-        await _cache.saveShoppingItem(item);
+        await _cacheBestEffort(_cache.saveShoppingItem(item), 'saveShoppingItem');
         return item;
       } on Failure catch (f) {
         if (!isOfflineWorthy(f)) rethrow;
@@ -200,7 +200,7 @@ class ShoppingRepository {
     if (await _connectivity.checkConnectivity()) {
       try {
         await _api.delete('/households/$householdId/shopping/$itemId');
-        await _cache.deleteShoppingItemFromCache(itemId);
+        await _cacheBestEffort(_cache.deleteShoppingItemFromCache(itemId), 'deleteShoppingItemFromCache');
         return null;
       } on Failure catch (f) {
         if (!isOfflineWorthy(f)) rethrow;
@@ -299,9 +299,44 @@ class ShoppingRepository {
         } else {
           await _cache.updatePendingOperation(retried);
         }
+      } catch (e, stackTrace) {
+        // Same policy as TaskRepository.syncPendingOperations — see the
+        // comment there. A failed cache write preserves the queue and breaks
+        // the batch; replay is safe thanks to the Idempotency-Key.
+        SentryService.captureException(e, stackTrace: stackTrace, context: {
+          'pendingOperationId': op.id,
+          'type': op.type.name,
+          'entity': op.entity.name,
+          'policy': 'cache write failed mid-sync, queue preserved — TD-059',
+        });
+        break;
       }
     }
 
     return processed;
   }
+
+  /// Await a cache write whose data the server already holds.
+  ///
+  /// A failed write here loses nothing the user can see: the entity came from
+  /// (or was confirmed by) the server, so the next list refresh re-caches it.
+  /// Failing the caller's operation because the local cache could not be
+  /// updated would be worse than the problem — a user who cannot write to
+  /// disk would also stop being able to READ from the network.
+  ///
+  /// So this is deliberately fire-and-forget, but reported: TD-059's whole
+  /// point is that these failures used to be invisible. The write is issued
+  /// by the caller (the Future arrives already started), which keeps Hive's
+  /// synchronous in-memory visibility intact.
+  Future<void> _cacheBestEffort(Future<void> write, String operation) async {
+    try {
+      await write;
+    } catch (e, stackTrace) {
+      SentryService.captureException(e, stackTrace: stackTrace, context: {
+        'cacheOperation': operation,
+        'policy': 'best-effort (server holds the data) — TD-059',
+      });
+    }
+  }
+
 }
