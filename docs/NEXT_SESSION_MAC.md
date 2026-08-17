@@ -32,7 +32,5 @@
 
 ## Siguiente tarea
 
-1. Decidir destino de frontend/android/build.gradle.save
-   (artefacto candidato a borrar; valorar *.save en .gitignore).
-2. Check de CI documental (enlaces de AGENTS.md, divergencia AGENTS/CLAUDE,
+1. Check de CI documental (enlaces de AGENTS.md, divergencia AGENTS/CLAUDE,
    tabla TDs de CLAUDE vs TECH_DEBT) — requiere aprobación.
