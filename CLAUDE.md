@@ -446,7 +446,7 @@ The full registry (~47 entries, all history) lives in [Full Technical Debt Regis
 
 | ID | Description | Severity | Status |
 |----|-------------|----------|--------|
-| TD-001 | Members embedded in Household document | High | Planned (Phase 2) |
+| TD-001 | Members embedded in Household document | High | En curso (fases 0-1 completas, 2026-08-18) |
 | TD-007 | No optimistic updates in frontend | Medium | **Partially resolved (2026-08-18): updates y deletes optimistic; creates aplazados al round de TD-057** |
 | TD-060 | Optimistic creates: id temporal `pending-` y resolución de idRemap | Medium | **Resolved (2026-08-18)** |
 | TD-010 | No database backups | Medium | Planned (Phase 3) |

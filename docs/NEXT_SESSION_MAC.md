@@ -23,6 +23,7 @@
 - 2026-08-17: TD-040 (cuelgue de tests) y TD-059 (durabilidad Hive) cerrados; check documental en CI (PR #35).
 - 2026-08-18: TD-007 parcialmente cerrado (updates y deletes optimistic); creates aplazados como TD-060.
 - 2026-08-18: round TD-057 + TD-060 cerrado (cola offline sin pérdida de ids, creates optimistas); TD-061 abierto.
+- 2026-08-18: TD-001 fases 0-1 — escritura dual desplegada y backfill aplicado en producción (5 hogares, 5 membresías, 0 divergencias).
 - 2026-08-17: PR #32 config fallback (Codex); PR #33 integración legacy
   (Claude); PR #34 sync (Codex, cerrado como superseded sin merge). Plan free de Codex activo y validado.
   gh instalado; Codex CLI instalado y autenticado.
@@ -35,17 +36,44 @@
 
 ## Siguiente tarea
 
-**Diseño de TD-001 — migrar `members` embebido a una colección
-`HouseholdMember` separada.** Es lo único que queda del Top-3 de Mac y la
-migración más grande del backlog abierto: toca el modelo, todos los servicios
-que leen `household.members` y el frontend. Es además el primer ítem del round
-que afecta al **backend**, no solo al cliente, así que arrastra migración de
-datos real en Atlas — a diferencia de TD-057/TD-059, que no tocaron esquema.
+**TD-001, fase 2: lectura dual con verificación.**
 
-Mismo formato que los tres rounds anteriores: un `docs/TD-001-DESIGN.md`
-aprobable en bloque antes de escribir código, con especial atención al orden de
-despliegue (ver la sección "Deployment order" de `CLAUDE.md`: backend primero,
-app después) y a la ventana en que ambos formatos deben convivir.
+Las lecturas pasan a consultar `HouseholdMember` **comparando** contra el array
+embebido y reportando cuando difieran, sin cambiar todavía lo que se devuelve
+(que sigue saliendo del embebido). Es la fase que convierte la migración de un
+acto de fe en una medida.
+
+**El criterio para avanzar al cutover es un dato, no un plazo:** cero
+divergencias observadas con tráfico real durante el tiempo que haga falta —
+días, no minutos. El sitio instrumentado es `requireMembership`, que corre en
+toda ruta con `:householdId` y por tanto ve todo el tráfico.
+
+Después: fase 3 (cutover), fase 4 (limpieza del array embebido y de
+`User.households`). Ver `docs/TD-001-DESIGN.md` §3 y §6.
+
+### TD-001 fases 0-1 — completadas (2026-08-18)
+
+**Fase 0, escritura dual** (`047f078`, desplegada): las tres operaciones de
+membresía escriben en ambos sitios. El array embebido sigue siendo la
+autoridad, así que revertir el deploy no deja rastro. `removeMember` es
+transaccional para mantener atómica la Hard Rule 9.
+
+**Fase 1, backfill** ejecutado por el dueño en producción:
+
+| Pasada | Hora | Escaneados | Vistos | A crear / creados | Ya presentes | Divergentes |
+|---|---|---|---|---|---|---|
+| DRY RUN | 21:10:14Z | 5 | 5 | 5 | 0 | 0 |
+| **APPLIED** | 21:12:04Z | 5 | 5 | **5** | 0 | 0 |
+| DRY RUN | 21:12:09Z | 5 | 5 | 0 | 5 | 0 |
+
+La tercera pasada confirma la idempotencia y las tres confirman **cero
+divergencias**: la escritura dual no tiene huecos.
+
+**Sin verificar, y conviene saberlo:** la atomicidad de la Hard Rule 9 está
+razonada, no medida. Se intentaron dos vías para demostrar la carrera
+(peticiones concurrentes y el fail point de MongoDB) y ninguna consigue la
+intercalación; quitar la transacción no rompería ningún test. Detalle completo
+al final de `docs/TD-001-DESIGN.md`.
 
 ### Fase 4 — cerrada (TD-057 + TD-060, 2026-08-18)
 
