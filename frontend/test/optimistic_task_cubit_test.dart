@@ -213,4 +213,36 @@ void main() {
       expect(cubit.state.offlineNotice, kOfflineNoticeMessage);
     });
   });
+
+  group('in-flight blocking (TD-007 decision D)', () {
+    test('the id stays in pendingIds for the whole window and no longer',
+        () async {
+      final gate = Completer<void>();
+      final repo = repoWith(buildTask('t1'))..completeGate = gate.future;
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+
+      expect(cubit.state.pendingIds, isEmpty, reason: 'nothing in flight yet');
+
+      final inFlight = cubit.completeTask('t1');
+      expect(cubit.state.pendingIds, {'t1'},
+          reason: 'the UI disables this row off exactly this set');
+
+      gate.complete();
+      await inFlight;
+      expect(cubit.state.pendingIds, isEmpty,
+          reason: 'a row left disabled forever would be a dead row');
+    });
+
+    test('pendingIds is cleared even when the mutation fails', () async {
+      final repo = repoWith(buildTask('t1'))
+        ..failCompleteWith = const ServerFailure('No autorizado', statusCode: 403);
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+
+      await cubit.completeTask('t1');
+
+      expect(cubit.state.pendingIds, isEmpty);
+    });
+  });
 }

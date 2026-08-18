@@ -14,7 +14,24 @@ class TaskTile extends StatelessWidget {
   final VoidCallback? onToggle;
   final VoidCallback? onTap;
 
-  const TaskTile({super.key, required this.task, this.onToggle, this.onTap});
+  /// A mutation on this task is in flight, waiting for the server (TD-007).
+  ///
+  /// Actions are disabled for the window it lasts, so a second tap cannot
+  /// race the first and leave the list showing a value neither request will
+  /// produce. The cue is deliberately quiet — a slight fade, no banner, no
+  /// snackbar, no dialog: the window is typically ~200ms and anything louder
+  /// would be more disruptive than the problem it prevents. If the mutation
+  /// fails, the rollback path shows the error; nothing announces the block
+  /// itself.
+  final bool isPending;
+
+  const TaskTile({
+    super.key,
+    required this.task,
+    this.onToggle,
+    this.onTap,
+    this.isPending = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -71,11 +88,18 @@ class TaskTile extends StatelessWidget {
         : const <String>{};
 
     return Opacity(
-      opacity: task.isDeleted ? 0.5 : 1,
+      // Reuses the existing fade rather than adding a layer: a queued delete
+      // (0.5) reads as "on its way out", an in-flight mutation (0.7) as
+      // "settling". Both are quiet on purpose — see [isPending].
+      opacity: task.isDeleted
+          ? 0.5
+          : isPending
+              ? 0.7
+              : 1,
       child: Card(
         child: InkWell(
           borderRadius: BorderRadius.circular(16),
-          onTap: onTap,
+          onTap: isPending ? null : onTap,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
             child: Row(
@@ -92,7 +116,7 @@ class TaskTile extends StatelessWidget {
                 const SizedBox(width: 10),
                 // Completion checkbox.
                 GestureDetector(
-                  onTap: onToggle,
+                  onTap: isPending ? null : onToggle,
                   child: Icon(
                     task.isCompleted
                         ? Icons.check_circle

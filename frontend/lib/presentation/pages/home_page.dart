@@ -76,6 +76,11 @@ class HomePage extends StatelessWidget {
                           padding: const EdgeInsets.only(bottom: 10),
                           child: TaskTile(
                             task: t,
+                            isPending: context
+                                .watch<TaskCubit>()
+                                .state
+                                .pendingIds
+                                .contains(t.id),
                             onToggle: () =>
                                 context.read<TaskCubit>().completeTask(t.id),
                             onTap: () => _openTask(context, t),
@@ -90,6 +95,11 @@ class HomePage extends StatelessWidget {
                           padding: const EdgeInsets.only(bottom: 10),
                           child: TaskTile(
                             task: t,
+                            isPending: context
+                                .watch<TaskCubit>()
+                                .state
+                                .pendingIds
+                                .contains(t.id),
                             onToggle: () =>
                                 context.read<TaskCubit>().completeTask(t.id),
                             onTap: () => _openTask(context, t),

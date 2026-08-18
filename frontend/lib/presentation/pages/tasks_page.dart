@@ -284,6 +284,7 @@ class _TaskRow extends StatelessWidget {
       ),
       child: TaskTile(
         task: task,
+        isPending: context.watch<TaskCubit>().state.pendingIds.contains(task.id),
         onToggle: () {
           if (task.isCompleted) {
             context.read<TaskCubit>().updateTask(task.id, {'status': 'pending'});

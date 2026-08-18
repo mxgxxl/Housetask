@@ -190,8 +190,23 @@ class _ShoppingTile extends StatelessWidget {
     // online" without needing a third state.
     final struckThrough = item.isPurchased || item.isDeleted;
 
+    // A mutation on this item is in flight, waiting for the server (TD-007).
+    // Actions are disabled for the window it lasts so a second tap cannot
+    // race the first. The cue is deliberately quiet — a slight fade, no
+    // banner, no snackbar, no dialog: the window is typically ~200ms and
+    // anything louder would disrupt more than the problem it prevents. A
+    // failure is reported by the rollback path; nothing announces the block.
+    final isPending = context.watch<ShoppingCubit>().state.pendingIds.contains(item.id);
+
     return Opacity(
-      opacity: item.isDeleted ? 0.5 : 1,
+      // Reuses the existing fade rather than adding a layer: a queued delete
+      // (0.5) reads as "on its way out", an in-flight mutation (0.7) as
+      // "settling".
+      opacity: item.isDeleted
+          ? 0.5
+          : isPending
+              ? 0.7
+              : 1,
       child: Slidable(
         key: ValueKey(item.id),
         endActionPane: ActionPane(
@@ -221,7 +236,9 @@ class _ShoppingTile extends StatelessWidget {
         ),
         child: Card(
           child: ListTile(
-            onTap: () => context.read<ShoppingCubit>().togglePurchased(item),
+            onTap: isPending
+                ? null
+                : () => context.read<ShoppingCubit>().togglePurchased(item),
             leading: Icon(
               item.isPurchased
                   ? Icons.check_box
