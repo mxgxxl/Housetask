@@ -241,13 +241,13 @@ class TaskRepository {
   Future<Task> _mutateOffline(String householdId, String taskId, Map<String, dynamic> payload) async {
     final cached = _cache.getTasks(householdId).where((t) => t.id == taskId).toList();
     final base = cached.isEmpty ? null : cached.first;
-    final merged = Task.fromJson({
-      if (base != null) ...taskToCacheMap(base),
-      ...payload,
-      'id': taskId,
-      'householdId': householdId,
-      'isSynced': false,
-    });
+    final merged = mergeTaskPayload(
+      base: base,
+      id: taskId,
+      householdId: householdId,
+      payload: payload,
+      isSynced: false,
+    );
     await _cache.saveTask(merged);
     await _queueOfflineWrite(
       PendingOperation(

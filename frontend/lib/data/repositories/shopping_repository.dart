@@ -175,13 +175,13 @@ class ShoppingRepository {
   ) async {
     final cached = _cache.getShopping(householdId).where((i) => i.id == itemId).toList();
     final base = cached.isEmpty ? null : cached.first;
-    final merged = ShoppingItem.fromJson({
-      if (base != null) ...shoppingItemToCacheMap(base),
-      ...payload,
-      'id': itemId,
-      'householdId': householdId,
-      'isSynced': false,
-    });
+    final merged = mergeShoppingItemPayload(
+      base: base,
+      id: itemId,
+      householdId: householdId,
+      payload: payload,
+      isSynced: false,
+    );
     await _cache.saveShoppingItem(merged);
     await _queueOfflineWrite(
       PendingOperation(

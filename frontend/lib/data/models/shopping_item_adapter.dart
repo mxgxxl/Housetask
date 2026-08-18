@@ -40,3 +40,20 @@ class ShoppingItemAdapter extends TypeAdapter<ShoppingItem> {
   void write(BinaryWriter writer, ShoppingItem obj) =>
       writer.writeMap(shoppingItemToCacheMap(obj));
 }
+
+/// Shopping twin of [mergeTaskPayload] — see the rationale there.
+ShoppingItem mergeShoppingItemPayload({
+  required ShoppingItem? base,
+  required String id,
+  required String householdId,
+  required Map<String, dynamic> payload,
+  required bool isSynced,
+}) {
+  return ShoppingItem.fromJson({
+    if (base != null) ...shoppingItemToCacheMap(base),
+    ...payload,
+    'id': id,
+    'householdId': householdId,
+    'isSynced': isSynced,
+  });
+}

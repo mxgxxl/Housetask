@@ -51,3 +51,29 @@ class TaskAdapter extends TypeAdapter<Task> {
   @override
   void write(BinaryWriter writer, Task obj) => writer.writeMap(taskToCacheMap(obj));
 }
+
+/// Build the Task as it will look once [payload] is applied over [base].
+///
+/// Shared by the repository's offline path and the cubit's optimistic overlay
+/// (TD-007) so both produce byte-identical entities: if they diverged, an
+/// optimistic row would visibly change the instant it was confirmed, and a
+/// rollback comparison would never match.
+///
+/// [isSynced] is the caller's call, not derived: an offline write is queued
+/// (`false`), while an online write still in flight is NOT queued (`true`) —
+/// "in flight" lives in the cubit's pendingIds, never in the entity.
+Task mergeTaskPayload({
+  required Task? base,
+  required String id,
+  required String householdId,
+  required Map<String, dynamic> payload,
+  required bool isSynced,
+}) {
+  return Task.fromJson({
+    if (base != null) ...taskToCacheMap(base),
+    ...payload,
+    'id': id,
+    'householdId': householdId,
+    'isSynced': isSynced,
+  });
+}
