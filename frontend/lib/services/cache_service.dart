@@ -239,6 +239,46 @@ class CacheService {
   Future<void> updatePendingOperation(PendingOperation operation) =>
       _pendingOperations.put(operation.id, operation);
 
+  /// Point every queued operation that still references [fromEntityId] at
+  /// [toEntityId] instead, and report how many were rewritten (TD-057).
+  ///
+  /// This is what makes a local id survive the sync pass that resolved it.
+  /// Until now the local→server mapping lived only in a local variable inside
+  /// `syncPendingOperations`, so it died with the call: a `break` — or simply
+  /// the process being killed — left the still-queued update/delete pointing
+  /// at an id the server never knew, which then 404s, burns its retry budget
+  /// and is dropped. Rewriting the queue itself means the translation is on
+  /// disk before the create that produced it is removed, so nothing has to be
+  /// remembered across passes or restarts.
+  ///
+  /// Deliberately filtered by [entity]: local ids carry a UUID so a collision
+  /// across domains is not realistic, but a task sync must not be able to
+  /// touch shopping's queue even in principle.
+  ///
+  /// Idempotent: running it again after it has already applied finds nothing
+  /// to do and returns 0, which is what makes the retry path in
+  /// `syncPendingOperations` safe.
+  Future<int> remapPendingOperationEntityId({
+    required String fromEntityId,
+    required String toEntityId,
+    required PendingOperationEntity entity,
+  }) async {
+    final affected = _pendingOperations.values
+        .where((op) => op.entity == entity && op.entityId == fromEntityId)
+        .toList();
+    if (affected.isEmpty) return 0;
+
+    // Every put is issued synchronously before the first await, so the
+    // rewrite is visible to a caller that reads back without awaiting — the
+    // same Hive keystore property TD-059 documented. Do not turn this into a
+    // loop of sequential awaits.
+    await Future.wait([
+      for (final op in affected)
+        _pendingOperations.put(op.id, op.copyWith(entityId: toEntityId)),
+    ]);
+    return affected.length;
+  }
+
   /// Synchronous snapshot of the queue size. Kept for callers that only need
   /// a one-off read (e.g. a log line, a non-reactive check) — UI that must
   /// stay live as the queue drains should use the [pendingOperationsCount]

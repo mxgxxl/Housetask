@@ -101,6 +101,8 @@ void main() {
 
   group('cubit feedback', cubitFeedbackTests);
 
+  group('queue id remap (TD-057)', remapTests);
+
   group('writes stay visible synchronously (the TD-059 keystore trap)', () {
     // Hive applies a put to its in-memory keystore synchronously and returns
     // a Future only for the disk flush, so a caller that does not await still
@@ -304,5 +306,115 @@ void cubitFeedbackTests() {
     expect(cubit.state.error, kLocalWriteErrorMessage);
     expect(cubit.state.error, isNot(kOfflineNoticeMessage),
         reason: 'a lost write must never read as a queued one');
+  });
+}
+
+/// Queue id remapping (TD-057): the translation from a local id to the
+/// server's must land on disk, not in a variable that dies with the call.
+void remapTests() {
+  late FakeBox<PendingOperation> pending;
+
+  setUp(() {
+    pending = FakeBox<PendingOperation>();
+    CacheService().debugInjectBoxes(pendingOperations: pending);
+  });
+
+  tearDown(() => CacheService().debugResetBoxes());
+
+  PendingOperation op(
+    String id, {
+    required String? entityId,
+    PendingOperationType type = PendingOperationType.update,
+    PendingOperationEntity entity = PendingOperationEntity.task,
+  }) =>
+      PendingOperation(
+        id: id,
+        type: type,
+        entity: entity,
+        householdId: 'h1',
+        entityId: entityId,
+        payload: const {'title': 'x'},
+        timestamp: DateTime.utc(2026, 1, 1),
+        idempotencyKey: 'key-$id',
+      );
+
+  test('rewrites every queued operation pointing at the local id', () async {
+    await CacheService().addPendingOperation(op('a', entityId: 'local-1'));
+    await CacheService().addPendingOperation(op('b', entityId: 'local-1'));
+    await CacheService().addPendingOperation(op('c', entityId: 'other'));
+
+    final n = await CacheService().remapPendingOperationEntityId(
+      fromEntityId: 'local-1',
+      toEntityId: 'srv-9',
+      entity: PendingOperationEntity.task,
+    );
+
+    expect(n, 2);
+    final byId = {
+      for (final o in CacheService().getPendingOperations()) o.id: o.entityId
+    };
+    expect(byId['a'], 'srv-9');
+    expect(byId['b'], 'srv-9');
+    expect(byId['c'], 'other', reason: 'untouched operations stay untouched');
+  });
+
+  test('is idempotent: a second run finds nothing to do', () async {
+    await CacheService().addPendingOperation(op('a', entityId: 'local-1'));
+
+    await CacheService().remapPendingOperationEntityId(
+      fromEntityId: 'local-1',
+      toEntityId: 'srv-9',
+      entity: PendingOperationEntity.task,
+    );
+    final second = await CacheService().remapPendingOperationEntityId(
+      fromEntityId: 'local-1',
+      toEntityId: 'srv-9',
+      entity: PendingOperationEntity.task,
+    );
+
+    expect(second, 0,
+        reason: 'this is what makes the sync retry path safe to re-run');
+  });
+
+  test('never touches another entity queue', () async {
+    await CacheService().addPendingOperation(
+        op('s', entityId: 'local-1', entity: PendingOperationEntity.shopping));
+
+    final n = await CacheService().remapPendingOperationEntityId(
+      fromEntityId: 'local-1',
+      toEntityId: 'srv-9',
+      entity: PendingOperationEntity.task,
+    );
+
+    expect(n, 0);
+    expect(CacheService().getPendingOperations().single.entityId, 'local-1');
+  });
+
+  test('surfaces a write failure instead of reporting success', () async {
+    await CacheService().addPendingOperation(op('a', entityId: 'local-1'));
+    pending.failWrites = true;
+
+    await expectLater(
+      CacheService().remapPendingOperationEntityId(
+        fromEntityId: 'local-1',
+        toEntityId: 'srv-9',
+        entity: PendingOperationEntity.task,
+      ),
+      throwsA(anything),
+      reason: 'the caller must not retire the create if the rewrite failed',
+    );
+  });
+
+  test('preserves FIFO order: timestamp is not rewritten', () async {
+    await CacheService().addPendingOperation(op('a', entityId: 'local-1'));
+
+    await CacheService().remapPendingOperationEntityId(
+      fromEntityId: 'local-1',
+      toEntityId: 'srv-9',
+      entity: PendingOperationEntity.task,
+    );
+
+    expect(CacheService().getPendingOperations().single.timestamp,
+        DateTime.utc(2026, 1, 1));
   });
 }
