@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:uuid/uuid.dart';
 import '../../core/errors/failures.dart';
 import '../../data/models/task.dart';
 import '../../data/models/task_adapter.dart';
@@ -736,11 +737,62 @@ class TaskCubit extends Cubit<TaskState> {
     }
   }
 
+  /// Confirm an optimistic create: drop the temporary-id row and insert the
+  /// server's, in ONE emission (TD-060).
+  ///
+  /// A create is the only mutation whose id changes on confirmation, so
+  /// _confirmOptimistic cannot serve it: _upsert keys by id, and upserting an
+  /// entity with a different id ADDS a second row instead of replacing the
+  /// first. Emitting a remove and an upsert separately would leave a frame in
+  /// which the row is gone and its replacement not yet there — a visible
+  /// flicker on every create.
+  ///
+  /// [confirmed] is whatever the repository returned: the server's entity, or
+  /// — when it fell back to the queue — the same write with a `local-` id and
+  /// isSynced:false. Both are the same operation from here: an id swap.
+  void _confirmCreate(String tempId, Task confirmed, {String? offlineNotice}) {
+    _rollbackSnapshots.remove(tempId);
+    _optimisticApplied.remove(tempId);
+
+    // Compose both changes onto one starting state, then emit once.
+    final withoutTemp = state.copyWith(
+      buckets: _bucketsAfterRemove(state, tempId),
+      pendingIds: state.pendingIds.difference({tempId}),
+    );
+    final timeline = _timelineAfterUpsert(withoutTemp, confirmed);
+    emit(withoutTemp.copyWith(
+      status: TaskStatusUi.loaded,
+      buckets: _bucketsAfterUpsert(withoutTemp, confirmed),
+      offlineNotice: offlineNotice,
+      timelineDays: timeline?.days,
+      timelineUndated: timeline?.undated,
+    ));
+  }
+
   Future<Task?> createTask(Map<String, dynamic> payload) async {
     if (_householdId == null) return null;
+
+    // Optimistic row with a temporary id (TD-060). The prefix is `pending-`,
+    // never `local-`: that one already means "created offline and queued" to
+    // syncPendingOperations, and an in-flight online create is not queued —
+    // no PendingOperation backs it. Reusing the prefix would make the queue
+    // believe it had work nobody gave it.
+    final tempId = 'pending-${_uuid.v4()}';
+    _applyOptimistic(
+      mergeTaskPayload(
+        base: null,
+        id: tempId,
+        householdId: _householdId!,
+        payload: payload,
+        isSynced: true,
+      ),
+      previous: null,
+    );
+
     try {
       final task = await _repo.create(_householdId!, payload);
-      _upsert(task, offlineNotice: task.isSynced ? null : kOfflineNoticeMessage);
+      _confirmCreate(tempId, task,
+          offlineNotice: task.isSynced ? null : kOfflineNoticeMessage);
       // Phase 3.3: schedule a local reminder if the task has a due date.
       await _notifications.scheduleTaskReminder(task);
       // PDR-004: independent "starts in 30 min" reminder if the task has a
@@ -749,13 +801,13 @@ class TaskCubit extends Cubit<TaskState> {
       await _notifications.scheduleTaskStartReminder(task);
       return task;
     } on Failure catch (f) {
-      emit(state.copyWith(error: f.message));
+      _rollbackOptimistic(tempId, errorMessage: f.message);
       return null;
     } catch (_) {
       // Not a Failure: the repository could not persist the write
       // locally (TD-059). Caught here or it would escape the cubit
       // entirely and leave the UI with no feedback at all.
-      emit(state.copyWith(error: kLocalWriteErrorMessage));
+      _rollbackOptimistic(tempId, errorMessage: kLocalWriteErrorMessage);
       return null;
     }
   }
@@ -951,6 +1003,9 @@ class TaskCubit extends Cubit<TaskState> {
   /// leaves every total untouched. The same math applies whether the call
   /// came from a local mutation or a realtime event from another device, so
   /// header counts stay correct either way.
+  /// Only used to mint the temporary id of an optimistic create (TD-060).
+  static const _uuid = Uuid();
+
   // ---- Optimistic mutation overlay (TD-007) ----
   //
   // Deliberate duplicate of ShoppingCubit's overlay: the two cubits share no

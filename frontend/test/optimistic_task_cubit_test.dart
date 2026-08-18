@@ -245,4 +245,103 @@ void main() {
       expect(cubit.state.pendingIds, isEmpty);
     });
   });
+
+  group('createTask (TD-060)', () {
+    test('shows the row with a pending- id before the server answers',
+        () async {
+      final gate = Completer<void>();
+      final repo = FakeTaskRepository()..createGate = gate.future;
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+
+      final inFlight = cubit.createTask({'title': 'Nueva'});
+
+      final rows = cubit.state.bucket(TaskFilter.all).items;
+      expect(rows, hasLength(1));
+      expect(rows.single.id, startsWith('pending-'),
+          reason: 'never local-, which means queued offline to the sync loop');
+      expect(cubit.state.pendingIds, {rows.single.id});
+
+      gate.complete();
+      await inFlight;
+    });
+
+    test('swaps the temporary id for the server one in a SINGLE emission',
+        () async {
+      final gate = Completer<void>();
+      final repo = FakeTaskRepository()..createGate = gate.future;
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+
+      final inFlight = cubit.createTask({'title': 'Nueva'});
+      final tempId = cubit.state.bucket(TaskFilter.all).items.single.id;
+
+      // Count what the UI would rebuild from, from here to confirmation.
+      final seen = <List<String>>[];
+      final sub = cubit.stream.listen((s) =>
+          seen.add(s.bucket(TaskFilter.all).items.map((t) => t.id).toList()));
+
+      gate.complete();
+      await inFlight;
+      await Future<void>.delayed(Duration.zero);
+      await sub.cancel();
+
+      expect(seen, hasLength(1),
+          reason: 'two emissions would flicker: the row vanishing then '
+              'reappearing with another id');
+      expect(seen.single, ['created']);
+      expect(seen.single, isNot(contains(tempId)));
+      expect(cubit.state.pendingIds, isEmpty);
+    });
+
+    test('never leaves the list empty or doubled while swapping', () async {
+      final gate = Completer<void>();
+      final repo = FakeTaskRepository()..createGate = gate.future;
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+
+      final inFlight = cubit.createTask({'title': 'Nueva'});
+      final counts = <int>[];
+      final sub = cubit.stream
+          .listen((s) => counts.add(s.bucket(TaskFilter.all).items.length));
+
+      gate.complete();
+      await inFlight;
+      await Future<void>.delayed(Duration.zero);
+      await sub.cancel();
+
+      expect(counts, everyElement(1),
+          reason: 'exactly one row at every observable moment');
+    });
+
+    test('removes the optimistic row when the server rejects', () async {
+      final repo = FakeTaskRepository(
+          failCreateWith: const ServerFailure('No autorizado', statusCode: 403));
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+
+      final task = await cubit.createTask({'title': 'Nueva'});
+
+      expect(task, isNull);
+      expect(cubit.state.bucket(TaskFilter.all).items, isEmpty,
+          reason: 'nothing was created, so nothing may stay on screen');
+      expect(cubit.state.error, 'No autorizado');
+      expect(cubit.state.pendingIds, isEmpty);
+    });
+
+    test('a create that falls back to the queue swaps pending- for the '
+        'offline entity', () async {
+      final repo = FakeTaskRepository(returnsUnsynced: true);
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+
+      await cubit.createTask({'title': 'Nueva'});
+
+      final row = cubit.state.bucket(TaskFilter.all).items.single;
+      expect(row.id, isNot(startsWith('pending-')));
+      expect(row.isSynced, isFalse);
+      expect(cubit.state.offlineNotice, kOfflineNoticeMessage);
+      expect(cubit.state.pendingIds, isEmpty);
+    });
+  });
 }
