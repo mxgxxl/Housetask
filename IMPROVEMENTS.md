@@ -326,3 +326,21 @@ Estado: pendiente. Cadencia sugerida: al inicio de cada sesión de Mac, `git ls-
 Contexto: no es hipotético. Al configurar la firma iOS local se encontró la protección **efectivamente perdida** — `git ls-files -v` no devolvía ninguna `h` minúscula, contra lo que documenta CLAUDE.md — con el fichero en su valor compartido (`com.homesync.app`). Se restauró en esa misma sesión. No hay constancia de cuándo se perdió; la causa más probable es un `git update-index --no-assume-unchanged` temporal (el propio CLAUDE.md documenta ese procedimiento para cambios legítimos) que no se revirtió después.
 
 Candidato natural a automatizarse dentro de `scripts/check_docs.sh`, que ya corre en cada PR: sería una comprobación más de coherencia entre lo que CLAUDE.md afirma y lo que el repo hace. Ojo, sin embargo, a que el flag es **estrictamente local** y no viaja en el repo, así que en CI la comprobación siempre fallaría; solo tiene sentido como script de uso manual o como hook local.
+
+---
+
+## 2026-08-18 — Los commits de andamiaje sin conectar no son viables en este repo
+
+Lección de proceso, no de código. **Planificar el andamiaje y su cableado como un solo commit**, no como dos.
+
+Motivo: `flutter analyze` corre con `--fatal-warnings` (solo los `info` están silenciados, vía `--no-fatal-infos`), y `unused_element` es warning. Un commit que introduce helpers privados sin conectarlos deja el repo con warnings nuevos, es decir, con CI en rojo — aunque el commit sea correcto y el siguiente lo arregle.
+
+Ha ocurrido **tres veces**, siempre con el mismo diagnóstico y siempre descubierto al ejecutar `analyze`, nunca al planificar:
+
+- **TD-059:** el commit 1 estaba clasificado como "cambio de tipos puro, riesgo muy bajo"; además de esto, resultó no ser equivalente por la trampa del keystore síncrono de Hive.
+- **TD-007:** commits 2 y 3 fusionados (`pendingIds` + `completeTask`).
+- **TD-060:** commits 4 y 5 fusionados (`_confirmCreate` + `createTask`).
+
+La regla práctica: un commit puede introducir código **público** sin usar (un método de `CacheService`, por ejemplo — no se marca como no usado), pero no **privado**. Si el plan contempla un commit de "solo andamiaje", o el andamiaje es público, o hay que fusionarlo con su primer consumidor.
+
+Corolario para los diseños futuros: la sección de plan de commits debería decir explícitamente cuál es el primer consumidor de cada pieza nueva, en vez de asumir que el andamiaje se sostiene solo.
