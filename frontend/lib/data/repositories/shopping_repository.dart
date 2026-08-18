@@ -276,6 +276,25 @@ class ShoppingRepository {
             );
             final serverItem = ShoppingItem.fromJson(data as Map<String, dynamic>);
             if (op.entityId != null) {
+              // Order matters and IS the fix (TD-057). The rewrite of the
+              // queue has to be on disk BEFORE this create is retired,
+              // because the create is the only thing that can reproduce the
+              // translation. Retiring it first is what used to lose an
+              // update/delete whenever the pass ended early — a network
+              // break, a cache-write break, or the process simply being
+              // killed — since the mapping lived in a local variable.
+              //
+              // Dying between the POST and this rewrite is safe: the create
+              // stays queued and replays, and the Idempotency-Key makes the
+              // server return the original resource with HTTP 200 without
+              // re-emitting socket events (Hard Rule 13). Dying after it is
+              // safe too: the rewrite is idempotent, so the replay finds
+              // nothing left to remap.
+              await _cache.remapPendingOperationEntityId(
+                fromEntityId: op.entityId!,
+                toEntityId: serverItem.id,
+                entity: PendingOperationEntity.shopping,
+              );
               idRemap[op.entityId!] = serverItem.id;
               await _cache.deleteShoppingItemFromCache(op.entityId!);
             }

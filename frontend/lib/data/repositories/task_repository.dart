@@ -360,10 +360,11 @@ class TaskRepository {
         .where((o) => o.entity == PendingOperationEntity.task)
         .toList();
 
-    // Local ids assigned during this repository's lifetime, replaced by the
-    // server's real id once their create operation has synced — so a later
-    // queued update/delete against the same not-yet-synced task resolves to
-    // the id the server actually knows about.
+    // In-pass cache of the rewrite already persisted by
+    // remapPendingOperationEntityId, so operations resolved earlier in this
+    // same loop do not need the queue re-read. NOT the source of truth any
+    // more (TD-057): the queue itself carries the translation, which is what
+    // makes it survive a break or a restart.
     final idRemap = <String, String>{};
     var processed = 0;
 
@@ -381,6 +382,25 @@ class TaskRepository {
             );
             final serverTask = Task.fromJson(data as Map<String, dynamic>);
             if (op.entityId != null) {
+              // Order matters and IS the fix (TD-057). The rewrite of the
+              // queue has to be on disk BEFORE this create is retired,
+              // because the create is the only thing that can reproduce the
+              // translation. Retiring it first is what used to lose an
+              // update/delete whenever the pass ended early — a network
+              // break, a cache-write break, or the process simply being
+              // killed — since the mapping lived in a local variable.
+              //
+              // Dying between the POST and this rewrite is safe: the create
+              // stays queued and replays, and the Idempotency-Key makes the
+              // server return the original resource with HTTP 200 without
+              // re-emitting socket events (Hard Rule 13). Dying after it is
+              // safe too: the rewrite is idempotent, so the replay finds
+              // nothing left to remap.
+              await _cache.remapPendingOperationEntityId(
+                fromEntityId: op.entityId!,
+                toEntityId: serverTask.id,
+                entity: PendingOperationEntity.task,
+              );
               idRemap[op.entityId!] = serverTask.id;
               await _cache.deleteTaskFromCache(op.entityId!);
             }
