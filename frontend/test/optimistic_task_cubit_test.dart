@@ -344,4 +344,37 @@ void main() {
       expect(cubit.state.pendingIds, isEmpty);
     });
   });
+
+  group('in-flight create blocks editing (decision B)', () {
+    test('the temporary id is in pendingIds for the whole window', () async {
+      final gate = Completer<void>();
+      final repo = FakeTaskRepository()..createGate = gate.future;
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+
+      final inFlight = cubit.createTask({'title': 'Nueva'});
+
+      // This is the contract the UI disables its row and its slide actions
+      // off: without it, a swipe would PATCH against an id the server has
+      // never seen.
+      final tempId = cubit.state.bucket(TaskFilter.all).items.single.id;
+      expect(cubit.state.pendingIds, contains(tempId));
+
+      gate.complete();
+      await inFlight;
+      expect(cubit.state.pendingIds, isEmpty,
+          reason: 'a row left disabled forever would be a dead row');
+    });
+
+    test('pendingIds is cleared even when the create fails', () async {
+      final repo = FakeTaskRepository(
+          failCreateWith: const ServerFailure('No autorizado', statusCode: 403));
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+
+      await cubit.createTask({'title': 'Nueva'});
+
+      expect(cubit.state.pendingIds, isEmpty);
+    });
+  });
 }

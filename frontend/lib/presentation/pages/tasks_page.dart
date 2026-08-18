@@ -256,9 +256,21 @@ class _TaskRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // While a mutation on this row is in flight (TD-007/TD-060) the slide
+    // actions are removed, not just the tile's taps: Editar/Eliminar live
+    // outside TaskTile, so isPending alone would leave them reachable — and a
+    // swipe on a row whose create has not confirmed would PATCH/DELETE against
+    // its temporary `pending-` id, which the server has never seen. Removing
+    // the pane makes the row simply not swipe: no dialog, no message, matching
+    // the quiet cue the tile already uses.
+    final isPending =
+        context.watch<TaskCubit>().state.pendingIds.contains(task.id);
+
     return Slidable(
       key: ValueKey(task.id),
-      endActionPane: ActionPane(
+      endActionPane: isPending
+          ? null
+          : ActionPane(
         motion: const DrawerMotion(),
         extentRatio: 0.5,
         children: [

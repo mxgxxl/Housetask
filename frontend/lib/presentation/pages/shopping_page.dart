@@ -209,7 +209,12 @@ class _ShoppingTile extends StatelessWidget {
               : 1,
       child: Slidable(
         key: ValueKey(item.id),
-        endActionPane: ActionPane(
+        // Same reasoning as tasks_page: the slide actions live outside the
+        // tile, so isPending alone would leave them reachable on a row whose
+        // create has not confirmed yet.
+        endActionPane: isPending
+            ? null
+            : ActionPane(
           motion: const DrawerMotion(),
           extentRatio: 0.5,
           children: [
