@@ -1038,11 +1038,18 @@ class TaskCubit extends Cubit<TaskState> {
     return null;
   }
 
-  void _upsert(Task task, {String? offlineNotice}) {
+  /// Buckets after upserting [task] into [from], WITHOUT emitting.
+  ///
+  /// Split out from [_upsert] so several changes can be composed onto one
+  /// starting state and emitted once (TD-060): confirming an optimistic
+  /// create has to drop the temporary-id row and insert the server one
+  /// together, or the list visibly flickers through a frame that holds
+  /// neither.
+  Map<TaskFilter, TaskBucket> _bucketsAfterUpsert(TaskState from, Task task) {
     final updated = <TaskFilter, TaskBucket>{};
 
     for (final filter in TaskFilter.values) {
-      final bucket = state.bucket(filter);
+      final bucket = from.bucket(filter);
       final items = List<Task>.from(bucket.items);
       final index = items.indexWhere((t) => t.id == task.id);
       final belongs = filter.matches(task);
@@ -1069,21 +1076,26 @@ class TaskCubit extends Cubit<TaskState> {
             delta: belongs && !existed ? 1 : (!belongs && existed ? -1 : 0)),
       );
     }
+    return updated;
+  }
 
-    final timeline = _timelineAfterUpsert(task);
+  void _upsert(Task task, {String? offlineNotice}) {
+    final timeline = _timelineAfterUpsert(state, task);
     emit(state.copyWith(
       status: TaskStatusUi.loaded,
-      buckets: updated,
+      buckets: _bucketsAfterUpsert(state, task),
       offlineNotice: offlineNotice,
       timelineDays: timeline?.days,
       timelineUndated: timeline?.undated,
     ));
   }
 
-  void _remove(String id) {
+  /// Buckets after removing [id] from [from], WITHOUT emitting. See
+  /// [_bucketsAfterUpsert].
+  Map<TaskFilter, TaskBucket> _bucketsAfterRemove(TaskState from, String id) {
     final updated = <TaskFilter, TaskBucket>{};
     for (final filter in TaskFilter.values) {
-      final bucket = state.bucket(filter);
+      final bucket = from.bucket(filter);
       final existed = bucket.items.any((t) => t.id == id);
       updated[filter] = bucket.copyWith(
         items: bucket.items.where((t) => t.id != id).toList(),
@@ -1091,10 +1103,13 @@ class TaskCubit extends Cubit<TaskState> {
         total: _adjustedTotal(bucket, delta: existed ? -1 : 0),
       );
     }
+    return updated;
+  }
 
-    final timeline = _timelineAfterRemove(id);
+  void _remove(String id) {
+    final timeline = _timelineAfterRemove(state, id);
     emit(state.copyWith(
-      buckets: updated,
+      buckets: _bucketsAfterRemove(state, id),
       timelineDays: timeline?.days,
       timelineUndated: timeline?.undated,
     ));
@@ -1116,7 +1131,7 @@ class TaskCubit extends Cubit<TaskState> {
   /// [TaskState.timelineWindowFrom]..[TaskState.timelineWindowTo] — e.g. a
   /// task just rescheduled past the loaded window. Returns null (no-op) until
   /// the first [loadTimeline] call establishes those window bounds.
-  _TimelineGroups? _timelineAfterUpsert(Task task) {
+  _TimelineGroups? _timelineAfterUpsert(TaskState state, Task task) {
     final from = state.timelineWindowFrom;
     final to = state.timelineWindowTo;
     if (from == null || to == null) return null;
@@ -1138,7 +1153,7 @@ class TaskCubit extends Cubit<TaskState> {
 
   /// Companion to [_timelineAfterUpsert] for a hard delete/removal by [id].
   /// Same null-means-no-op rule before the first [loadTimeline] call.
-  _TimelineGroups? _timelineAfterRemove(String id) {
+  _TimelineGroups? _timelineAfterRemove(TaskState state, String id) {
     if (state.timelineWindowFrom == null || state.timelineWindowTo == null) {
       return null;
     }
