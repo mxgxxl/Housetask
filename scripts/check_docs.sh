@@ -88,16 +88,24 @@ printf '\n2. Tabla corta de TDs (%s) vs registro completo (%s)\n' "$CLAUDE" "$TE
 
 # The short table lives between the "**Currently open TDs**" marker and the
 # next horizontal rule.
-short_tds=$(awk '
+# Emitted as "<id>\t<declared status>" so the two files' STATED statuses can
+# be compared, rather than assuming every row here is open. The table is
+# normally open TDs only, but a just-resolved entry may be left in it for one
+# round as a record, and that is not drift.
+short_tds=$(awk -F'|' '
   /^\*\*Currently open TDs\*\*/ { inside = 1; next }
-  inside && /^---$/             { exit }
-  inside && /^\| TD-[0-9]+/     { split($0, f, "|"); gsub(/ /, "", f[2]); print f[2] }
+  inside && /^---$/               { exit }
+  inside && /^\| TD-[0-9]+/ {
+    id = $2; gsub(/ /, "", id)
+    st = $(NF - 1); gsub(/^[ \t]+|[ \t]+$/, "", st)
+    print id "\t" st
+  }
 ' "$CLAUDE")
 
 if [ -z "$short_tds" ]; then
   fail "no se encontró la tabla \"Currently open TDs\" en $CLAUDE"
 else
-  while IFS= read -r td; do
+  while IFS=$'\t' read -r td short_status; do
     # Status is the 4th field counted from the end (| ... | Status | Owner |
     # Created |), which survives a description containing extra pipes.
     status=$(awk -F'|' -v id="$td" '
@@ -117,16 +125,26 @@ else
       fail "$td está en la tabla corta de $CLAUDE pero no existe en $TECH_DEBT"
     elif [ "$status" = "MALFORMED" ]; then
       fail "$td: fila con formato inesperado en $TECH_DEBT"
-    elif [ "${status_text#Resolved}" != "$status_text" ]; then
+    else
       # Prefix match: "Partially resolved (...)" is still open, and must not
       # trip this. Only a status that *starts* with "Resolved" counts.
       # Leading markdown emphasis is stripped first -- "**Resolved (...)**"
       # is the same status as "Resolved (...)", and comparing the raw string
       # silently missed it (found the first time an entry was written in
       # bold, 2026-08-17, TD-040).
-      fail "$td figura como abierto en $CLAUDE pero Resolved en $TECH_DEBT"
-    else
-      ok "$td abierto en ambos (\"${status:0:40}...\")"
+      short_text=$(printf '%s' "$short_status" | sed -E 's/^[*_[:space:]]+//')
+      registry_resolved=no
+      short_resolved=no
+      [ "${status_text#Resolved}" != "$status_text" ] && registry_resolved=yes
+      [ "${short_text#Resolved}" != "$short_text" ] && short_resolved=yes
+
+      if [ "$registry_resolved" != "$short_resolved" ]; then
+        fail "$td: $CLAUDE dice \"$short_status\" y $TECH_DEBT dice \"${status:0:40}...\""
+      elif [ "$registry_resolved" = yes ]; then
+        ok "$td Resolved en ambos"
+      else
+        ok "$td abierto en ambos (\"${status:0:40}...\")"
+      fi
     fi
   done <<< "$short_tds"
 fi
