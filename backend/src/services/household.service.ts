@@ -1,5 +1,6 @@
-import { Types } from 'mongoose';
+import mongoose, { ClientSession, Types } from 'mongoose';
 import { HouseholdModel, IHousehold } from '../models/Household';
+import { HouseholdMemberModel } from '../models/HouseholdMember';
 import { UserModel } from '../models/User';
 import { TaskModel } from '../models/Task';
 import { AppError } from '../middleware/error.middleware';
@@ -81,8 +82,35 @@ export async function createHousehold(userId: string, name: string): Promise<IHo
   });
 
   await UserModel.findByIdAndUpdate(userId, { $addToSet: { households: household._id } });
+  await mirrorMemberAdded(household._id, userId, 'admin', household.members[0].joinedAt);
 
   return household;
+}
+
+/**
+ * Mirror a membership into the HouseholdMember collection (TD-001, phase 0).
+ *
+ * The embedded array is still the authority; this keeps the new collection in
+ * step so the later phases have something to read. Deliberately an upsert on
+ * `{householdId, userId}`: replaying it — after a partial failure, or from the
+ * backfill — must converge instead of throwing on the unique index.
+ *
+ * Not transactional, by design: a divergence here is corrected by the
+ * idempotent backfill, and wrapping every join in a transaction would buy
+ * consistency for a mirror nobody reads yet. `removeMember` is the exception,
+ * because its Hard Rule 9 check has to stay atomic (see below).
+ */
+async function mirrorMemberAdded(
+  householdId: Types.ObjectId,
+  userId: string,
+  role: Role,
+  joinedAt: Date,
+): Promise<void> {
+  await HouseholdMemberModel.updateOne(
+    { householdId, userId: new Types.ObjectId(userId) },
+    { $setOnInsert: { role, joinedAt } },
+    { upsert: true },
+  );
 }
 
 /**
@@ -121,6 +149,7 @@ export async function joinHousehold(userId: string, inviteCode: string): Promise
     });
     await household.save();
     await UserModel.findByIdAndUpdate(userId, { $addToSet: { households: household._id } });
+    await mirrorMemberAdded(household._id, userId, 'member', new Date());
 
     emitToHousehold(household._id.toString(), 'household:member_joined', {
       householdId: household._id.toString(),
@@ -183,6 +212,52 @@ async function unassignDepartedMemberTasks(householdId: string, userId: string):
 }
 
 /**
+ * The mutating half of [removeMember], isolated so it can run inside a
+ * transaction (and be re-run if the driver retries it).
+ *
+ * Writes all three sides of the membership: the embedded array (still the
+ * authority in this phase), the HouseholdMember mirror, and the denormalized
+ * `User.households`.
+ */
+async function removeMemberInTransaction(
+  householdId: string,
+  targetUserId: string,
+  session: ClientSession,
+): Promise<void> {
+  const household = await HouseholdModel.findById(householdId).session(session);
+  if (!household) {
+    throw new AppError('Household not found', 404);
+  }
+
+  const target = household.members.find((m) => m.user.toString() === targetUserId);
+  if (!target) {
+    throw new AppError('Target user is not a member of this household', 404);
+  }
+
+  // Prevent removing the last admin (protects both self-removal and others).
+  // Roles are read from the document loaded in THIS transaction, so a
+  // concurrent removal cannot commit between the count and the write.
+  const adminCount = household.members.filter((m) => m.role === 'admin').length;
+  if (target.role === 'admin' && adminCount <= 1) {
+    throw new AppError('Cannot remove the last admin of the household', 400);
+  }
+
+  household.members = household.members.filter((m) => m.user.toString() !== targetUserId);
+  await household.save({ session });
+
+  await HouseholdMemberModel.deleteOne(
+    { householdId: household._id, userId: new Types.ObjectId(targetUserId) },
+    { session },
+  );
+
+  await UserModel.findByIdAndUpdate(
+    targetUserId,
+    { $pull: { households: household._id } },
+    { session },
+  );
+}
+
+/**
  * Remove a member from a household. Only admins may remove members. The last
  * remaining admin cannot be removed (which would leave the household leaderless).
  *
@@ -202,29 +277,36 @@ export async function removeMember(
     throw new AppError('Target user is not a member of this household', 404);
   }
 
-  // Only a request that will actually mutate reaches the database.
+  // The read, the last-admin check and all three writes run inside ONE
+  // transaction (TD-001). While membership lived only in the embedded array,
+  // checking and writing touched the same document, so a concurrent removal
+  // could not slip between them. Now the check counts admins and the writes
+  // land on three different documents — household, householdmember, user — so
+  // without a transaction two admins removing each other simultaneously could
+  // both pass the count and leave the household with NO admin, a state the UI
+  // offers no way back from (Hard Rule 9).
+  //
+  // Requires a replica set. Production is unaffected (Atlas always is) and
+  // the test harness runs a single-node replica set for exactly this.
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      // NOTE: withTransaction may run this callback more than once on a
+      // transient error, so everything in here must be safe to repeat. It is:
+      // each attempt re-reads the household and recomputes the decision.
+      await removeMemberInTransaction(householdId, targetUserId, session);
+    });
+  } finally {
+    await session.endSession();
+  }
+
+  // Re-read after the commit rather than reusing the in-transaction document:
+  // it costs one query on a path that already mutates, and it guarantees what
+  // we serialize is what actually landed.
   const household = await HouseholdModel.findById(householdId);
   if (!household) {
     throw new AppError('Household not found', 404);
   }
-
-  const target = household.members.find((m) => m.user.toString() === targetUserId);
-  if (!target) {
-    throw new AppError('Target user is not a member of this household', 404);
-  }
-
-  // Prevent removing the last admin (protects both self-removal and others).
-  // Roles are read from the freshly loaded document rather than from the
-  // request-scoped snapshot: a concurrent demotion must not slip past here.
-  const adminCount = household.members.filter((m) => m.role === 'admin').length;
-  if (target.role === 'admin' && adminCount <= 1) {
-    throw new AppError('Cannot remove the last admin of the household', 400);
-  }
-
-  household.members = household.members.filter((m) => m.user.toString() !== targetUserId);
-  await household.save();
-
-  await UserModel.findByIdAndUpdate(targetUserId, { $pull: { households: household._id } });
 
   emitToHousehold(household._id.toString(), 'household:member_left', {
     householdId: household._id.toString(),
