@@ -225,9 +225,24 @@ class FakeTaskRepository implements TaskRepository {
     ).copyWith(isSynced: !returnsUnsynced);
   }
 
+  /// Held open by a test that wants to observe the optimistic state before
+  /// the server answers (TD-007).
+  Future<void>? completeGate;
+
+  /// Thrown by [complete] — a Failure models a server rejection, any other
+  /// object models the TD-059 local-persistence branch.
+  Object? failCompleteWith;
+
+  /// Returned by [complete] instead of the default, so a test can script the
+  /// server's answer (e.g. isSynced:false for the fell-back-to-offline case).
+  Task? completeReturns;
+
   @override
-  Future<Task> complete(String householdId, String taskId) async =>
-      buildTask(taskId, completed: true);
+  Future<Task> complete(String householdId, String taskId) async {
+    if (completeGate != null) await completeGate;
+    if (failCompleteWith != null) throw failCompleteWith!;
+    return completeReturns ?? buildTask(taskId, completed: true);
+  }
 
   /// Non-null in a test that wants to assert the cubit's offline-delete
   /// handling (keep the row, struck through) instead of the online path

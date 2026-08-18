@@ -4,6 +4,7 @@ import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../core/errors/failures.dart';
 import '../../data/models/task.dart';
+import '../../data/models/task_adapter.dart';
 import '../../data/repositories/task_repository.dart';
 import '../../services/connectivity_service.dart';
 import '../../services/notification_service.dart';
@@ -194,6 +195,18 @@ class TaskState extends Equatable {
   final bool trashLoaded;
   final String? trashError;
 
+  /// Ids with a mutation in flight, waiting for the server to confirm or
+  /// reject it (TD-007).
+  ///
+  /// Deliberately NOT `isSynced`, which means "queued offline, will be sent
+  /// when there is a connection" — a very different thing to tell the user.
+  /// Reusing it would paint the offline indicator during every online write
+  /// and lie about the state for the ~200ms the round trip takes.
+  ///
+  /// Transient by design: never persisted to Hive, never restored on start.
+  /// An app killed mid-flight must not resurrect an "in flight".
+  final Set<String> pendingIds;
+
   const TaskState({
     this.status = TaskStatusUi.initial,
     this.error,
@@ -219,6 +232,7 @@ class TaskState extends Equatable {
     this.trashLoading = false,
     this.trashLoaded = false,
     this.trashError,
+    this.pendingIds = const {},
   });
 
   /// Pagination state for [filter], empty if it has never been loaded.
@@ -278,6 +292,7 @@ class TaskState extends Equatable {
     bool? trashLoaded,
     String? trashError,
     bool clearTrashError = false,
+    Set<String>? pendingIds,
   }) {
     return TaskState(
       status: status ?? this.status,
@@ -305,6 +320,7 @@ class TaskState extends Equatable {
       trashLoading: trashLoading ?? this.trashLoading,
       trashLoaded: trashLoaded ?? this.trashLoaded,
       trashError: clearTrashError ? null : (trashError ?? this.trashError),
+      pendingIds: pendingIds ?? this.pendingIds,
     );
   }
 
@@ -334,6 +350,7 @@ class TaskState extends Equatable {
         trashLoading,
         trashLoaded,
         trashError,
+        pendingIds,
       ];
 }
 
@@ -760,8 +777,40 @@ class TaskCubit extends Cubit<TaskState> {
     }
   }
 
+  /// Mark a task complete, applied to the UI immediately (TD-007).
+  ///
+  /// The row moves to the Completadas bucket, the counters adjust and the
+  /// timeline recomputes before the request is even sent — completing is the
+  /// most frequent action in the app and the one where a round-trip's delay
+  /// is most obvious.
+  ///
+  /// The server's answer then replaces the optimistic value, because it
+  /// carries fields only it knows (a populated `completedBy`, the real
+  /// `completedAt`). A rejection restores the previous value unless the task
+  /// changed meanwhile — see [_rollbackOptimistic].
   Future<void> completeTask(String taskId) async {
     if (_householdId == null) return;
+
+    final previous = _findById(taskId);
+    if (previous != null) {
+      _applyOptimistic(
+        mergeTaskPayload(
+          base: previous,
+          id: taskId,
+          householdId: _householdId!,
+          payload: {
+            'status': 'completed',
+            'completedAt': DateTime.now().toUtc().toIso8601String(),
+          },
+          // Unchanged: an in-flight online write is not queued offline. If the
+          // repository ends up falling back to the queue, the entity it
+          // returns carries isSynced:false and _confirmOptimistic applies it.
+          isSynced: previous.isSynced,
+        ),
+        previous: previous,
+      );
+    }
+
     try {
       final task = await _repo.complete(_householdId!, taskId);
       SentryService.addBreadcrumb(
@@ -769,16 +818,20 @@ class TaskCubit extends Cubit<TaskState> {
         category: 'task',
         data: {'householdId': _householdId, 'synced': task.isSynced},
       );
-      _upsert(task, offlineNotice: task.isSynced ? null : kOfflineNoticeMessage);
+      // Covers both outcomes the repository treats as success: confirmed by
+      // the server (isSynced true), or fell back to the offline queue
+      // (isSynced false). Neither is a rejection, so neither rolls back.
+      _confirmOptimistic(taskId, task,
+          offlineNotice: task.isSynced ? null : kOfflineNoticeMessage);
       await _notifications.cancelTaskReminder(taskId);
       await _notifications.cancelTaskStartReminder(taskId);
     } on Failure catch (f) {
-      emit(state.copyWith(error: f.message));
+      _rollbackOptimistic(taskId, errorMessage: f.message);
     } catch (_) {
       // Not a Failure: the repository could not persist the write
       // locally (TD-059). Caught here or it would escape the cubit
       // entirely and leave the UI with no feedback at all.
-      emit(state.copyWith(error: kLocalWriteErrorMessage));
+      _rollbackOptimistic(taskId, errorMessage: kLocalWriteErrorMessage);
     }
   }
 
@@ -835,6 +888,86 @@ class TaskCubit extends Cubit<TaskState> {
   /// leaves every total untouched. The same math applies whether the call
   /// came from a local mutation or a realtime event from another device, so
   /// header counts stay correct either way.
+  // ---- Optimistic mutation overlay (TD-007) ----
+
+  /// The entity as it was BEFORE an in-flight mutation, keyed by id, so a
+  /// rejection can put it back. Null value = it did not exist (a create).
+  /// Private and not part of the state: nothing renders from it.
+  final Map<String, Task?> _rollbackSnapshots = {};
+
+  /// What we optimistically applied, kept to detect supersession later.
+  final Map<String, Task> _optimisticApplied = {};
+
+  /// Apply [optimistic] to the UI now and mark its id in flight.
+  ///
+  /// [previous] is the value to restore on rejection, or null for a create.
+  // NOTE on emit order, in all three helpers below: pendingIds is updated
+  // FIRST and _upsert runs LAST. offlineNotice is the one field copyWith
+  // resets unconditionally on every emit (TD-056), so an emit placed after
+  // _upsert silently wipes the notice it just set — which is exactly how the
+  // fell-back-to-offline case lost its "Guardado offline" message the first
+  // time this was written the other way round.
+  void _applyOptimistic(Task optimistic, {required Task? previous}) {
+    _rollbackSnapshots[optimistic.id] = previous;
+    _optimisticApplied[optimistic.id] = optimistic;
+    emit(state.copyWith(pendingIds: {...state.pendingIds, optimistic.id}));
+    _upsert(optimistic);
+  }
+
+  /// The server answered: apply what it actually returned and clear the
+  /// in-flight marks. Also used for the fell-back-to-offline case, where the
+  /// entity comes back with isSynced:false — that is a success, not a
+  /// rejection, so it must never roll back.
+  void _confirmOptimistic(String id, Task confirmed, {String? offlineNotice}) {
+    _rollbackSnapshots.remove(id);
+    _optimisticApplied.remove(id);
+    emit(state.copyWith(pendingIds: state.pendingIds.difference({id})));
+    _upsert(confirmed, offlineNotice: offlineNotice);
+  }
+
+  /// Whether the entity currently in state is still exactly what we applied.
+  ///
+  /// If anything replaced it meanwhile — another mutation, a socket event, a
+  /// refresh — the mutation is superseded and MUST NOT be rolled back:
+  /// restoring an older snapshot over a newer value destroys work the user
+  /// did. Losing a rollback only leaves the UI ahead of the server until the
+  /// next refresh, which is the cheaper mistake by far.
+  bool _isSuperseded(String id) {
+    final applied = _optimisticApplied[id];
+    if (applied == null) return true;
+    final current = _findById(id);
+    return current != applied;
+  }
+
+  /// Undo an in-flight mutation after a rejection, unless superseded.
+  void _rollbackOptimistic(String id, {required String errorMessage}) {
+    final superseded = _isSuperseded(id);
+    final previous = _rollbackSnapshots.remove(id);
+    _optimisticApplied.remove(id);
+
+    emit(state.copyWith(
+      error: errorMessage,
+      pendingIds: state.pendingIds.difference({id}),
+    ));
+    if (!superseded) {
+      if (previous != null) {
+        _upsert(previous);
+      } else {
+        _remove(id);
+      }
+    }
+  }
+
+  /// The task as it currently stands in any bucket, or null if absent.
+  Task? _findById(String id) {
+    for (final filter in TaskFilter.values) {
+      for (final t in state.bucket(filter).items) {
+        if (t.id == id) return t;
+      }
+    }
+    return null;
+  }
+
   void _upsert(Task task, {String? offlineNotice}) {
     final updated = <TaskFilter, TaskBucket>{};
 
