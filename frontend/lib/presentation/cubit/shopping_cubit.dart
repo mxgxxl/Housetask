@@ -4,6 +4,7 @@ import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../core/errors/failures.dart';
 import '../../data/models/shopping_item.dart';
+import '../../data/models/shopping_item_adapter.dart';
 import '../../data/repositories/shopping_repository.dart';
 import '../../services/connectivity_service.dart';
 
@@ -47,6 +48,10 @@ class ShoppingState extends Equatable {
   /// True while [ShoppingCubit.syncPending] is replaying the offline queue.
   final bool isSyncing;
 
+  /// Ids with a mutation in flight (TD-007). Twin of TaskState.pendingIds —
+  /// see the cross-ref note on the overlay helpers in ShoppingCubit.
+  final Set<String> pendingIds;
+
   const ShoppingState({
     this.status = ShoppingStatusUi.initial,
     this.items = const [],
@@ -58,6 +63,7 @@ class ShoppingState extends Equatable {
     this.isOffline = false,
     this.offlineNotice,
     this.isSyncing = false,
+    this.pendingIds = const {},
   });
 
   List<ShoppingItem> get pending => items.where((i) => !i.isPurchased).toList();
@@ -84,6 +90,7 @@ class ShoppingState extends Equatable {
     bool? isOffline,
     String? offlineNotice,
     bool? isSyncing,
+    Set<String>? pendingIds,
   }) {
     return ShoppingState(
       status: status ?? this.status,
@@ -97,6 +104,7 @@ class ShoppingState extends Equatable {
       isOffline: isOffline ?? this.isOffline,
       offlineNotice: offlineNotice,
       isSyncing: isSyncing ?? this.isSyncing,
+      pendingIds: pendingIds ?? this.pendingIds,
     );
   }
 
@@ -112,6 +120,7 @@ class ShoppingState extends Equatable {
         isOffline,
         offlineNotice,
         isSyncing,
+        pendingIds,
       ];
 }
 
@@ -239,34 +248,71 @@ class ShoppingCubit extends Cubit<ShoppingState> {
 
   Future<void> updateItem(String itemId, Map<String, dynamic> payload) async {
     if (_householdId == null) return;
+
+    final previous = _findById(itemId);
+    if (previous != null) {
+      _applyOptimistic(
+        mergeShoppingItemPayload(
+          base: previous,
+          id: itemId,
+          householdId: _householdId!,
+          payload: payload,
+          isSynced: previous.isSynced,
+        ),
+        previous: previous,
+      );
+    }
+
     try {
       final item = await _repo.update(_householdId!, itemId, payload);
-      _upsert(item, offlineNotice: item.isSynced ? null : kShoppingOfflineNoticeMessage);
+      _confirmOptimistic(itemId, item,
+          offlineNotice: item.isSynced ? null : kShoppingOfflineNoticeMessage);
     } on Failure catch (f) {
-      emit(state.copyWith(error: f.message));
+      _rollbackOptimistic(itemId, errorMessage: f.message);
     } catch (_) {
       // Not a Failure: the repository could not persist the write
       // locally (TD-059). Caught here or it would escape the cubit
       // entirely and leave the UI with no feedback at all.
-      emit(state.copyWith(error: kShoppingLocalWriteErrorMessage));
+      _rollbackOptimistic(itemId, errorMessage: kShoppingLocalWriteErrorMessage);
     }
   }
 
+  /// Toggle purchased, applied to the UI immediately (TD-007). This is the
+  /// central gesture of the shopping list, so it is the one where waiting on
+  /// a round trip is most noticeable.
   Future<void> togglePurchased(ShoppingItem item) async {
     if (_householdId == null) return;
+    final target = !item.isPurchased;
+
+    final previous = _findById(item.id);
+    if (previous != null) {
+      _applyOptimistic(
+        mergeShoppingItemPayload(
+          base: previous,
+          id: item.id,
+          householdId: _householdId!,
+          payload: {'isPurchased': target},
+          isSynced: previous.isSynced,
+        ),
+        previous: previous,
+      );
+    }
+
     try {
-      final updated = item.isPurchased
-          ? await _repo.update(_householdId!, item.id, {'isPurchased': false})
-          : await _repo.purchase(_householdId!, item.id);
-      _upsert(updated,
-          offlineNotice: updated.isSynced ? null : kShoppingOfflineNoticeMessage);
+      final updated = target
+          ? await _repo.purchase(_householdId!, item.id)
+          : await _repo.update(_householdId!, item.id, {'isPurchased': false});
+      _confirmOptimistic(item.id, updated,
+          offlineNotice:
+              updated.isSynced ? null : kShoppingOfflineNoticeMessage);
     } on Failure catch (f) {
-      emit(state.copyWith(error: f.message));
+      _rollbackOptimistic(item.id, errorMessage: f.message);
     } catch (_) {
       // Not a Failure: the repository could not persist the write
       // locally (TD-059). Caught here or it would escape the cubit
       // entirely and leave the UI with no feedback at all.
-      emit(state.copyWith(error: kShoppingLocalWriteErrorMessage));
+      _rollbackOptimistic(item.id,
+          errorMessage: kShoppingLocalWriteErrorMessage);
     }
   }
 
@@ -314,6 +360,74 @@ class ShoppingCubit extends Cubit<ShoppingState> {
   int? _adjustedTotal({required int delta}) {
     if (state.total == null || delta == 0) return state.total;
     return state.total! + delta;
+  }
+
+  // ---- Optimistic mutation overlay (TD-007) ----
+  //
+  // Deliberate duplicate of TaskCubit's overlay: the two cubits share no base
+  // class and their states differ in ways that matter here (see the emit-order
+  // note below). KEEP BOTH COPIES IN SYNC — a change to one almost certainly
+  // belongs in the other. See docs/TD-007-DESIGN.md; extracting a generic
+  // mixin is filed as a pending improvement in IMPROVEMENTS.md.
+
+  final Map<String, ShoppingItem?> _rollbackSnapshots = {};
+  final Map<String, ShoppingItem> _optimisticApplied = {};
+
+  void _applyOptimistic(ShoppingItem optimistic,
+      {required ShoppingItem? previous}) {
+    _rollbackSnapshots[optimistic.id] = previous;
+    _optimisticApplied[optimistic.id] = optimistic;
+    emit(state.copyWith(pendingIds: {...state.pendingIds, optimistic.id}));
+    _upsert(optimistic);
+  }
+
+  /// NOTE on emit order — this differs from TaskCubit and the difference is
+  /// load-bearing. ShoppingState.copyWith assigns `error` unconditionally
+  /// (every emit clears it), while TaskState.copyWith preserves it. So here
+  /// the error must be emitted LAST, whereas offlineNotice — cleared by both
+  /// (TD-056) — must come from the final _upsert. Hence: confirm ends with
+  /// _upsert, rollback ends with the error emit.
+  void _confirmOptimistic(String id, ShoppingItem confirmed,
+      {String? offlineNotice}) {
+    _rollbackSnapshots.remove(id);
+    _optimisticApplied.remove(id);
+    emit(state.copyWith(pendingIds: state.pendingIds.difference({id})));
+    _upsert(confirmed, offlineNotice: offlineNotice);
+  }
+
+  /// True when something replaced the entity since we applied it — another
+  /// mutation, a socket event, a refresh. Rolling back over a newer value
+  /// destroys work the user did, so a superseded mutation reports its error
+  /// without undoing anything.
+  bool _isSuperseded(String id) {
+    final applied = _optimisticApplied[id];
+    if (applied == null) return true;
+    return _findById(id) != applied;
+  }
+
+  void _rollbackOptimistic(String id, {required String errorMessage}) {
+    final superseded = _isSuperseded(id);
+    final previous = _rollbackSnapshots.remove(id);
+    _optimisticApplied.remove(id);
+
+    if (!superseded) {
+      if (previous != null) {
+        _upsert(previous);
+      } else {
+        _remove(id);
+      }
+    }
+    emit(state.copyWith(
+      error: errorMessage,
+      pendingIds: state.pendingIds.difference({id}),
+    ));
+  }
+
+  ShoppingItem? _findById(String id) {
+    for (final i in state.items) {
+      if (i.id == id) return i;
+    }
+    return null;
   }
 
   void _upsert(ShoppingItem item, {String? offlineNotice}) {

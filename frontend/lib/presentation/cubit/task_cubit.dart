@@ -762,18 +762,37 @@ class TaskCubit extends Cubit<TaskState> {
 
   Future<void> updateTask(String taskId, Map<String, dynamic> payload) async {
     if (_householdId == null) return;
+
+    final previous = _findById(taskId);
+    if (previous != null) {
+      _applyOptimistic(
+        mergeTaskPayload(
+          base: previous,
+          id: taskId,
+          householdId: _householdId!,
+          payload: payload,
+          isSynced: previous.isSynced,
+        ),
+        previous: previous,
+      );
+    }
+
     try {
       final task = await _repo.update(_householdId!, taskId, payload);
-      _upsert(task, offlineNotice: task.isSynced ? null : kOfflineNoticeMessage);
+      _confirmOptimistic(taskId, task,
+          offlineNotice: task.isSynced ? null : kOfflineNoticeMessage);
+      // Reminders are scheduled only on confirmation, never optimistically:
+      // they book real OS notifications, so a rollback would have to cancel
+      // them again. A 200ms delay on a reminder due in hours is invisible.
       await _notifications.scheduleTaskReminder(task);
       await _notifications.scheduleTaskStartReminder(task);
     } on Failure catch (f) {
-      emit(state.copyWith(error: f.message));
+      _rollbackOptimistic(taskId, errorMessage: f.message);
     } catch (_) {
       // Not a Failure: the repository could not persist the write
       // locally (TD-059). Caught here or it would escape the cubit
       // entirely and leave the UI with no feedback at all.
-      emit(state.copyWith(error: kLocalWriteErrorMessage));
+      _rollbackOptimistic(taskId, errorMessage: kLocalWriteErrorMessage);
     }
   }
 
@@ -889,6 +908,13 @@ class TaskCubit extends Cubit<TaskState> {
   /// came from a local mutation or a realtime event from another device, so
   /// header counts stay correct either way.
   // ---- Optimistic mutation overlay (TD-007) ----
+  //
+  // Deliberate duplicate of ShoppingCubit's overlay: the two cubits share no
+  // base class and their states differ in ways that matter here (TaskState
+  // preserves `error` across emits, ShoppingState clears it, which flips the
+  // emit order in rollback). KEEP BOTH COPIES IN SYNC — a change to one almost
+  // certainly belongs in the other. See docs/TD-007-DESIGN.md; extracting a
+  // generic mixin is filed as a pending improvement in IMPROVEMENTS.md.
 
   /// The entity as it was BEFORE an in-flight mutation, keyed by id, so a
   /// rejection can put it back. Null value = it did not exist (a create).

@@ -357,9 +357,24 @@ class FakeShoppingRepository implements ShoppingRepository {
       buildItem(itemId, purchased: payload['isPurchased'] as bool? ?? false)
           .copyWith(isSynced: !returnsUnsynced);
 
+  /// Held open by a test that wants to observe the optimistic state before
+  /// the server answers (TD-007).
+  Future<void>? purchaseGate;
+
+  /// Thrown by [purchase] — a Failure models a server rejection, any other
+  /// object models the TD-059 local-persistence branch.
+  Object? failPurchaseWith;
+
+  /// Scripted answer, e.g. isSynced:false for the fell-back-to-offline case.
+  ShoppingItem? purchaseReturns;
+
   @override
-  Future<ShoppingItem> purchase(String householdId, String itemId) async =>
-      buildItem(itemId, purchased: true).copyWith(isSynced: !returnsUnsynced);
+  Future<ShoppingItem> purchase(String householdId, String itemId) async {
+    if (purchaseGate != null) await purchaseGate;
+    if (failPurchaseWith != null) throw failPurchaseWith!;
+    return purchaseReturns ??
+        buildItem(itemId, purchased: true).copyWith(isSynced: !returnsUnsynced);
+  }
 
   @override
   Future<ShoppingItem?> delete(String householdId, String itemId) async =>
