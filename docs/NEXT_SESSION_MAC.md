@@ -21,6 +21,7 @@
 
 - 2026-08-16: backlog grooming móvil; TD-002 y TD-015 Resolved.
 - 2026-08-17: TD-040 (cuelgue de tests) y TD-059 (durabilidad Hive) cerrados; check documental en CI (PR #35).
+- 2026-08-18: TD-007 parcialmente cerrado (updates y deletes optimistic); creates aplazados como TD-060.
 - 2026-08-17: PR #32 config fallback (Codex); PR #33 integración legacy
   (Claude); PR #34 sync (Codex, cerrado como superseded sin merge). Plan free de Codex activo y validado.
   gh instalado; Codex CLI instalado y autenticado.
@@ -29,19 +30,54 @@
 
 - ~~TD-040: CI se cuelga en `offline_banner_test.dart`~~ — Resolved 2026-08-17 (ver "Fase 1" abajo).
 - TD-010: verificar backups en el dashboard de MongoDB Atlas/Railway.
-- Top-3 Mac (reordenado por PDR-009): ~~TD-059~~ (Resolved 2026-08-17), TD-007 y TD-001.
+- Top-3 Mac (reordenado por PDR-009): ~~TD-059~~ (Resolved 2026-08-17), ~~TD-007~~ (parcial 2026-08-18) y TD-001.
 
 ## Siguiente tarea
 
-**Diseño de TD-007 — optimistic updates en frontend.** Mismo formato que se usó
-para TD-059: un `docs/TD-007-DESIGN.md` aprobable en bloque antes de escribir
-código. Toca `TaskCubit` y `ShoppingCubit` y su interacción con la cola offline
-(TD-003 / ADR-010), y ahora se apoya en una persistencia local que ya es
-esperable y con política de errores explícita, que era la precondición que fijó
-PDR-009.
+**Round conjunto TD-057 + TD-060: la cola offline y los optimistic creates.**
+
+Los dos comparten el mismo terreno —la resolución de ids entre lo local y lo que
+el servidor devuelve— y por eso se abordan juntos (decisión A de
+`docs/TD-007-DESIGN.md`):
+
+- **TD-057** (High, abierto): la cola offline pierde un update/delete cuyo
+  create ya sincronizó, porque `idRemap` es una variable local que se descarta
+  entre pasadas de sincronización.
+- **TD-060** (Medium, aplazado): `createTask`/`createItem` optimistas, con id
+  temporal `pending-` y sustitución por el id real al confirmar.
+
+Resolverlos por separado significaría escribir dos veces la misma lógica de
+remapeo, con dos oportunidades de equivocarse. Conviene el mismo formato de
+documento de diseño aprobable en bloque que se usó para TD-059 y TD-007.
 
 Después: **TD-001**, migrar `members` embebido a colección separada — la
 migración más grande del backlog abierto.
+
+### Fase 3 — cerrada parcialmente (TD-007, 2026-08-18)
+
+**Optimistic updates: updates y deletes hechos; creates aplazados.** Seis
+mutaciones (`completeTask`, `updateTask`, `togglePurchased`, `updateItem`,
+`deleteTask`, `deleteItem`) aplican el cambio a la UI antes de enviar la
+petición, reconcilian con la entidad del servidor al confirmar y revierten si la
+rechaza.
+
+Tres decisiones que sostienen el resto:
+
+- **Guarda de supersesión:** solo se revierte si la entidad sigue siendo
+  idénticamente la que se aplicó. Restaurar sobre un valor más nuevo destruiría
+  trabajo del usuario; perder un rollback solo deja la UI adelantada hasta el
+  siguiente refresh.
+- **Un fallo de red no es un rechazo:** el repositorio lo absorbe y devuelve la
+  entidad encolada con `isSynced:false`, que es un éxito y no debe revertirse.
+- **"En vuelo" no se persiste:** vive en `pendingIds` del Cubit. Una escritura
+  en vuelo que llegara a Hive sería un fantasma que nadie reintentaría, porque
+  no hay `PendingOperation` que la respalde — el fallo de TD-059 con los papeles
+  cambiados.
+
+Limitación aceptada (decisión C): `recurringTasks` y `trashTasks` no reciben la
+superposición y quedan desincronizadas hasta recargar su pestaña.
+
+Ocho commits, suite de 249 a 269 tests. Ver `docs/TD-007-DESIGN.md`.
 
 ### Fase 2 — cerrada (TD-059, 2026-08-17)
 

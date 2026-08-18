@@ -302,3 +302,15 @@ Pendiente menor: el check 1 solo mira `AGENTS.md`. Extenderlo a los enlaces de `
 GitHub avisa en logs de CI que `actions/checkout@v4` corre sobre Node 20, pero ya han pasado a Node 24 por defecto. Afecta a los 5 jobs del workflow, hoy no rompe nada. Requiere actualizar las acciones y verificar que todo sigue funcionando. Prioridad baja.
 
 Detectado en el run de CI del PR #35 (mensaje literal: "Node 20 is being deprecated. This workflow is running with Node 24 by default"). Afecta también a `actions/setup-node@v4`, `actions/setup-java@v4`, `actions/cache@v4`, `dorny/paths-filter@v3` y `subosito/flutter-action@v2`, no solo a `checkout`. Ojo al tocar el job `frontend`: TD-041 fija la versión de Flutter a propósito, así que la actualización de acciones no debe arrastrar cambios de pin.
+
+---
+
+## 2026-08-18 — Evaluar un mixin genérico para el andamiaje optimistic
+
+Propuesto durante la implementación de TD-007.
+
+Motivo: `TaskCubit` y `ShoppingCubit` llevan cada uno su propia copia de la superposición optimista (`pendingIds`, `_rollbackSnapshots`, `_optimisticApplied`, `_applyOptimistic`, `_confirmOptimistic`, `_rollbackOptimistic`, `_isSuperseded`, `_findById`, `_rollbackDelete`): ~90 líneas duplicadas con solo el tipo de entidad cambiando. Ambas copias llevan un comentario de cross-ref pidiendo mantenerlas sincronizadas, lo cual funciona hasta que alguien se olvida.
+
+Estado: pendiente, prioridad baja. Se duplicó a propósito por decisión del dueño para no tocar los dos Cubits a la vez en mitad del round.
+
+Ojo al evaluarlo, porque no es un copy-paste puro: las dos copias **difieren en el orden de los emits** del rollback. `ShoppingState.copyWith` asigna `error` de forma incondicional (cada emit lo limpia) mientras que `TaskState` lo preserva, así que en Shopping el error debe emitirse al final y en Task antes del `_upsert`. Un mixin ingenuo que ignore esa diferencia romperá el mensaje de error de uno de los dos, sin fallar la compilación. Homogeneizar primero el contrato de `copyWith` de ambos estados probablemente sea el paso previo, y por sí solo ya vale más que el mixin.
