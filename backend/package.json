@@ -13,7 +13,8 @@
     "format:check": "prettier --check src",
     "test": "jest --runInBand --forceExit",
     "test:coverage": "jest --runInBand --forceExit --coverage",
-    "migrate:refresh-tokens": "node dist/scripts/migrate-refresh-tokens.js"
+    "migrate:refresh-tokens": "node dist/scripts/migrate-refresh-tokens.js",
+    "backfill:household-members": "node dist/scripts/backfill-household-members.js"
   },
   "keywords": [
     "homesync",
