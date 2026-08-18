@@ -86,11 +86,17 @@ Living document capturing operational learnings from the Mac↔Mobile workflow e
 - **Workaround CI:** paso aislado con continue-on-error (TD-044).
 - **Pendiente:** investigar con --verbose en Mac idle.
 
-### Bloqueo de npm test desde móvil (proxy MongoDB)
+### ~~Bloqueo de npm test desde móvil (proxy MongoDB)~~ — ya no aplica en Mac (2026-08-18)
 
 - `mongodb-memory-server` intenta descargar binarios de MongoDB → 403 desde algunas redes.
 - **Workaround:** CI valida tests, móvil solo typecheck+lint+build.
 - **Confirmado de nuevo (2026-08-16, ronda de scan auth):** `npm ci` sí funciona; lo que falla es la descarga del binario (`https://fastdl.mongodb.org/...` → `CONNECT tunnel failed, response 403`). No hay `mongod` local instalado como alternativa. Consecuencia práctica para sesiones móviles: **un fix cuyo riesgo principal es de comportamiento en runtime (no de tipos) no se puede validar localmente** — solo `npm run typecheck` y `npm run lint`. Esto acota qué fixes es razonable intentar desde móvil con presupuesto de 1 iteración de CI: cambios deterministas y de superficie pequeña sí; cambios sensibles a timing o concurrencia (p. ej. TD-050) conviene dejarlos para una sesión con MongoDB real. Workaround parcial útil: extraer la lógica pura a una función y verificarla con un script `node` suelto (se hizo así con el predicado `skip` del rate limiter global en esta ronda).
+
+- **Resuelto en Mac (2026-08-18, sesión de TD-001):** la suite de backend **sí se ejecuta en local**. El síntoma que se estaba interpretando como el bloqueo de proxy era en realidad otro: `firebase-admin` faltaba en `node_modules` (aunque está declarado en `package.json`), así que **cualquier** suite reventaba al compilar `notification.service.ts` — incluida `env.test.ts`, que no toca Mongo. Un `npm ci` lo arregló, con `package-lock.json` intacto, y a partir de ahí `mongodb-memory-server` descargó y arrancó sin problema: 311 tests, 21 suites, en verde.
+
+  Lo que esto cambia en la práctica: **un fix cuyo riesgo principal es de comportamiento en runtime ya se puede validar antes de abrir PR**, en vez de depender de una iteración de CI. La acotación de arriba sobre qué es razonable intentar sin poder ejecutar tests sigue siendo válida **para sesiones móviles**, que no tienen toolchain; deja de serlo para las de Mac.
+
+  Cautela honesta: no se ha probado desde otras redes. El 403 contra `fastdl.mongodb.org` documentado arriba pudo ser real en su momento y volver a aparecer en otra conexión. Si reaparece, el diagnóstico correcto es distinguirlo del fallo de compilación — el de proxy menciona `CONNECT tunnel failed`, el de dependencias menciona `Cannot find module`.
 
 ### Scan de seguridad backend auth (2026-08-16)
 
