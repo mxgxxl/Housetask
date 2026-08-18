@@ -22,6 +22,7 @@
 - 2026-08-16: backlog grooming móvil; TD-002 y TD-015 Resolved.
 - 2026-08-17: TD-040 (cuelgue de tests) y TD-059 (durabilidad Hive) cerrados; check documental en CI (PR #35).
 - 2026-08-18: TD-007 parcialmente cerrado (updates y deletes optimistic); creates aplazados como TD-060.
+- 2026-08-18: round TD-057 + TD-060 cerrado (cola offline sin pérdida de ids, creates optimistas); TD-061 abierto.
 - 2026-08-17: PR #32 config fallback (Codex); PR #33 integración legacy
   (Claude); PR #34 sync (Codex, cerrado como superseded sin merge). Plan free de Codex activo y validado.
   gh instalado; Codex CLI instalado y autenticado.
@@ -30,28 +31,56 @@
 
 - ~~TD-040: CI se cuelga en `offline_banner_test.dart`~~ — Resolved 2026-08-17 (ver "Fase 1" abajo).
 - TD-010: verificar backups en el dashboard de MongoDB Atlas/Railway.
-- Top-3 Mac (reordenado por PDR-009): ~~TD-059~~ (Resolved 2026-08-17), ~~TD-007~~ (parcial 2026-08-18) y TD-001.
+- Top-3 Mac (reordenado por PDR-009): ~~TD-059~~ (Resolved 2026-08-17), ~~TD-007~~ (parcial 2026-08-18) y TD-001 — el único que queda.
 
 ## Siguiente tarea
 
-**Round conjunto TD-057 + TD-060: la cola offline y los optimistic creates.**
+**Diseño de TD-001 — migrar `members` embebido a una colección
+`HouseholdMember` separada.** Es lo único que queda del Top-3 de Mac y la
+migración más grande del backlog abierto: toca el modelo, todos los servicios
+que leen `household.members` y el frontend. Es además el primer ítem del round
+que afecta al **backend**, no solo al cliente, así que arrastra migración de
+datos real en Atlas — a diferencia de TD-057/TD-059, que no tocaron esquema.
 
-Los dos comparten el mismo terreno —la resolución de ids entre lo local y lo que
-el servidor devuelve— y por eso se abordan juntos (decisión A de
-`docs/TD-007-DESIGN.md`):
+Mismo formato que los tres rounds anteriores: un `docs/TD-001-DESIGN.md`
+aprobable en bloque antes de escribir código, con especial atención al orden de
+despliegue (ver la sección "Deployment order" de `CLAUDE.md`: backend primero,
+app después) y a la ventana en que ambos formatos deben convivir.
 
-- **TD-057** (High, abierto): la cola offline pierde un update/delete cuyo
-  create ya sincronizó, porque `idRemap` es una variable local que se descarta
-  entre pasadas de sincronización.
-- **TD-060** (Medium, aplazado): `createTask`/`createItem` optimistas, con id
-  temporal `pending-` y sustitución por el id real al confirmar.
+### Fase 4 — cerrada (TD-057 + TD-060, 2026-08-18)
 
-Resolverlos por separado significaría escribir dos veces la misma lógica de
-remapeo, con dos oportunidades de equivocarse. Conviene el mismo formato de
-documento de diseño aprobable en bloque que se usó para TD-059 y TD-007.
+**La cola offline ya no pierde ids, y los creates son optimistas.**
 
-Después: **TD-001**, migrar `members` embebido a colección separada — la
-migración más grande del backlog abierto.
+**TD-057** (High, el único de los dos que provocaba pérdida de datos real): una
+edición o un borrado hechos offline desaparecían sin avisar cuando su create
+sincronizaba en un lote anterior. `syncPendingOperations` reescribe ahora la
+cola **antes** de retirar el create que produjo la traducción, así que esta
+sobrevive a un `break` y a un reinicio. El orden es el fix: morir en cualquier
+punto es seguro porque el create sigue encolado y la Idempotency-Key hace
+idempotente el reintento.
+
+Cubría **tres** salidas, no la única documentada: el `break` de red, el `break`
+por fallo de escritura en caché que añadió TD-059, y la muerte del proceso —
+esta última descartaba de raíz cualquier arreglo basado en memoria.
+
+**TD-060:** `createTask`/`createItem` pintan la fila al instante con id
+`pending-<uuid>` y la sustituyen por la real en **una sola emisión**, para que
+no parpadee. Las acciones de deslizar quedan deshabilitadas mientras el create
+está en vuelo: viven fuera del tile, y un swipe habría enviado un PATCH contra
+un id que el servidor nunca vio.
+
+Sin migración ni cambio de esquema en ninguno de los dos: mismo `typeId`,
+mismos campos, mismo adapter.
+
+**Dos limitaciones aceptadas, ambas documentadas en sus entradas:** una cola ya
+envenenada por una versión anterior no se rescata (decisión D), y un create
+optimista puede mostrar brevemente una fila duplicada porque el backend emite
+`task:created` también a quien la creó (decisión A) — se resuelve sola al
+confirmar.
+
+Se abrió **TD-061**: el logout vacía la cola pendiente sin aviso (decisión C).
+
+Ocho commits, suite de 279 a 290 tests. Ver `docs/TD-057-DESIGN.md`.
 
 ### Fase 3 — cerrada parcialmente (TD-007, 2026-08-18)
 
