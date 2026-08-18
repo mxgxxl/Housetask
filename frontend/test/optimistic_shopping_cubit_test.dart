@@ -153,4 +153,69 @@ void main() {
       expect(cubit.state.error, contains('Leche'));
     });
   });
+
+  group('createItem (TD-060)', () {
+    test('shows the row with a pending- id before the server answers',
+        () async {
+      final gate = Completer<void>();
+      final repo = FakeShoppingRepository()..createGate = gate.future;
+      final cubit = ShoppingCubit(repo);
+      await cubit.load('h1');
+
+      final inFlight = cubit.createItem({'name': 'Leche'});
+
+      expect(cubit.state.items.single.id, startsWith('pending-'));
+      expect(cubit.state.pendingIds, hasLength(1));
+
+      gate.complete();
+      await inFlight;
+    });
+
+    test('swaps the temporary id for the server one in a SINGLE emission',
+        () async {
+      final gate = Completer<void>();
+      final repo = FakeShoppingRepository()..createGate = gate.future;
+      final cubit = ShoppingCubit(repo);
+      await cubit.load('h1');
+
+      final inFlight = cubit.createItem({'name': 'Leche'});
+      final seen = <List<String>>[];
+      final sub = cubit.stream
+          .listen((s) => seen.add(s.items.map((i) => i.id).toList()));
+
+      gate.complete();
+      await inFlight;
+      await Future<void>.delayed(Duration.zero);
+      await sub.cancel();
+
+      expect(seen, hasLength(1), reason: 'two emissions would flicker');
+      expect(seen.single, ['created']);
+      expect(cubit.state.pendingIds, isEmpty);
+    });
+
+    test('removes the optimistic row when the server rejects', () async {
+      final repo = FakeShoppingRepository(
+          failCreateWith: const ServerFailure('No autorizado', statusCode: 403));
+      final cubit = ShoppingCubit(repo);
+      await cubit.load('h1');
+
+      await cubit.createItem({'name': 'Leche'});
+
+      expect(cubit.state.items, isEmpty);
+      expect(cubit.state.error, 'No autorizado');
+      expect(cubit.state.pendingIds, isEmpty);
+    });
+
+    test('a create that falls back to the queue swaps pending- for the '
+        'offline entity', () async {
+      final cubit = ShoppingCubit(FakeShoppingRepository(returnsUnsynced: true));
+      await cubit.load('h1');
+
+      await cubit.createItem({'name': 'Leche'});
+
+      expect(cubit.state.items.single.id, isNot(startsWith('pending-')));
+      expect(cubit.state.items.single.isSynced, isFalse);
+      expect(cubit.state.offlineNotice, kShoppingOfflineNoticeMessage);
+    });
+  });
 }

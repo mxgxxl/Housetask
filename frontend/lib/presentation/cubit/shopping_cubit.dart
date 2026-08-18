@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:uuid/uuid.dart';
 import '../../core/errors/failures.dart';
 import '../../data/models/shopping_item.dart';
 import '../../data/models/shopping_item_adapter.dart';
@@ -231,18 +232,56 @@ class ShoppingCubit extends Cubit<ShoppingState> {
     if (_householdId != null) await load(_householdId!);
   }
 
+  /// Twin of TaskCubit._confirmCreate — see the rationale there. One emission,
+  /// or the row flickers.
+  void _confirmCreate(String tempId, ShoppingItem confirmed,
+      {String? offlineNotice}) {
+    _rollbackSnapshots.remove(tempId);
+    _optimisticApplied.remove(tempId);
+
+    final list = state.items.where((i) => i.id != tempId).toList();
+    final idx = list.indexWhere((i) => i.id == confirmed.id);
+    if (idx >= 0) {
+      list[idx] = confirmed;
+    } else {
+      list.add(confirmed);
+    }
+    emit(state.copyWith(
+      status: ShoppingStatusUi.loaded,
+      items: _sorted(list),
+      nextCursor: state.nextCursor,
+      offlineNotice: offlineNotice,
+      pendingIds: state.pendingIds.difference({tempId}),
+    ));
+  }
+
   Future<void> createItem(Map<String, dynamic> payload) async {
     if (_householdId == null) return;
+
+    // `pending-`, never `local-` — see TaskCubit.createTask.
+    final tempId = 'pending-${_uuid.v4()}';
+    _applyOptimistic(
+      mergeShoppingItemPayload(
+        base: null,
+        id: tempId,
+        householdId: _householdId!,
+        payload: payload,
+        isSynced: true,
+      ),
+      previous: null,
+    );
+
     try {
       final item = await _repo.create(_householdId!, payload);
-      _upsert(item, offlineNotice: item.isSynced ? null : kShoppingOfflineNoticeMessage);
+      _confirmCreate(tempId, item,
+          offlineNotice: item.isSynced ? null : kShoppingOfflineNoticeMessage);
     } on Failure catch (f) {
-      emit(state.copyWith(error: f.message));
+      _rollbackOptimistic(tempId, errorMessage: f.message);
     } catch (_) {
       // Not a Failure: the repository could not persist the write
       // locally (TD-059). Caught here or it would escape the cubit
       // entirely and leave the UI with no feedback at all.
-      emit(state.copyWith(error: kShoppingLocalWriteErrorMessage));
+      _rollbackOptimistic(tempId, errorMessage: kShoppingLocalWriteErrorMessage);
     }
   }
 
@@ -399,6 +438,9 @@ class ShoppingCubit extends Cubit<ShoppingState> {
     if (state.total == null || delta == 0) return state.total;
     return state.total! + delta;
   }
+
+  /// Only used to mint the temporary id of an optimistic create (TD-060).
+  static const _uuid = Uuid();
 
   // ---- Optimistic mutation overlay (TD-007) ----
   //

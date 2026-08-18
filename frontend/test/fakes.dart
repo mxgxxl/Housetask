@@ -354,6 +354,7 @@ class FakeShoppingRepository implements ShoppingRepository {
 
   @override
   Future<ShoppingItem> create(String householdId, Map<String, dynamic> payload) async {
+    if (createGate != null) await createGate;
     if (failCreateWith != null) throw failCreateWith!;
     return buildItem('created', name: payload['name'] as String? ?? 'Producto')
         .copyWith(isSynced: !returnsUnsynced);
@@ -386,6 +387,10 @@ class FakeShoppingRepository implements ShoppingRepository {
     return purchaseReturns ??
         buildItem(itemId, purchased: true).copyWith(isSynced: !returnsUnsynced);
   }
+
+  /// Held open by a test that wants to observe the optimistic row before the
+  /// server answers (TD-060).
+  Future<void>? createGate;
 
   /// Thrown by [delete] — Failure models a server rejection (TD-007).
   Object? failDeleteWith;
