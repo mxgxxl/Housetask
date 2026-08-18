@@ -314,3 +314,15 @@ Motivo: `TaskCubit` y `ShoppingCubit` llevan cada uno su propia copia de la supe
 Estado: pendiente, prioridad baja. Se duplicó a propósito por decisión del dueño para no tocar los dos Cubits a la vez en mitad del round.
 
 Ojo al evaluarlo, porque no es un copy-paste puro: las dos copias **difieren en el orden de los emits** del rollback. `ShoppingState.copyWith` asigna `error` de forma incondicional (cada emit lo limpia) mientras que `TaskState` lo preserva, así que en Shopping el error debe emitirse al final y en Task antes del `_upsert`. Un mixin ingenuo que ignore esa diferencia romperá el mensaje de error de uno de los dos, sin fallar la compilación. Homogeneizar primero el contrato de `copyWith` de ambos estados probablemente sea el paso previo, y por sí solo ya vale más que el mixin.
+
+---
+
+## 2026-08-18 — Verificar periódicamente la protección --assume-unchanged de pbxproj
+
+Motivo: CLAUDE.md documenta que `project.pbxproj` es local-only y debe tener `--assume-unchanged`, pero la protección puede perderse sin que nadie se dé cuenta, dejando el Bundle ID personal a un `git add` de colarse en el repo.
+
+Estado: pendiente. Cadencia sugerida: al inicio de cada sesión de Mac, `git ls-files -v | grep pbxproj` debe mostrar `h` minúscula.
+
+Contexto: no es hipotético. Al configurar la firma iOS local se encontró la protección **efectivamente perdida** — `git ls-files -v` no devolvía ninguna `h` minúscula, contra lo que documenta CLAUDE.md — con el fichero en su valor compartido (`com.homesync.app`). Se restauró en esa misma sesión. No hay constancia de cuándo se perdió; la causa más probable es un `git update-index --no-assume-unchanged` temporal (el propio CLAUDE.md documenta ese procedimiento para cambios legítimos) que no se revirtió después.
+
+Candidato natural a automatizarse dentro de `scripts/check_docs.sh`, que ya corre en cada PR: sería una comprobación más de coherencia entre lo que CLAUDE.md afirma y lo que el repo hace. Ojo, sin embargo, a que el flag es **estrictamente local** y no viaja en el repo, así que en CI la comprobación siempre fallaría; solo tiene sentido como script de uso manual o como hook local.
