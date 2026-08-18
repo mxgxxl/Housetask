@@ -331,3 +331,29 @@ Debe quedar anotado al cerrar TD-001, con las dos mediciones.
 Se empieza en esta sesión. Refuerza el argumento de §7: el volumen actual es mínimo (hogares de 2-6 personas), así que el backfill es cuestión de segundos y equivocarse todavía es barato. Hacerlo con usuarios reales sería otra conversación.
 
 Se mantienen las seis paradas de §6 y el criterio de que **entre la fase 2 y la 3 lo que autoriza a avanzar es un dato** —cero divergencias medidas— y no un plazo.
+
+---
+
+## Nota de implementación: la atomicidad de la Hard Rule 9 está razonada, no medida
+
+Añadido el 2026-08-18, al implementar el commit 2.
+
+`removeMember` ejecuta la lectura, el conteo de admins y las tres escrituras dentro de una transacción, exactamente como pedía la decisión A. Lo que **no** se consiguió es demostrar empíricamente que esa transacción sea lo que impide dejar un hogar sin admin.
+
+### Lo que se intentó
+
+1. **Dos peticiones concurrentes vía supertest.** El test pasa **también con la transacción desactivada** (3/3 ejecuciones). Bajo `--runInBand` y con Node monohilo, las dos peticiones no llegan a intercalarse en la ventana entre el conteo y la escritura: ninguna cede el control ahí.
+2. **Fail point de MongoDB** (`configureFailPoint` / `failCommand` con `blockConnection`), para retener la escritura de la primera transacción y que la segunda leyera el estado previo. Requiere arrancar el servidor en memoria con `--setParameter enableTestCommands=1`, lo cual **funciona** — el comando responde `ok: 1`. Pero el resultado fue el mismo: **el test sigue pasando sin la transacción**, 3/3. El fail point desplaza el bloqueo sin abrir la ventana.
+
+Ambos experimentos se revirtieron en vez de dejarse como andamiaje muerto: el test de carrera se borró y el flag del harness también, al quedarse sin consumidor.
+
+### Lo que NO se hizo, y por qué
+
+No se añadió una costura en el código de producción —por ejemplo, un retardo inyectable entre el conteo y la escritura— porque introducir un punto de extensión en una ruta crítica únicamente para que un test pueda observarla es un intercambio que merece decidirse a propósito, no colarse dentro de un round de migración. La decisión fue explícita del dueño.
+
+### Cuál es el estado real, dicho sin adornos
+
+- **La protección es correcta por construcción**: las dos transacciones leen y escriben el mismo documento de hogar, así que MongoDB detecta el conflicto de escritura y una de ellas aborta; `withTransaction` la reintenta, la relectura ve un solo admin y la Hard Rule 9 la rechaza.
+- **Esa cadena de razonamiento no está verificada por una prueba que falle sin ella.** El test que existe (`household-member-dual-write.test.ts`) afirma el invariante y cazaría una regresión gruesa, pero pasaría igual si alguien quitara la transacción.
+
+Quien retome esto debe saberlo antes de tocar `removeMember`: **quitar la transacción no rompería ningún test**, y eso es precisamente lo que la hace frágil de mantener. Si en algún momento se decide construir la costura, este es el sitio donde apuntar por qué hacía falta.

@@ -123,11 +123,19 @@ describe('TD-001 Hard Rule 9 under a transaction', () => {
       // So this asserts the invariant holds, and would catch a gross
       // regression, but it does NOT prove the transaction is what protects it.
       //
-      // Demonstrating the race for real would need a seam to widen the window
-      // (e.g. an injectable delay between the count and the save) so the two
-      // removals genuinely overlap. Filed as a follow-up rather than built
-      // here, because adding a production seam purely to prove a test is a
-      // trade worth deciding deliberately.
+      // Demonstrating it for real was ATTEMPTED and abandoned (2026-08-18).
+      // MongoDB's `failCommand` fail point was used to hold the first
+      // transaction's write for a second, so the other could read the
+      // pre-write state: it needs `--setParameter enableTestCommands=1` on
+      // the in-memory server, which works, and `configureFailPoint` responds
+      // fine — but the test still passed with the transaction removed, 3/3.
+      // The interleaving never materialises, so the fail point moves the
+      // block without opening the window. Both the throwaway test and the
+      // harness flag were reverted rather than left as dead scaffolding.
+      //
+      // What is left, deliberately: the transaction's protection is REASONED
+      // (MongoDB transaction isolation plus a write conflict on the shared
+      // household document), not measured. See docs/TD-001-DESIGN.md §7.
       const adminA = await createTestUser(app);
       const household = await createTestHousehold(app, adminA);
       const adminB = await createTestUser(app);
