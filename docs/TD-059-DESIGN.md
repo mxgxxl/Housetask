@@ -256,3 +256,68 @@ Cada commit es revertible por separado. El punto de no retorno práctico es el c
 Las pruebas manuales en dispositivo son tuyas y van después del merge; no entran en esas dos sesiones.
 
 **Lo que más probablemente rompa la estimación**, en orden de probabilidad: (1) que simular un fallo de Hive obligue a refactorizar `CacheService` para inyectar una costura de test — podría añadir media sesión; (2) que aparezcan Cubits que gestionan mal la nueva excepción y haya que arreglar varios; (3) que el cambio de rendimiento en `saveTasks` con listas grandes obligue a un paso de optimización no previsto.
+
+---
+
+## Hallazgos durante la implementación
+
+Añadido al cerrar TD-059 el 2026-08-17. Estas son las cosas que el diseño no anticipó y que cambiaron cómo se implementó.
+
+### 1. La trampa del keystore síncrono de Hive
+
+**El diseño se equivocaba al clasificar el commit 1 como "riesgo muy bajo, cambio de tipos puro, comportamiento idéntico".** No lo era, y romper eso costó 6 tests.
+
+La primera versión convertía los métodos con cuerpo `async`:
+
+```dart
+Future<void> saveTasks(String householdId, List<Task> tasks) async {
+  ...
+  await _tasks.deleteAll(staleKeys);
+  await _tasks.putAll({for (final task in tasks) task.id: task});
+}
+```
+
+Eso rompió `cache_service_test.dart` y `task_repository_cache_test.dart`, que escriben y leen sin `await`.
+
+**Mecanismo:** Hive aplica un `put`/`delete` a su keystore **en memoria de forma síncrona** y devuelve un `Future` solo para el flush a disco. Por eso los llamadores actuales, que no esperan, siguen viendo la escritura al instante. Un cuerpo `async` suspende en el primer `await`, así que la escritura queda aplazada más allá de la siguiente lectura síncrona del llamador.
+
+**Solución aplicada:** no usar cuerpo `async`. Se invocan las operaciones de Hive de forma síncrona y se devuelve su `Future` combinado:
+
+```dart
+Future<void> saveTasks(String householdId, List<Task> tasks) {
+  final staleKeys = ...;
+  final writes = <Future<void>>[
+    for (final key in staleKeys) _tasks.delete(key),
+    for (final task in tasks) _tasks.put(task.id, task),
+  ];
+  return Future.wait(writes);
+}
+```
+
+Comportamiento observable idéntico, durabilidad esperable. Por el mismo motivo se descartaron `putAll`/`deleteAll`, que habrían exigido cuerpo `async` y reintroducido el problema.
+
+**Guardado con tests:** tres casos en `test/cache_durability_test.dart` ("writes stay visible synchronously") verifican que la escritura es visible ANTES de que su `Future` resuelva. Si alguien reescribe un writer con cuerpo `async`, fallan de inmediato en vez de romper otros ficheros de forma difusa.
+
+### 2. La delimitación de call sites la resolvió el compilador
+
+En lugar de decidir a ojo qué sitios podían esperar sin cambiar firmas, se añadió `await` a los 38 y se dejó que el analizador señalara los inválidos. Marcó `await_in_wrong_context` en exactamente 12 — los 2 de cada uno de los 6 helpers síncronos. La predicción del diseño ("ningún call site atrapado en un contexto síncrono irrecuperable") quedó así **verificada por el compilador**, no por inspección.
+
+Los 10 call sites de esos helpers tampoco necesitaron tocarse: todos son `return _xOffline(...)` y Dart permite devolver un `Future<T>` desde una función `async` declarada `Future<T>`.
+
+### 3. Los Cubits solo capturaban `on Failure`
+
+El diseño listaba como riesgo que "un Cubit se quede en estado de carga colgado". El problema real era peor: un fallo de escritura de Hive **no es un `Failure`**, así que se habría escapado del cubit entero sin ningún feedback en la UI. Las ocho mutaciones necesitaron un `catch` general, no solo un mensaje nuevo.
+
+### 4. `saveHousehold` se migró, no se borró
+
+El commit 8 del plan ("eliminar saveHousehold si sigue sin uso") quedó vacío por decisión del dueño: migrarlo. Su migración entró en el commit 1 como una firma más. Sigue sin call sites en producción.
+
+### 5. El propio check documental tenía un agujero, dos veces
+
+Al marcar TD-040 como `**Resolved**` en negrita, `scripts/check_docs.sh` no lo detectó: comparaba el prefijo `Resolved` contra el texto crudo y el `**` rompía la comparación. Corregido eliminando el énfasis antes de comparar.
+
+Al cerrar TD-059 apareció el segundo: el check asumía que **toda** fila de la tabla corta de `CLAUDE.md` está abierta, lo que impedía dejar allí una entrada recién resuelta con su estado explícito. Ahora compara los dos estados **declarados**, y de paso caza la dirección contraria, que antes no miraba.
+
+### 6. Estimación
+
+El plan estimaba dos sesiones de Mac. Los diez commits salieron en una sola, sin sorpresas mayores. La costura de test (commit 4a), que el diseño señalaba como el riesgo más probable de desviación, resultó ser un método de inyección de boxes de ~20 líneas contenido en `cache_service.dart`.

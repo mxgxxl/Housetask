@@ -256,7 +256,7 @@ to clients.
 <!-- sync-start: testing-standards -->
 ## 🧪 Testing Standards
 
-Testing stack installed: Jest + Supertest + mongodb-memory-server (backend); flutter_test + bloc_test (frontend). CI runs the full suite on every PR — 298 backend tests (20 suites), 216 frontend tests in the main blocking step, plus `test/widgets/offline_banner_test.dart` run separately with allow-failure (TD-040).
+Testing stack installed: Jest + Supertest + mongodb-memory-server (backend); flutter_test + bloc_test (frontend). CI runs the full suite on every PR — 298 backend tests (20 suites) and 249 frontend tests, all in ONE blocking step: the `test/widgets/offline_banner_test.dart` allow-failure carve-out was removed on 2026-08-17 once TD-040 was root-caused and fixed.
 
 - **Backend:** Jest + Supertest for integration tests
 - **Frontend:** `flutter_test` for widget tests, `bloc_test` for Cubit tests

@@ -375,7 +375,7 @@ to clients.
 <!-- sync-start: testing-standards -->
 ## 🧪 Testing Standards
 
-Testing stack installed: Jest + Supertest + mongodb-memory-server (backend); flutter_test + bloc_test (frontend). CI runs the full suite on every PR — 298 backend tests (20 suites), 216 frontend tests in the main blocking step, plus `test/widgets/offline_banner_test.dart` run separately with allow-failure (TD-040).
+Testing stack installed: Jest + Supertest + mongodb-memory-server (backend); flutter_test + bloc_test (frontend). CI runs the full suite on every PR — 298 backend tests (20 suites) and 249 frontend tests, all in ONE blocking step: the `test/widgets/offline_banner_test.dart` allow-failure carve-out was removed on 2026-08-17 once TD-040 was root-caused and fixed.
 
 - **Backend:** Jest + Supertest for integration tests
 - **Frontend:** `flutter_test` for widget tests, `bloc_test` for Cubit tests
@@ -455,7 +455,7 @@ The full registry (~47 entries, all history) lives in [Full Technical Debt Regis
 | TD-049 | No real Firebase project connected for push notifications (PDR-008) — code is in place, no push actually delivers until a Firebase project + `flutterfire configure` + APNs key are set up manually | High | Planned (before beta push notifications can work) |
 | TD-054 | Access token stays valid up to 15 min after logout (stateless-JWT tradeoff, documented not fixed) | Low | Planned |
 | TD-057 | Offline sync loses an update/delete whose create synced in an earlier batch (`idRemap` is per-call, not persisted) | High | Open (frontend scan round 2) |
-| TD-059 | CacheService's six Hive writers are declared `void` and discard the `Future` Hive returns, so no caller can await durability (root cause of TD-040) | High | Open (next up, PDR-009) |
+| TD-059 | CacheService's Hive writers were declared `void` and discarded the `Future` Hive returns, so no caller could await durability (root cause of TD-040) | High | Resolved (2026-08-17) |
 
 ---
 
@@ -655,7 +655,7 @@ Two separate systems, deliberately not coupled by a branch-protection gate (see 
 - **Railway = continuous deployment.** Auto-deploys on every push to `main`, independent of GitHub Actions' outcome — see "Deployment" above.
 - **GitHub Actions (`.github/workflows/ci.yml`) = continuous integration.** Verifies a push/PR; it does not deploy anything itself.
   - `backend` (ubuntu-latest, every PR + push to main): `npm ci`, typecheck, build, test. No secrets or service containers: the suite starts its own in-memory MongoDB (`mongodb-memory-server`) and never touches Redis or a real database — see "Testing Standards".
-  - `frontend` (ubuntu-latest, every PR + push to main): `flutter analyze` (report-only on the repo's pre-existing `info`-level lints via `--no-fatal-infos`; still blocking on anything higher), then Flutter tests in two steps (TD-044): one blocking step runs every `*_test.dart` under `test/` and `test/widgets/` together (found via `find`, so a new test file needs no workflow edit to be covered) except `test/widgets/offline_banner_test.dart`, which stays isolated in its own step with a bounded timeout and `continue-on-error`. That isolation is now **redundant**: TD-040 was root-caused and fixed on 2026-08-17 (a real Hive write inside `testWidgets`' fake-async zone deadlocked `tearDown`, not the host-level stall previously assumed), and the file passes as part of the full suite. The step is kept as-is only because folding it back into the blocking step means editing this workflow, which needs the owner's approval. Finishes with `flutter build apk --debug` as an Android smoke test.
+  - `frontend` (ubuntu-latest, every PR + push to main): `flutter analyze` (report-only on the repo's 14 pre-existing `info`-level lints via `--no-fatal-infos`; still blocking on anything higher), then **one** blocking Flutter test step running every `*_test.dart` under `test/` and `test/widgets/` (found via `find`, so a new test file needs no workflow edit to be covered). `test/widgets/offline_banner_test.dart` used to be carved out into its own `continue-on-error` step; that carve-out was removed on 2026-08-17 once TD-040 was root-caused and fixed (a real Hive write inside `testWidgets`' fake-async zone deadlocked `tearDown` — never the host-level stall previously assumed), so a regression there fails CI again instead of passing green. Finishes with `flutter build apk --debug` as an Android smoke test.
   - `frontend-ios` (macos-latest, **`main` only**): `flutter build ios --simulator --debug --no-codesign`. Skipped on PRs — macOS runner minutes cost several times more than Linux, and a simulator build mainly catches native-project drift, which a PR's Linux jobs already cover for everything else.
   - Path-based skip: a `changes` job (`dorny/paths-filter@v3`) gates `backend`/`frontend` on whether their paths (or `ci.yml` itself) actually changed, so a docs-only PR no longer burns ~10 min running the full suite.
   - Concurrency: one run per branch/ref, `cancel-in-progress: true` — a superseded push's CI run is canceled rather than left to burn minutes to completion.
