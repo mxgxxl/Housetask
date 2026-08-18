@@ -191,8 +191,8 @@ Detailed ADRs live in docs/ADRs.md. Index:
 | `shopping:updated` | ShoppingItem | Item modified |
 | `shopping:purchased` | ShoppingItem | Item marked purchased |
 | `shopping:deleted` | `{ id, householdId }` | Item removed |
-| `household:member_joined` | Member + Household | User joined household |
-| `household:member_left` | Member + Household | User left/removed |
+| `household:member_joined` | `{ householdId, userId }` | User joined household |
+| `household:member_left` | `{ householdId, userId }` | User left/removed |
 | `tasks:batch_created` | `{ tasks[], count }` | Recurring catch-up generation |
 | `tasks:purged` | `{ householdId, deleted }` | Admin purges the trash (TD-048); only emitted when `deleted > 0` |
 | `pet:adopt_requested` | AdoptionRequest: `{ id, householdId, species, name, requestedBy, status: 'pending', createdAt, updatedAt }` | 2+ member household proposes an adoption (PDR-001) |
