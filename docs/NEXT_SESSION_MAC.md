@@ -20,6 +20,7 @@
 ## Historial
 
 - 2026-08-16: backlog grooming móvil; TD-002 y TD-015 Resolved.
+- 2026-08-17: TD-040 (cuelgue de tests) y TD-059 (durabilidad Hive) cerrados; check documental en CI (PR #35).
 - 2026-08-17: PR #32 config fallback (Codex); PR #33 integración legacy
   (Claude); PR #34 sync (Codex, cerrado como superseded sin merge). Plan free de Codex activo y validado.
   gh instalado; Codex CLI instalado y autenticado.
@@ -28,25 +29,46 @@
 
 - ~~TD-040: CI se cuelga en `offline_banner_test.dart`~~ — Resolved 2026-08-17 (ver "Fase 1" abajo).
 - TD-010: verificar backups en el dashboard de MongoDB Atlas/Railway.
-- Top-3 Mac (reordenado por PDR-009): TD-059, TD-007 y TD-001.
+- Top-3 Mac (reordenado por PDR-009): ~~TD-059~~ (Resolved 2026-08-17), TD-007 y TD-001.
 
 ## Siguiente tarea
 
-**Fase 2 — durabilidad de la caché Hive (TD-059).** Los seis escritores de Hive
-de `CacheService` están declarados `void` y descartan el `Future` que devuelve
-Hive, así que nadie puede esperar a que una escritura llegue a disco. Pasa a ir
-por delante de TD-007 por decisión **PDR-009**: un optimistic update confía en
-que la escritura local sobreviva hasta que la cola la reproduzca, y construirlo
-sobre persistencia fire-and-forget dejaría dos sospechosos ante el mismo
-síntoma. Alcance: seis firmas a `Future<void>`, sus llamadores, auditoría de los
-`testWidgets` que tocan Hive y timeouts explícitos en esos tests.
+**Diseño de TD-007 — optimistic updates en frontend.** Mismo formato que se usó
+para TD-059: un `docs/TD-007-DESIGN.md` aprobable en bloque antes de escribir
+código. Toca `TaskCubit` y `ShoppingCubit` y su interacción con la cola offline
+(TD-003 / ADR-010), y ahora se apoya en una persistencia local que ya es
+esperable y con política de errores explícita, que era la precondición que fijó
+PDR-009.
 
-Después, en este orden:
+Después: **TD-001**, migrar `members` embebido a colección separada — la
+migración más grande del backlog abierto.
 
-1. **TD-007 — optimistic updates en frontend.** Toca `TaskCubit` y
-   `ShoppingCubit` y su interacción con la cola offline (TD-003 / ADR-010).
-2. **TD-001 — migrar `members` embebido a colección separada.** La migración
-   más grande del backlog abierto.
+### Fase 2 — cerrada (TD-059, 2026-08-17)
+
+**Durabilidad de la caché Hive, completada en una sesión (el diseño estimaba
+dos).** Los escritores de `CacheService` devuelven `Future<void>` y todos sus
+call sites los esperan, bajo la política dual aprobada: los seis helpers
+`_createOffline`/`_mutateOffline`/`_deleteOffline` **propagan** el fallo, y el
+cacheo de datos que el servidor ya tiene es **best-effort con reporte a
+Sentry**. Una escritura offline cuya operación encolada falla tras haber
+guardado la entidad se revierte, así que el usuario nunca conserva una entidad
+sin sincronizar que jamás podría sincronizarse. Un fallo local ya no se
+disfraza de "guardado offline": muestra "No se pudo guardar en este
+dispositivo".
+
+Alcance real: **once** métodos, no seis — `saveTask` y `saveShoppingItem`
+concentraban la mayoría de los call sites y quedarse en seis habría dejado el
+trabajo inútil de cara a TD-007.
+
+Hallazgo principal, ya protegido con tests: estos escritores **no deben tener
+cuerpo `async`**. Hive aplica el `put`/`delete` a su keystore en memoria de
+forma síncrona y devuelve el `Future` solo para el flush a disco, así que un
+cuerpo `async` aplaza la escritura más allá de la siguiente lectura síncrona
+del llamador — rompió 6 tests al escribirlo así. La forma correcta es invocar
+las operaciones de forma síncrona y devolver `Future.wait`. Los seis hallazgos
+completos están en `docs/TD-059-DESIGN.md`.
+
+Diez commits, suite de 234 a 249 tests. Ver `docs/TECH_DEBT.md` y **PDR-009**.
 
 ### Fase 1 — cerrada (TD-040, 2026-08-17)
 
