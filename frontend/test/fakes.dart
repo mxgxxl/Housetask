@@ -249,8 +249,14 @@ class FakeTaskRepository implements TaskRepository {
   /// (remove it outright).
   final Task? offlineDeleteReturns;
 
+  /// Thrown by [delete] — Failure models a server rejection (TD-007).
+  Object? failDeleteWith;
+
   @override
-  Future<Task?> delete(String householdId, String taskId) async => offlineDeleteReturns;
+  Future<Task?> delete(String householdId, String taskId) async {
+    if (failDeleteWith != null) throw failDeleteWith!;
+    return offlineDeleteReturns;
+  }
 
   /// Task ids passed to [restore], in order — lets a test assert exactly
   /// which row's "Restaurar" button was tapped.
@@ -376,9 +382,14 @@ class FakeShoppingRepository implements ShoppingRepository {
         buildItem(itemId, purchased: true).copyWith(isSynced: !returnsUnsynced);
   }
 
+  /// Thrown by [delete] — Failure models a server rejection (TD-007).
+  Object? failDeleteWith;
+
   @override
-  Future<ShoppingItem?> delete(String householdId, String itemId) async =>
-      offlineDeleteReturns;
+  Future<ShoppingItem?> delete(String householdId, String itemId) async {
+    if (failDeleteWith != null) throw failDeleteWith!;
+    return offlineDeleteReturns;
+  }
 
   int syncCalls = 0;
   int syncPendingOperationsResult = 0;

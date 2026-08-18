@@ -127,4 +127,30 @@ void main() {
       expect(cubit.state.pendingIds, isEmpty);
     });
   });
+
+  group('deleteItem', () {
+    test('removes the row immediately and keeps it gone once confirmed',
+        () async {
+      final cubit = ShoppingCubit(repoWith(buildItem('i1')));
+      await cubit.load('h1');
+
+      await cubit.deleteItem('i1');
+
+      expect(findIn(cubit, 'i1'), isNull);
+      expect(cubit.state.pendingIds, isEmpty);
+    });
+
+    test('reinserts the row when the server rejects, naming the item',
+        () async {
+      final repo = repoWith(buildItem('i1', name: 'Leche'))
+        ..failDeleteWith = const ServerFailure('No autorizado', statusCode: 403);
+      final cubit = ShoppingCubit(repo);
+      await cubit.load('h1');
+
+      await cubit.deleteItem('i1');
+
+      expect(findIn(cubit, 'i1'), isNotNull);
+      expect(cubit.state.error, contains('Leche'));
+    });
+  });
 }

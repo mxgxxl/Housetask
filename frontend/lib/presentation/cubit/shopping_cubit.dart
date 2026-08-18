@@ -321,21 +321,59 @@ class ShoppingCubit extends Cubit<ShoppingState> {
   /// upserted (struck through by the tile) instead of removing it.
   Future<void> deleteItem(String itemId) async {
     if (_householdId == null) return;
+
+    // Optimistic removal — see TaskCubit.deleteTask for the rationale and the
+    // offline asymmetry this must preserve.
+    final previous = _findById(itemId);
+    if (previous != null) {
+      _rollbackSnapshots[itemId] = previous;
+      _optimisticApplied.remove(itemId);
+      emit(state.copyWith(pendingIds: {...state.pendingIds, itemId}));
+      _remove(itemId);
+    }
+
     try {
       final marked = await _repo.delete(_householdId!, itemId);
       if (marked != null) {
-        _upsert(marked, offlineNotice: kShoppingOfflineNoticeMessage);
+        // Fell back to the queue: the row returns struck through instead of
+        // staying removed.
+        _confirmOptimistic(itemId, marked,
+            offlineNotice: kShoppingOfflineNoticeMessage);
       } else {
+        _rollbackSnapshots.remove(itemId);
+        emit(state.copyWith(pendingIds: state.pendingIds.difference({itemId})));
+        // Idempotent on purpose: the optimistic branch above only fires for
+        // entities present in the paginated buckets, but a row can be visible
+        // in another surface built from the same cubit (the timeline) without
+        // being in any bucket — e.g. a session that only ran loadTimeline().
+        // Removing again here costs nothing and keeps those surfaces correct.
         _remove(itemId);
       }
     } on Failure catch (f) {
-      emit(state.copyWith(error: f.message));
+      _rollbackDelete(itemId, previous, errorMessage: f.message);
     } catch (_) {
       // Not a Failure: the repository could not persist the write
       // locally (TD-059). Caught here or it would escape the cubit
       // entirely and leave the UI with no feedback at all.
-      emit(state.copyWith(error: kShoppingLocalWriteErrorMessage));
+      _rollbackDelete(itemId, previous,
+          errorMessage: kShoppingLocalWriteErrorMessage);
     }
+  }
+
+  /// Twin of TaskCubit._rollbackDelete — the message names the item because
+  /// the reinsertion is abrupt.
+  void _rollbackDelete(String itemId, ShoppingItem? previous,
+      {required String errorMessage}) {
+    final stillGone = _findById(itemId) == null;
+    _rollbackSnapshots.remove(itemId);
+
+    if (previous != null && stillGone) _upsert(previous);
+    emit(state.copyWith(
+      error: previous == null
+          ? errorMessage
+          : 'No se pudo borrar «${previous.name}»: $errorMessage',
+      pendingIds: state.pendingIds.difference({itemId}),
+    ));
   }
 
   void applyRealtime(String event, dynamic data) {

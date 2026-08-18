@@ -860,23 +860,67 @@ class TaskCubit extends Cubit<TaskState> {
   /// user can see the delete is queued, not lost.
   Future<void> deleteTask(String taskId) async {
     if (_householdId == null) return;
+
+    // Optimistic removal: the row goes now. On rejection it comes back, which
+    // is visually abrupt, so the error message names the task (see below) —
+    // otherwise the reappearance reads as a glitch rather than a failure.
+    final previous = _findById(taskId);
+    if (previous != null) {
+      _rollbackSnapshots[taskId] = previous;
+      _optimisticApplied.remove(taskId);
+      emit(state.copyWith(pendingIds: {...state.pendingIds, taskId}));
+      _remove(taskId);
+    }
+
     try {
       final marked = await _repo.delete(_householdId!, taskId);
       if (marked != null) {
-        _upsert(marked, offlineNotice: kOfflineNoticeMessage);
+        // Fell back to the offline queue: the row does NOT stay removed, it
+        // comes back struck through so the user can see the delete is queued
+        // rather than lost. This asymmetry predates TD-007 and must survive it.
+        _confirmOptimistic(taskId, marked,
+            offlineNotice: kOfflineNoticeMessage);
       } else {
+        _rollbackSnapshots.remove(taskId);
+        emit(state.copyWith(pendingIds: state.pendingIds.difference({taskId})));
+        // Idempotent on purpose: the optimistic branch above only fires for
+        // entities present in the paginated buckets, but a row can be visible
+        // in another surface built from the same cubit (the timeline) without
+        // being in any bucket — e.g. a session that only ran loadTimeline().
+        // Removing again here costs nothing and keeps those surfaces correct.
         _remove(taskId);
       }
       await _notifications.cancelTaskReminder(taskId);
       await _notifications.cancelTaskStartReminder(taskId);
     } on Failure catch (f) {
-      emit(state.copyWith(error: f.message));
+      _rollbackDelete(taskId, previous, errorMessage: f.message);
     } catch (_) {
       // Not a Failure: the repository could not persist the write
       // locally (TD-059). Caught here or it would escape the cubit
       // entirely and leave the UI with no feedback at all.
-      emit(state.copyWith(error: kLocalWriteErrorMessage));
+      _rollbackDelete(taskId, previous, errorMessage: kLocalWriteErrorMessage);
     }
+  }
+
+  /// Put back a row an optimistic delete removed, unless something already
+  /// took its place.
+  ///
+  /// The message names the task because the reinsertion is abrupt: a row
+  /// reappearing without an explanation reads as a bug, not as a refusal.
+  void _rollbackDelete(String taskId, Task? previous,
+      {required String errorMessage}) {
+    final stillGone = _findById(taskId) == null;
+    _rollbackSnapshots.remove(taskId);
+
+    final message = previous == null
+        ? errorMessage
+        : 'No se pudo borrar «${previous.title}»: $errorMessage';
+
+    emit(state.copyWith(
+      error: message,
+      pendingIds: state.pendingIds.difference({taskId}),
+    ));
+    if (previous != null && stillGone) _upsert(previous);
   }
 
   /// Apply an incoming realtime socket event to local state.

@@ -159,4 +159,58 @@ void main() {
           reason: 'apply + rollback must leave the counter where it started');
     });
   });
+
+  group('deleteTask', () {
+    test('removes the row immediately and keeps it gone once confirmed',
+        () async {
+      final repo = repoWith(buildTask('t1'));
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+
+      await cubit.deleteTask('t1');
+
+      expect(findIn(cubit, 't1'), isNull);
+      expect(cubit.state.pendingIds, isEmpty);
+    });
+
+    test('reinserts the row when the server rejects, naming the task',
+        () async {
+      final repo = repoWith(buildTask('t1', title: 'Fregar'))
+        ..failDeleteWith = const ServerFailure('No autorizado', statusCode: 403);
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+
+      await cubit.deleteTask('t1');
+
+      expect(findIn(cubit, 't1'), isNotNull,
+          reason: 'a rejected delete must put the row back');
+      expect(cubit.state.error, contains('Fregar'),
+          reason: 'the reappearance must read as a refusal, not a glitch');
+      expect(cubit.state.pendingIds, isEmpty);
+    });
+
+    test('offline keeps the row struck through instead of removed', () async {
+      // The repository absorbs the network failure and returns the task
+      // marked isDeleted — the pre-TD-007 asymmetry that must survive.
+      final repo = FakeTaskRepository(
+        pages: [
+          PaginatedResponse<Task>(
+            items: [buildTask('t1')],
+            nextCursor: null,
+            hasMore: false,
+            total: 1,
+          ),
+        ],
+        offlineDeleteReturns: buildTask('t1', isDeleted: true),
+      );
+      final cubit = TaskCubit(repo, FakeNotificationService());
+      await cubit.load('h1');
+
+      await cubit.deleteTask('t1');
+
+      expect(findIn(cubit, 't1')?.isDeleted, isTrue,
+          reason: 'a queued delete stays visible, struck through');
+      expect(cubit.state.offlineNotice, kOfflineNoticeMessage);
+    });
+  });
 }
