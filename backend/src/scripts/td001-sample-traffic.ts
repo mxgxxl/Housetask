@@ -89,44 +89,50 @@ function dataOf(body: unknown): Record<string, unknown> {
 }
 
 /**
- * Register, falling back to login when the account already exists.
+ * The token pair lives under `data.tokens`, not at the top of `data`:
+ * auth.service returns `{ user: toPublicUser(user), tokens }` and the
+ * controller wraps it in the standard envelope. Reading `data.accessToken`
+ * yields undefined and every later call 401s.
+ */
+function sessionFrom(email: string, body: unknown): Session | null {
+  const data = dataOf(body);
+  const tokens = data.tokens as { accessToken?: string } | undefined;
+  const user = data.user as { id?: string } | undefined;
+  if (!tokens?.accessToken || !user?.id) return null;
+  return { email, accessToken: tokens.accessToken, userId: user.id };
+}
+
+/**
+ * Log in, registering only if the account does not exist yet.
  *
- * A duplicate registration answers 400 with the same generic message as any
- * other validation failure (Hard Rule 2 — the response must never reveal that
- * an email exists), so the fallback is unconditional rather than conditioned
- * on a distinguishable status.
+ * Login first, not register first: on every run after the first, register
+ * would fail and still cost a request against the strict credential limiter
+ * (5 per 15 min per IP, CLAUDE.md "Security rules"). Trying login first makes
+ * a re-run cost one request per user instead of two.
  */
 async function signIn(user: { email: string; name: string }): Promise<Session> {
-  const registered = await call('POST', '/auth/register', {
-    body: { email: user.email, password: SAMPLE_PASSWORD, name: user.name },
-  });
-
-  if (registered.status === 201 || registered.status === 200) {
-    const data = dataOf(registered.body);
-    return {
-      email: user.email,
-      accessToken: data.accessToken as string,
-      userId: (data.user as { id: string }).id,
-    };
-  }
-
   const loggedIn = await call('POST', '/auth/login', {
     body: { email: user.email, password: SAMPLE_PASSWORD },
   });
-  const data = dataOf(loggedIn.body);
-  if (!data.accessToken) {
-    throw new Error(`Could not sign in ${user.email}: register and login both failed`);
+  const existing = sessionFrom(user.email, loggedIn.body);
+  if (existing) return existing;
+
+  const registered = await call('POST', '/auth/register', {
+    body: { email: user.email, password: SAMPLE_PASSWORD, name: user.name },
+  });
+  const created = sessionFrom(user.email, registered.body);
+  if (!created) {
+    throw new Error(
+      `Could not sign in ${user.email}: login and register both failed ` +
+        `(register status ${registered.status})`,
+    );
   }
-  return {
-    email: user.email,
-    accessToken: data.accessToken as string,
-    userId: (data.user as { id: string }).id,
-  };
+  return created;
 }
 
 function plan(): string[] {
   return [
-    `POST /auth/register x2  (${SAMPLE_USERS.map((u) => u.email).join(', ')}, login fallback if they exist)`,
+    `POST /auth/login x2     (${SAMPLE_USERS.map((u) => u.email).join(', ')}; registers them only if they do not exist)`,
     `POST /households        (creates "${HOUSEHOLD_NAME}", user 1 becomes admin)`,
     'POST /households/join   (user 2 joins with the invite code)',
     `GET  /households/:id, /members, /stats, /tasks, /shopping  x${READ_ROUNDS} rounds, both users`,
