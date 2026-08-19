@@ -5,6 +5,41 @@ import '../../../core/errors/failures.dart';
 import '../../../services/sentry_service.dart';
 import '../local/auth_local_datasource.dart';
 
+/// How a refresh attempt ended (TD-063).
+///
+/// The three values exist because the two the code used to have — a token or
+/// `null` — could not express the third: "the server never answered". That
+/// gap is the whole of TD-063, so the type is deliberately three-valued
+/// rather than a nullable token plus a flag.
+enum _RefreshStatus {
+  /// The server issued a new pair.
+  rotated,
+
+  /// The server said 401: this refresh token is dead, and so is the session.
+  rejected,
+
+  /// We could not ask. No response, a 5xx, a rate limit, or a captive portal
+  /// answering 200 with something that is not our API. The session is NOT
+  /// known to be dead, so it must survive.
+  unreachable,
+}
+
+class _RefreshOutcome {
+  final _RefreshStatus status;
+
+  /// Only set when [status] is [_RefreshStatus.rotated].
+  final String? accessToken;
+
+  const _RefreshOutcome.rotated(String this.accessToken)
+      : status = _RefreshStatus.rotated;
+  const _RefreshOutcome.rejected()
+      : status = _RefreshStatus.rejected,
+        accessToken = null;
+  const _RefreshOutcome.unreachable()
+      : status = _RefreshStatus.unreachable,
+        accessToken = null;
+}
+
 /// Thin HTTP client over Dio.
 ///
 /// - Injects `Authorization: Bearer <accessToken>` on every request.
@@ -20,7 +55,7 @@ class ApiService {
   void Function()? onSessionExpired;
 
   // De-duplicates concurrent refresh attempts.
-  Completer<String?>? _refreshCompleter;
+  Completer<_RefreshOutcome>? _refreshCompleter;
 
   /// Interceptor-free client used only for the refresh call, so a 401 on the
   /// refresh cannot recurse. Injectable for the same reason as [_dio].
@@ -59,10 +94,10 @@ class ApiService {
     final alreadyRetried = options.extra['retried'] == true;
 
     if (e.response?.statusCode == 401 && !isRefreshCall && !alreadyRetried) {
-      final newToken = await _refreshToken();
-      if (newToken != null) {
+      final outcome = await _refreshToken();
+      if (outcome.status == _RefreshStatus.rotated) {
         options.extra['retried'] = true;
-        options.headers['Authorization'] = 'Bearer $newToken';
+        options.headers['Authorization'] = 'Bearer ${outcome.accessToken}';
         try {
           final clone = await _dio.fetch(options);
           return handler.resolve(clone);
@@ -71,6 +106,9 @@ class ApiService {
         }
       } else {
         // Refresh failed → session is dead.
+        //
+        // TD-063 will narrow this to `rejected` only; today both non-rotated
+        // outcomes still land here, which keeps this commit behaviour-neutral.
         await _local.clear();
         onSessionExpired?.call();
       }
@@ -79,17 +117,30 @@ class ApiService {
   }
 
   /// Attempt a token refresh, coalescing concurrent callers onto one request.
-  Future<String?> _refreshToken() async {
+  ///
+  /// Never retries (TD-063 §2). Rotation is not idempotent — the backend's
+  /// `findOneAndDelete` makes the delete the claim — so replaying a refresh
+  /// whose response we did not see lands on the server's replay-detection
+  /// path: it raises a security warning on the very channel used for stolen
+  /// refresh tokens, and revokes the token family, including the pair this
+  /// client never received. The useful retry is free anyway: the next request
+  /// gets its own 401 and refreshes again, by then with a working connection.
+  Future<_RefreshOutcome> _refreshToken() async {
     if (_refreshCompleter != null) return _refreshCompleter!.future;
 
-    final completer = Completer<String?>();
+    final completer = Completer<_RefreshOutcome>();
     _refreshCompleter = completer;
+
+    _RefreshOutcome finish(_RefreshOutcome outcome) {
+      completer.complete(outcome);
+      return outcome;
+    }
 
     try {
       final refreshToken = await _local.getRefreshToken();
       if (refreshToken == null) {
-        completer.complete(null);
-        return null;
+        // Nothing to refresh with: dead for certain, no request to make.
+        return finish(const _RefreshOutcome.rejected());
       }
 
       // Bare Dio (no interceptors) to avoid recursion.
@@ -105,17 +156,37 @@ class ApiService {
 
       if (newAccess != null && newRefresh != null) {
         await _local.saveTokens(accessToken: newAccess, refreshToken: newRefresh);
-        completer.complete(newAccess);
-        return newAccess;
+        return finish(_RefreshOutcome.rotated(newAccess));
       }
-      completer.complete(null);
-      return null;
+
+      // A 2xx that carries no token pair did not come from our API. The
+      // canonical source is a captive portal answering 200 with HTML, which
+      // throws nothing and would otherwise read as "the server refused us".
+      return finish(const _RefreshOutcome.unreachable());
+    } on DioException catch (e) {
+      return finish(_classify(e));
     } catch (_) {
-      completer.complete(null);
-      return null;
+      // Anything else (a cast failure on a body that is not our envelope,
+      // for instance) is the same situation: we did not get an answer we can
+      // read, which is not the same as being told no.
+      return finish(const _RefreshOutcome.unreachable());
     } finally {
       _refreshCompleter = null;
     }
+  }
+
+  /// Allowlist by design (TD-063 decision 3): **only** a 401 means the session
+  /// is dead. Everything else — no response, 5xx, 429, and 403 included —
+  /// means we could not ask.
+  ///
+  /// 403 sits on the safe side on purpose: the backend never answers 403 on
+  /// `/auth/refresh` (every failure there is an `AppError(..., 401)`), so a
+  /// 403 on that route comes from a proxy, a WAF or a captive portal, not
+  /// from us.
+  _RefreshOutcome _classify(DioException e) {
+    return e.response?.statusCode == 401
+        ? const _RefreshOutcome.rejected()
+        : const _RefreshOutcome.unreachable();
   }
 
   // ---- Generic verbs (return the unwrapped `data`) ----
