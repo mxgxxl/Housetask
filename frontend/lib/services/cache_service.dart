@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:hive_flutter/hive_flutter.dart';
 
+import '../data/models/cache_owner.dart';
 import '../data/models/household.dart';
 import '../data/models/household_adapter.dart';
 import '../data/models/pending_operation.dart';
@@ -28,11 +29,13 @@ class CacheService {
   static const _shoppingBoxName = 'shopping';
   static const _householdsBoxName = 'households';
   static const _pendingOperationsBoxName = 'pending_operations';
+  static const _cacheOwnerBoxName = 'cache_owner';
 
   Box<Task>? _tasksBox;
   Box<ShoppingItem>? _shoppingBox;
   Box<Household>? _householdsBox;
   Box<PendingOperation>? _pendingOperationsBox;
+  Box<CacheOwner>? _cacheOwnerBox;
 
   bool _initialized = false;
 
@@ -62,12 +65,14 @@ class CacheService {
     if (!Hive.isAdapterRegistered(3)) {
       Hive.registerAdapter(PendingOperationAdapter());
     }
+    if (!Hive.isAdapterRegistered(4)) Hive.registerAdapter(CacheOwnerAdapter());
 
     _tasksBox = await Hive.openBox<Task>(_tasksBoxName);
     _shoppingBox = await Hive.openBox<ShoppingItem>(_shoppingBoxName);
     _householdsBox = await Hive.openBox<Household>(_householdsBoxName);
     _pendingOperationsBox =
         await Hive.openBox<PendingOperation>(_pendingOperationsBoxName);
+    _cacheOwnerBox = await Hive.openBox<CacheOwner>(_cacheOwnerBoxName);
 
     _initialized = true;
   }
@@ -88,11 +93,13 @@ class CacheService {
     Box<ShoppingItem>? shopping,
     Box<Household>? households,
     Box<PendingOperation>? pendingOperations,
+    Box<CacheOwner>? cacheOwner,
   }) {
     if (tasks != null) _tasksBox = tasks;
     if (shopping != null) _shoppingBox = shopping;
     if (households != null) _householdsBox = households;
     if (pendingOperations != null) _pendingOperationsBox = pendingOperations;
+    if (cacheOwner != null) _cacheOwnerBox = cacheOwner;
     _initialized = true;
   }
 
@@ -106,6 +113,7 @@ class CacheService {
     _shoppingBox = null;
     _householdsBox = null;
     _pendingOperationsBox = null;
+    _cacheOwnerBox = null;
     _initialized = false;
   }
 
@@ -129,6 +137,12 @@ class CacheService {
 
   Box<PendingOperation> get _pendingOperations {
     final box = _pendingOperationsBox;
+    if (box == null) throw StateError('CacheService.init() has not run yet.');
+    return box;
+  }
+
+  Box<CacheOwner> get _cacheOwner {
+    final box = _cacheOwnerBox;
     if (box == null) throw StateError('CacheService.init() has not run yet.');
     return box;
   }
@@ -317,6 +331,33 @@ class CacheService {
     return _pendingOperationsCountController!.stream;
   }
 
+  // ---- Cache ownership (TD-062) ----
+
+  /// Who this device's cached data belongs to, or null if nobody has claimed
+  /// it — either because it was never claimed or because [clearAll] wiped it.
+  CacheOwner? get cacheOwner => _cacheOwner.get(_ownerKey);
+
+  /// Whether the cache must be wiped before [userId] can use it.
+  ///
+  /// True when it belongs to someone else AND, deliberately, when there is no
+  /// marker at all: an unclaimed cache with contents cannot be proven to be
+  /// this user's, and the two ways of being wrong here are not comparable —
+  /// wiping costs unsynced offline work, keeping costs replaying one account's
+  /// writes under another's credentials.
+  bool cacheBelongsToSomeoneElse(String userId) {
+    final owner = cacheOwner;
+    return owner == null || owner.userId != userId;
+  }
+
+  /// Record [userId] as the owner. Called after authenticating, once the cache
+  /// is known to be theirs (either it already was, or it has just been wiped).
+  Future<void> claimCache(String userId) => _cacheOwner.put(
+        _ownerKey,
+        CacheOwner(userId: userId, updatedAt: DateTime.now()),
+      );
+
+  static const _ownerKey = 'owner';
+
   // ---- Logout ----
 
   /// Wipe every box. Called on logout so a subsequent login on the same
@@ -328,6 +369,8 @@ class CacheService {
       _shopping.clear(),
       _households.clear(),
       _pendingOperations.clear(),
+      // The marker describes the boxes above, so it must not outlive them.
+      _cacheOwner.clear(),
     ]);
   }
 }

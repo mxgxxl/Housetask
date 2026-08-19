@@ -5,7 +5,10 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homesync/data/datasources/local/auth_local_datasource.dart';
 import 'package:homesync/data/datasources/remote/api_service.dart';
+import 'package:homesync/data/models/cache_owner.dart';
+import 'package:homesync/data/models/household.dart';
 import 'package:homesync/data/models/pending_operation.dart';
+import 'package:homesync/data/models/shopping_item.dart';
 import 'package:homesync/data/models/task.dart';
 import 'package:homesync/data/repositories/task_repository.dart';
 import 'package:homesync/presentation/cubit/task_cubit.dart';
@@ -102,6 +105,8 @@ void main() {
   group('cubit feedback', cubitFeedbackTests);
 
   group('queue id remap (TD-057)', remapTests);
+
+  group('cache ownership (TD-062)', cacheOwnerTests);
 
   group('writes stay visible synchronously (the TD-059 keystore trap)', () {
     // Hive applies a put to its in-memory keystore synchronously and returns
@@ -416,5 +421,68 @@ void remapTests() {
 
     expect(CacheService().getPendingOperations().single.timestamp,
         DateTime.utc(2026, 1, 1));
+  });
+}
+
+/// Cache ownership marker (TD-062): the cache and the offline queue outlive a
+/// session, so something has to record whose they are.
+///
+/// Uses the injected-box seam like the rest of this file — main()'s own
+/// setUp/tearDown swap the boxes for every test here, so a group that opened
+/// real Hive would have it pulled out from under it.
+void cacheOwnerTests() {
+  setUp(() {
+    CacheService().debugInjectBoxes(
+      tasks: FakeBox<Task>(),
+      shopping: FakeBox<ShoppingItem>(),
+      households: FakeBox<Household>(),
+      pendingOperations: FakeBox<PendingOperation>(),
+      cacheOwner: FakeBox<CacheOwner>(),
+    );
+  });
+
+  tearDown(() => CacheService().debugResetBoxes());
+
+  test('an unclaimed cache belongs to nobody', () {
+    expect(CacheService().cacheOwner, isNull);
+  });
+
+  test('claiming records the user and the moment', () async {
+    final before = DateTime.now().subtract(const Duration(seconds: 1));
+
+    await CacheService().claimCache('user-a');
+
+    final owner = CacheService().cacheOwner!;
+    expect(owner.userId, 'user-a');
+    expect(owner.updatedAt.isAfter(before), isTrue);
+  });
+
+  test('the same user may use the cache', () async {
+    await CacheService().claimCache('user-a');
+
+    expect(CacheService().cacheBelongsToSomeoneElse('user-a'), isFalse);
+  });
+
+  test('a different user may not', () async {
+    await CacheService().claimCache('user-a');
+
+    expect(CacheService().cacheBelongsToSomeoneElse('user-b'), isTrue);
+  });
+
+  test('an unclaimed cache may not be used either — fail safe', () {
+    // Being wrong in this direction costs unsynced offline work; being wrong
+    // in the other replays one account's writes under another's credentials.
+    expect(CacheService().cacheBelongsToSomeoneElse('user-a'), isTrue);
+  });
+
+  test('clearAll wipes the marker along with what it describes', () async {
+    await CacheService().claimCache('user-a');
+    await CacheService().saveTask(buildTask('t1'));
+
+    await CacheService().clearAll();
+
+    expect(CacheService().cacheOwner, isNull,
+        reason: 'a marker outliving its data would claim ownership of nothing');
+    expect(CacheService().getTasks('h1'), isEmpty);
   });
 }
