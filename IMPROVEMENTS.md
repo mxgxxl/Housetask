@@ -350,3 +350,17 @@ Ha ocurrido **tres veces**, siempre con el mismo diagnóstico y siempre descubie
 La regla práctica: un commit puede introducir código **público** sin usar (un método de `CacheService`, por ejemplo — no se marca como no usado), pero no **privado**. Si el plan contempla un commit de "solo andamiaje", o el andamiaje es público, o hay que fusionarlo con su primer consumidor.
 
 Corolario para los diseños futuros: la sección de plan de commits debería decir explícitamente cuál es el primer consumidor de cada pieza nueva, en vez de asumir que el andamiaje se sostiene solo.
+
+---
+
+## 2026-08-18 — No existe endpoint de cambio de rol (admin ↔ miembro)
+
+`household.routes.ts` no expone ninguna forma de cambiar el rol de un miembro. Las únicas operaciones de membresía disponibles son: `create`, `join`, `getById`, `listMembers`, `stats` y `removeMember`.
+
+Detectado durante el round TD-001, al escribir el generador de muestras de tráfico: la tarea pedía incluir un cambio de rol entre las operaciones y resultó que no hay endpoint que llamar. Un `grep` de `role` sobre todas las rutas del backend no devuelve nada, y `household.schema.ts` ya documentaba que tampoco existe PATCH de hogar.
+
+Decisión de producto pendiente: ¿añadir `PATCH /households/:id/members/:userId` con validación de último admin?
+
+Consecuencia práctica hoy: un hogar creado por una persona tiene exactamente un admin para siempre. No se puede promover a nadie, así que si quien lo creó deja de usar la app, el hogar queda sin nadie que pueda expulsar miembros — y la Hard Rule 9 impide que ese último admin se vaya, lo cual es correcto pero cierra el círculo.
+
+Si se implementa, hereda la misma cautela que `removeMember` en TD-001: bajar a un admin a miembro es tan capaz de dejar el hogar sin admins como expulsarlo, así que necesita la misma comprobación dentro de la misma transacción.

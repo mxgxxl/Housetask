@@ -104,6 +104,26 @@ Los PDRs registran decisiones de producto con Context / Decision / Consequences,
   - TD-057 (la cola offline pierde un update/delete cuyo create ya sincronizó) comparte capa con TD-059; conviene revisar si parte de su fix cae de forma natural al hacer awaitable la escritura, aunque son entradas distintas y no se fusionan aquí.
   - No cambia ninguna decisión de producto de cara al usuario: es una decisión de secuenciación de trabajo técnico, registrada aquí porque altera un plan previamente acordado.
 
+## 2026-08-18 — Cambio de rol no expuesto en API
+
+### Decisión
+
+No se añade endpoint de cambio de rol en el round TD-001. Queda aplazado a una decisión de producto separada.
+
+### Razón
+
+Detectado en el round TD-001, al generar muestras de tráfico para la ventana de observación: se pedía incluir un cambio de rol y no existe endpoint que lo permita.
+
+El diseño de TD-001 **no lo requiere** — la migración replica membresías, no cambia roles, así que no hay escritura dual de roles que resolver y su ausencia no bloquea ninguna fase. Pero es una operación de producto que hoy no se puede hacer desde la app: un hogar tiene los admins que tuviera al crearse, sin forma de promover ni degradar a nadie.
+
+Meterlo dentro de TD-001 habría mezclado una decisión de producto con una migración de base de datos, que es justo lo que las paradas del round existen para evitar.
+
+### Consecuencias
+
+- Registrado como pendiente en `IMPROVEMENTS.md` (2026-08-18) con la pregunta concreta: `PATCH /households/:id/members/:userId` con validación de último admin.
+- Si se implementa, hereda la cautela de `removeMember`: degradar al último admin deja el hogar sin admins igual que expulsarlo, así que la comprobación debe ir dentro de la misma transacción (ver `docs/TD-001-DESIGN.md`).
+- Mientras tanto, el generador de muestras de TD-001 omite esa operación en vez de escribir en la base de datos a mano.
+
 ## 2026-08-17 — Codex como agente secundario para límites de Claude Code
 
 ### Decisión
