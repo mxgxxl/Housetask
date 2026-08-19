@@ -36,17 +36,32 @@
 
 ## Siguiente tarea
 
-**TD-001, fase 2: lectura dual con verificación.**
+**1. TD-001 en pausa activa de observación.** La fase 2 (lectura dual) se
+desplegó el 2026-08-18 (commit `631031d`). Ventana de **48-72 h**: **NO
+autorizar el cutover antes del 2026-08-21.**
 
-Las lecturas pasan a consultar `HouseholdMember` **comparando** contra el array
+- **Criterio:** cero divergencias en Sentry (categoría `td001_dual_read`) o en
+  los logs de Railway (`dual-read divergence`).
+- **Cierre de la ventana:** ejecutar
+  `DELETE /households/6a84e3ff6f8391134ebe9dde/members/6a84e33d6f8391134ebe9dd0`
+  —la muestra de escritura que quedó reservada— y hacer el grep de logs.
+- **Una sola divergencia = investigar antes de seguir.** No es un umbral
+  estadístico: significa que la escritura dual tiene un hueco, y el cutover
+  haría autoridad a una colección incompleta.
+
+Las lecturas ya consultan `HouseholdMember` **comparando** contra el array
 embebido y reportando cuando difieran, sin cambiar todavía lo que se devuelve
 (que sigue saliendo del embebido). Es la fase que convierte la migración de un
-acto de fe en una medida.
+acto de fe en una medida. El sitio instrumentado es `requireMembership`, que
+corre en toda ruta con `:householdId` y por tanto ve todo el tráfico.
 
-**El criterio para avanzar al cutover es un dato, no un plazo:** cero
-divergencias observadas con tráfico real durante el tiempo que haga falta —
-días, no minutos. El sitio instrumentado es `requireMembership`, que corre en
-toda ruta con `:householdId` y por tanto ve todo el tráfico.
+El 2026-08-18 se generaron 30 lecturas household-scoped con
+`scripts/td001-sample-traffic.ts` sobre un hogar dedicado ("Muestras TD-001"),
+para que la ventana no dependa de que alguien abra la app.
+
+**El criterio para avanzar es un dato, no un plazo** — pero el plazo mínimo
+existe para que el dato signifique algo: cero divergencias sobre una muestra de
+minutos no dice lo mismo que sobre una de días.
 
 Después: fase 3 (cutover), fase 4 (limpieza del array embebido y de
 `User.households`). Ver `docs/TD-001-DESIGN.md` §3 y §6.
