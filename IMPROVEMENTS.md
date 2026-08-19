@@ -364,3 +364,41 @@ Decisión de producto pendiente: ¿añadir `PATCH /households/:id/members/:userI
 Consecuencia práctica hoy: un hogar creado por una persona tiene exactamente un admin para siempre. No se puede promover a nadie, así que si quien lo creó deja de usar la app, el hogar queda sin nadie que pueda expulsar miembros — y la Hard Rule 9 impide que ese último admin se vaya, lo cual es correcto pero cierra el círculo.
 
 Si se implementa, hereda la misma cautela que `removeMember` en TD-001: bajar a un admin a miembro es tan capaz de dejar el hogar sin admins como expulsarlo, así que necesita la misma comprobación dentro de la misma transacción.
+
+---
+
+## 2026-08-19 — Assert en debug del marcador de caché dentro de syncPendingOperations
+
+Propuesto durante la implementación de TD-062.
+
+Motivo: `_adoptCache` protege **el arranque de sesión**, que hoy es el único camino por el que la app cambia de usuario. Pero eso es una propiedad del código actual, no una garantía estructural: nada impide que mañana algo autentique sin pasar por `AuthCubit` (un deep link, un flujo de re-auth, una pantalla de cambio rápido de cuenta). Si eso ocurriera, la caché quedaría mal atribuida y el fallo sería exactamente el de TD-062: silencioso, y visible solo como descartes en Sentry días después.
+
+Propuesta: un `assert` en `syncPendingOperations` comprobando que el marcador coincide con el usuario de la sesión antes de reproducir nada. En release no cuesta nada (los `assert` se compilan fuera) y en debug convierte una atribución incorrecta en un fallo ruidoso en el momento en que se produce, en vez de en una consecuencia a investigar.
+
+Estado: pendiente, prioridad baja. Es defensa en profundidad, no un bug abierto.
+
+---
+
+## 2026-08-19 — Ningún fake con noSuchMethod absorbente
+
+Regla de tests, aprendida escribiendo `FakeAuthRepository` para TD-062.
+
+Escribí el fake con un `noSuchMethod` que delegaba en `super`, pensando en no tener que implementar métodos irrelevantes para el test. Efecto real: Dart deja de exigir la implementación completa de la interfaz, así que el analizador **calló** que faltaba `updateProfile`. Al quitar el `noSuchMethod`, lo señaló de inmediato.
+
+El problema no es el método que falta hoy —el test no lo llama—, sino lo que pasa cuando la interfaz crece: un fake que absorbe lo que no conoce deja de fallar al compilar y empieza a fallar en runtime, o peor, a devolver `null` silenciosamente en un camino que el test creía cubierto. Un fake existe para que la interfaz siga siendo un contrato dentro del test; `noSuchMethod` es exactamente lo que rompe eso.
+
+Regla: implementar todos los miembros explícitamente, aunque sea con `throw UnimplementedError()` en los que el test no debe tocar. Un `UnimplementedError` en un camino inesperado es información; un `null` de `noSuchMethod`, no.
+
+Estado: aplicada en `test/fakes.dart`. Los fakes anteriores no usan `noSuchMethod`, así que no hay nada que corregir hacia atrás — es una regla para no reintroducirlo.
+
+---
+
+## 2026-08-19 — Test faltante: checkAuth con sesión cacheada reclama el marcador
+
+Hueco identificado al cerrar TD-062.
+
+`checkAuth()` tiene dos ramas: la que llama a `getMe()` y la que se queda con el usuario cacheado cuando esa llamada falla (típicamente por red). Ambas pasan por `_adoptCache` y los tests cubren la primera, pero **ninguno fija la segunda**: hoy es correcta por construcción —el `_adoptCache` está antes del `emit` en las dos— y por eso el hueco no se nota.
+
+Importa porque esa rama es justo la del arranque sin red, que es cuando la caché es lo único que hay. Una refactorización que moviera el `_adoptCache` dentro del `try` lo rompería sin que ningún test se quejara, y el síntoma sería el peor de los dos posibles: arrancar offline y no ver nada.
+
+Estado: pendiente, prioridad baja. Es un test, no un arreglo.
