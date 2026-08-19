@@ -63,11 +63,15 @@ class AuthCubit extends Cubit<AuthState> {
     // Optimistically use the cached user, then refresh from the network.
     final cached = await _repo.cachedUser();
     if (cached != null) {
+      await _adoptCache(cached);
       emit(state.copyWith(status: AuthStatus.authenticated, user: cached));
     }
 
     try {
       final user = await _repo.getMe();
+      // Cheap when `cached` already claimed it (same id, no wipe), and the
+      // only claim that happens when there was no cached user to go on.
+      await _adoptCache(user);
       emit(state.copyWith(status: AuthStatus.authenticated, user: user));
     } on Failure {
       if (cached == null) {
@@ -83,6 +87,7 @@ class AuthCubit extends Cubit<AuthState> {
       // No email/password in the breadcrumb — just the flow marker; Sentry
       // breadcrumbs are for tracing what led up to an error, not for PII.
       SentryService.addBreadcrumb('User logged in', category: 'auth');
+      await _adoptCache(user);
       emit(state.copyWith(status: AuthStatus.authenticated, user: user, loading: false));
     } on Failure catch (f) {
       SentryService.addBreadcrumb('Login failed', category: 'auth', data: {'reason': f.message});
@@ -94,6 +99,7 @@ class AuthCubit extends Cubit<AuthState> {
     emit(state.copyWith(loading: true, clearError: true));
     try {
       final user = await _repo.register(name: name, email: email, password: password);
+      await _adoptCache(user);
       emit(state.copyWith(status: AuthStatus.authenticated, user: user, loading: false));
     } on Failure catch (f) {
       emit(state.copyWith(loading: false, error: f.message));
@@ -103,6 +109,31 @@ class AuthCubit extends Cubit<AuthState> {
   /// Called when the API layer reports the session can't be refreshed.
   void onSessionExpired() {
     emit(const AuthState(status: AuthStatus.unauthenticated));
+  }
+
+  /// Make the local cache belong to [user] before anything can read or replay
+  /// it (TD-062).
+  ///
+  /// The cache and the pending-write queue outlive a session: an expired
+  /// session clears the tokens but never touches Hive, so without this a
+  /// different account signing in on the same device inherits the previous
+  /// one's queue and `syncPendingOperations` replays it under the new token —
+  /// against households the new user does not belong to, which 403s, burns its
+  /// three retries and is dropped.
+  ///
+  /// Called from EVERY entry into an authenticated session (login, register
+  /// and the checkAuth restore), and always BEFORE emitting `authenticated`:
+  /// SplashPage reacts to that state by loading the household, and the
+  /// connectivity listener can fire a sync at any moment. Doing this late
+  /// would mean doing it after the replay it exists to prevent.
+  ///
+  /// Only wipes on a mismatch, so the same user returning after an expiry
+  /// keeps their queued work — the promise TD-061 §4.3 relies on.
+  Future<void> _adoptCache(User user) async {
+    if (_cache.cacheBelongsToSomeoneElse(user.id)) {
+      await _cache.clearAll();
+    }
+    await _cache.claimCache(user.id);
   }
 
   Future<void> logout() async {

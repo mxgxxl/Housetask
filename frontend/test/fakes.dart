@@ -12,6 +12,8 @@ import 'package:homesync/data/models/paginated_response.dart';
 import 'package:homesync/data/models/pet.dart';
 import 'package:homesync/data/models/shopping_item.dart';
 import 'package:homesync/data/models/task.dart';
+import 'package:homesync/data/models/user.dart';
+import 'package:homesync/data/repositories/auth_repository.dart';
 import 'package:homesync/data/repositories/household_repository.dart';
 import 'package:homesync/data/repositories/pet_repository.dart';
 import 'package:homesync/data/repositories/shopping_repository.dart';
@@ -742,4 +744,49 @@ class FakeBox<E> implements Box<E> {
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       super.noSuchMethod(invocation);
+}
+
+/// Auth repository double for the cache-ownership tests (TD-062).
+///
+/// Every entry into an authenticated session resolves to the same [userId],
+/// which is the only thing those tests care about: whether the cache belongs
+/// to the user who is signing in.
+class FakeAuthRepository implements AuthRepository {
+  FakeAuthRepository({required this.userId, this.hasSessionResult = false});
+
+  final String userId;
+  final bool hasSessionResult;
+
+  User get _user => User(
+        id: userId,
+        email: '$userId@test.com',
+        name: userId,
+        households: const [],
+      );
+
+  @override
+  Future<User> login({required String email, required String password}) async => _user;
+
+  @override
+  Future<User> register({
+    required String name,
+    required String email,
+    required String password,
+  }) async =>
+      _user;
+
+  @override
+  Future<User> getMe() async => _user;
+
+  @override
+  Future<User?> cachedUser() async => hasSessionResult ? _user : null;
+
+  @override
+  Future<bool> hasSession() async => hasSessionResult;
+
+  @override
+  Future<User> updateProfile({String? name, String? avatarUrl}) async => _user;
+
+  @override
+  Future<void> logout() async {}
 }
