@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../config/theme.dart';
+import '../../services/cache_service.dart';
 import '../cubit/auth_cubit.dart';
 import '../cubit/household_cubit.dart';
 import '../cubit/socket_cubit.dart';
@@ -218,7 +219,13 @@ class ProfilePage extends StatelessWidget {
   }
 
   Future<void> _logout(BuildContext context) async {
-    final ok = await showLogoutDialog(context);
+    // Read once, not from the live stream: a number that changes while the
+    // user is reading the sentence is worse than a stable one — they decide
+    // about what they saw (TD-061 §3).
+    final ok = await showLogoutDialog(
+      context,
+      pendingCount: CacheService().pendingOperationsCountSync,
+    );
     if (ok != true || !context.mounted) return;
 
     // Socket teardown, cubit resets, and navigation to login all happen in
