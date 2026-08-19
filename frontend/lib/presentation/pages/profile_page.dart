@@ -6,6 +6,7 @@ import '../cubit/auth_cubit.dart';
 import '../cubit/household_cubit.dart';
 import '../cubit/socket_cubit.dart';
 import '../widgets/common.dart';
+import '../widgets/logout_dialog.dart';
 import '../widgets/user_avatar.dart';
 import 'household_setup_page.dart';
 import 'stats_page.dart';
@@ -217,23 +218,7 @@ class ProfilePage extends StatelessWidget {
   }
 
   Future<void> _logout(BuildContext context) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Cerrar sesión'),
-        content: const Text('¿Seguro que quieres cerrar sesión?'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancelar')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Cerrar sesión'),
-          ),
-        ],
-      ),
-    );
+    final ok = await showLogoutDialog(context);
     if (ok != true || !context.mounted) return;
 
     // Socket teardown, cubit resets, and navigation to login all happen in
