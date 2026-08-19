@@ -458,6 +458,7 @@ The full registry (~47 entries, all history) lives in [Full Technical Debt Regis
 | TD-057 | Offline sync loses an update/delete whose create synced in an earlier batch (`idRemap` is per-call, not persisted) | High | **Resolved (2026-08-18)** |
 | TD-061 | `logout` vacía la cola pendiente sin aviso: un cambio hecho offline y no sincronizado se pierde al cerrar sesión | Medium | **Resolved (2026-08-19)** |
 | TD-062 | La caché y la cola offline sobreviven a un cambio de cuenta: tras una expiración de sesión, la cola de A se reproduce con el token de B | High | Open |
+| TD-063 | Un fallo de red durante el refresh se trata como sesión muerta: expulsa al login por una desconexión pasajera | Medium | Open |
 | TD-059 | CacheService's Hive writers were declared `void` and discarded the `Future` Hive returns, so no caller could await durability (root cause of TD-040) | High | Resolved (2026-08-17) |
 
 ---
