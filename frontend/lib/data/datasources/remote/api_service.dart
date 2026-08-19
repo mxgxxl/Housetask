@@ -126,6 +126,27 @@ class ApiService {
           category: 'auth',
           data: {'path': options.path},
         );
+
+        // The original 401 was a real answer, but it is not the answer to the
+        // question the caller asked: the request was never retried with a
+        // valid token, so its outcome is genuinely unknown. Reporting it as a
+        // 401 makes isOfflineWorthy() reject it — correctly, for a real 401 —
+        // and the write is dropped instead of queued, which is how a lift
+        // used to cost the user both the session AND the task they had just
+        // created.
+        //
+        // Rejecting with a response-less error says "could not ask", which is
+        // what actually happened, and puts the write on the offline path it
+        // would have taken had the device been offline a second earlier
+        // (ADR-010). If the server would have refused it anyway, it refuses
+        // it when the queue replays with a valid token.
+        return handler.reject(
+          DioException(
+            requestOptions: options,
+            type: DioExceptionType.connectionError,
+            error: 'Token refresh could not reach the server',
+          ),
+        );
       }
     }
     handler.next(e);

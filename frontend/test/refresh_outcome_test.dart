@@ -5,7 +5,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:homesync/config/constants.dart';
 import 'package:homesync/data/datasources/local/auth_local_datasource.dart';
 import 'package:homesync/data/datasources/remote/api_service.dart';
+import 'package:homesync/data/models/cache_owner.dart';
+import 'package:homesync/data/models/household.dart';
+import 'package:homesync/data/models/pending_operation.dart';
+import 'package:homesync/data/models/shopping_item.dart';
+import 'package:homesync/data/models/task.dart';
+import 'package:homesync/data/repositories/task_repository.dart';
+import 'package:homesync/services/cache_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'fakes.dart';
 
 /// TD-063 — what the app concludes from a refresh that did not return a token.
 ///
@@ -168,6 +177,77 @@ void main() {
       expect(await local.getAccessToken(), 'fresh-access',
           reason: 'the rotated pair must be persisted, or the next request '
               'would 401 again');
+    });
+  });
+
+  group('the write survives too', () {
+    // The half of the damage that is not in the TD's own entry: the
+    // interceptor used to propagate the original 401, isOfflineWorthy()
+    // rejected it — correctly, a 401 IS a real answer — and the write the
+    // user had just made was dropped rather than queued. So one badly timed
+    // lift cost both the session and the task.
+    late FakeBox<PendingOperation> pending;
+
+    setUp(() {
+      pending = FakeBox<PendingOperation>();
+      CacheService().debugInjectBoxes(
+        tasks: FakeBox<Task>(),
+        shopping: FakeBox<ShoppingItem>(),
+        households: FakeBox<Household>(),
+        pendingOperations: pending,
+        cacheOwner: FakeBox<CacheOwner>(),
+      );
+    });
+
+    tearDown(() => CacheService().debugResetBoxes());
+
+    TaskRepository buildRepo(ResponseBody Function() onRefresh) {
+      final dio = Dio(BaseOptions(baseUrl: 'http://test'))
+        ..httpClientAdapter = _ScriptedAdapter(
+          [() => _json({'success': false, 'error': 'Unauthorized'}, 401)],
+        );
+      final refreshDio = Dio(BaseOptions(baseUrl: 'http://test'))
+        ..httpClientAdapter = _ScriptedAdapter([onRefresh]);
+      return TaskRepository(
+        ApiService(local, dio: dio, refreshDio: refreshDio),
+        cache: CacheService(),
+        connectivity: FakeConnectivityService(),
+      );
+    }
+
+    test('a create during an unreachable refresh is queued, not lost',
+        () async {
+      await CacheService().claimCache('user-a');
+      final repo = buildRepo(networkError);
+
+      final task = await repo.create('h1', {'title': 'Sacar la basura'});
+
+      expect(task.title, 'Sacar la basura',
+          reason: 'the caller gets its task back, so the optimistic row stays '
+              'on screen instead of being rolled back');
+      expect(task.isSynced, isFalse);
+      expect(task.id, startsWith('local-'));
+      expect(pending.entries, hasLength(1),
+          reason: 'queued means it will be retried; dropped means it is gone');
+      // Nothing here re-enters an authenticated session, so TD-062's marker
+      // must be untouched: no adoption, no wipe, the queue keeps its owner.
+      expect(CacheService().cacheOwner!.userId, 'user-a');
+    });
+
+    test('a create during a REJECTED refresh is not queued', () async {
+      // The contrast that keeps the fix honest: when the server really did
+      // refuse the session, the write must not be quietly queued to be
+      // replayed under a session that no longer exists.
+      final repo = buildRepo(
+        () => _json({'success': false, 'error': 'Invalid or expired refresh token'}, 401),
+      );
+
+      await expectLater(
+        repo.create('h1', {'title': 'Sacar la basura'}),
+        throwsA(isA<Object>()),
+      );
+
+      expect(pending.entries, isEmpty);
     });
   });
 
