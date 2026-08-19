@@ -28,8 +28,8 @@ jobs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -55,7 +55,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: scripts/check_docs.sh
 
   backend:
@@ -68,9 +68,9 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '20' # matches backend/Dockerfile's node:20-alpine
           cache: 'npm'
@@ -101,7 +101,7 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # TD-041: pinned instead of relying on channel:stable alone — the
       # unpinned channel silently drifts Flutter's own Gradle/AGP/Kotlin
@@ -114,7 +114,7 @@ jobs:
           channel: 'stable'
           cache: true # caches the Flutter SDK install itself
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17' # required by the Android Gradle build (apk)
@@ -123,7 +123,7 @@ jobs:
       # SDK cache above — both are keyed off the lockfiles that would
       # invalidate them, with an OS-scoped fallback for a partial hit.
       - name: Cache pub packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.pub-cache
           key: ${{ runner.os }}-pub-${{ hashFiles('frontend/pubspec.lock') }}
@@ -131,7 +131,7 @@ jobs:
             ${{ runner.os }}-pub-
 
       - name: Cache Gradle
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.gradle/caches
@@ -154,7 +154,7 @@ jobs:
           cd android && ./gradlew --version
 
       # --no-fatal-infos: this Flutter version defaults --fatal-infos to ON,
-      # so plain `flutter analyze` exits 1 purely from the repo's 11
+      # so plain `flutter analyze` exits 1 purely from the repo's 14
       # pre-existing `info`-level lints (BuildContext-across-async-gaps,
       # deprecated Material members) — confirmed locally, not assumed.
       # --fatal-warnings stays on (its default), so this step is still
@@ -189,7 +189,7 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: subosito/flutter-action@v2
         with:
@@ -198,7 +198,7 @@ jobs:
           cache: true
 
       - name: Cache pub packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.pub-cache
           key: ${{ runner.os }}-pub-${{ hashFiles('frontend/pubspec.lock') }}
