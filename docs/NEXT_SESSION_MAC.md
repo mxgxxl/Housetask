@@ -25,6 +25,7 @@
 - 2026-08-18: round TD-057 + TD-060 cerrado (cola offline sin pérdida de ids, creates optimistas); TD-061 abierto.
 - 2026-08-18: TD-001 fases 0-1 — escritura dual desplegada y backfill aplicado en producción (5 hogares, 5 membresías, 0 divergencias).
 - 2026-08-19: TD-061 cerrado (aviso al cerrar sesión con cola pendiente); TD-062 abierto. Acciones de CI a Node 24 (PR #36).
+- 2026-08-19: TD-062 cerrado (marcador de propietario de la caché; otra cuenta ya no hereda la cola offline). Se abrió TD-063 (un fallo de red en el refresh se trata como sesión muerta).
 - 2026-08-17: PR #32 config fallback (Codex); PR #33 integración legacy
   (Claude); PR #34 sync (Codex, cerrado como superseded sin merge). Plan free de Codex activo y validado.
   gh instalado; Codex CLI instalado y autenticado.
@@ -54,18 +55,54 @@ El 2026-08-18 se generaron 30 lecturas household-scoped con
 `scripts/td001-sample-traffic.ts` sobre un hogar dedicado ("Muestras TD-001"),
 para que la ventana no dependa de que alguien abra la app.
 
-**2. Diseño de TD-062 — la caché sobrevive a un cambio de cuenta.** Es lo que
-hay que hacer mientras TD-001 observa, y va por delante de reanudarlo: no se
-pierde trabajo del usuario, se ejecutan escrituras de una cuenta bajo las
-credenciales de otra.
+**2. Diseño de TD-063 — un fallo de red en el refresh mata la sesión.** Es lo
+que hay que hacer mientras TD-001 observa. `ApiService._refreshToken()` termina
+en `catch (_) { completer.complete(null); }`, así que traga también la excepción
+de conectividad; el interceptor lee ese `null` como "sesión muerta", limpia
+SharedPreferences y expulsa al login. Basta un 401 real con mala cobertura
+detrás.
 
-`CacheService.clearAll()` se llama desde un único sitio, `AuthCubit.logout()`.
-Ni `login()`, ni `register()`, ni `onSessionExpired()` lo llaman, así que tras
-una expiración de sesión de A un login de B hereda en disco la cola de A y la
-reproduce con el token de B. Evidencia completa en `docs/TD-061-DESIGN.md` §1 y
-§6. Mismo formato de documento aprobable en bloque que los rounds anteriores.
+Es molestia y no pérdida —tras TD-062 el usuario recupera su cola al volver a
+entrar con su cuenta—, y por eso va después de la ventana de TD-001 si hubiera
+que elegir. Evidencia en `docs/TD-062-DESIGN.md` §1. Mismo formato de documento
+aprobable en bloque que los rounds anteriores.
+
+**Pendiente de dispositivo (TD-062):** los dos escenarios que de verdad validan
+el round necesitan dos cuentas y una expiración real, y no se pueden ejercitar
+en tests: (1) arrancar en modo avión con datos cacheados y comprobar que
+**siguen ahí** —el fallo por exceso se vería como "arranca sin datos"—, y (3)
+expirar la sesión de A, entrar con B y comprobar que **no aparecen descartes en
+Sentry** en los minutos siguientes. Guiones completos en
+`docs/TD-062-DESIGN.md` §6.
 
 Después: fases 3 y 4 de TD-001 (cutover y limpieza).
+
+### Fase 6 — cerrada (TD-062, 2026-08-19)
+
+**La caché ya no cambia de dueño en silencio.** Hive lleva ahora un marcador
+`CacheOwner {userId, updatedAt}` en una box propia, y `AuthCubit` lo comprueba
+en **toda** entrada a una sesión autenticada —`login`, `register` y las dos
+ramas de `checkAuth`—: si no coincide con quien entra, o falta, vacía la caché
+antes de reclamarla.
+
+Tres decisiones que sostienen el resto:
+
+- **Cuelga de la autenticación, no del logout ni de la expiración.** Es el
+  único momento en que se sabe *quién* va a usar la caché. Limpiar al expirar
+  habría destruido la cola del propio usuario cada vez que un refresh fallara
+  por red (TD-063).
+- **El orden es el arreglo**, igual que en TD-057: se limpia siempre ANTES de
+  emitir `authenticated`, porque `SplashPage` carga el hogar desde ese estado y
+  el listener de conectividad puede disparar un sync en cualquier momento.
+- **Marcador ausente = limpiar.** Lo que no se puede demostrar de nadie tampoco
+  es suyo. Cuesta una limpieza única por dispositivo al actualizar.
+
+Queda fijada además la asimetría de producto: el logout explícito descarta la
+cola (el usuario lo decidió con el recuento delante, TD-061) y la expiración la
+conserva (no decidió nada). **Lo que decide no es el estado técnico, sino si
+hubo alguien decidiendo.**
+
+Cuatro commits, suite de 301 a 312 tests. Ver `docs/TD-062-DESIGN.md`.
 
 ### Fase 5 — cerrada (TD-061, 2026-08-19)
 

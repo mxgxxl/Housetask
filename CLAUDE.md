@@ -448,18 +448,15 @@ The full registry (~47 entries, all history) lives in [Full Technical Debt Regis
 |----|-------------|----------|--------|
 | TD-001 | Members embedded in Household document | High | En curso (fases 0-1 completas, 2026-08-18) |
 | TD-007 | No optimistic updates in frontend | Medium | **Partially resolved (2026-08-18): updates y deletes optimistic; creates aplazados al round de TD-057** |
-| TD-060 | Optimistic creates: id temporal `pending-` y resolución de idRemap | Medium | **Resolved (2026-08-18)** |
 | TD-010 | No database backups | Medium | Planned (Phase 3) |
 | TD-013 | Recurrence computed in UTC without household timezone | Medium | Planned (Phase 2) |
 | TD-034 | No deploy-order safety net between backend and Flutter app | Medium | Planned (Phase 3) |
 | TD-039 | Offline conflict resolution uses last-write-wins; concurrent edits on multiple devices can overwrite | Low | Deferred (Phase 2) |
 | TD-049 | No real Firebase project connected for push notifications (PDR-008) — code is in place, no push actually delivers until a Firebase project + `flutterfire configure` + APNs key are set up manually | High | Planned (before beta push notifications can work) |
 | TD-054 | Access token stays valid up to 15 min after logout (stateless-JWT tradeoff, documented not fixed) | Low | Planned |
-| TD-057 | Offline sync loses an update/delete whose create synced in an earlier batch (`idRemap` is per-call, not persisted) | High | **Resolved (2026-08-18)** |
 | TD-061 | `logout` vacía la cola pendiente sin aviso: un cambio hecho offline y no sincronizado se pierde al cerrar sesión | Medium | **Resolved (2026-08-19)** |
-| TD-062 | La caché y la cola offline sobreviven a un cambio de cuenta: tras una expiración de sesión, la cola de A se reproduce con el token de B | High | Open |
+| TD-062 | La caché y la cola offline sobreviven a un cambio de cuenta: tras una expiración de sesión, la cola de A se reproduce con el token de B | High | **Resolved (2026-08-19)** |
 | TD-063 | Un fallo de red durante el refresh se trata como sesión muerta: expulsa al login por una desconexión pasajera | Medium | Open |
-| TD-059 | CacheService's Hive writers were declared `void` and discarded the `Future` Hive returns, so no caller could await durability (root cause of TD-040) | High | Resolved (2026-08-17) |
 
 ---
 

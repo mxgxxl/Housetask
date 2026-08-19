@@ -1,11 +1,14 @@
 # Roadmap HomeSync
 
-> Última actualización: 2026-08-18
+> Última actualización: 2026-08-19
 
 ## Recién Completado (últimas 2 semanas)
 
 | Fecha | PR/Commit | Descripción | Impacto |
 |-------|-----------|-------------|---------|
+| 2026-08-19 | TD-062 | **Resolved**: la caché de Hive lleva un marcador de propietario (`CacheOwner`, box propia) y `AuthCubit` lo comprueba en toda entrada a sesión —login, register y las dos ramas de `checkAuth`—, vaciándola antes de reclamarla si el usuario cambió (o si no hay marcador). Siempre ANTES de emitir `authenticated`: el orden es el arreglo, como en TD-057. Sin migración; `PendingOperation` intacto. 11 tests, 6 fallan sin el fix | Corrección de datos — la cola offline de una cuenta ya no se reproduce con el token de otra tras una expiración de sesión |
+| 2026-08-19 | TD-061 | **Resolved**: el logout sigue vaciando la cola pendiente, pero ya no en silencio — intenta drenarla (tope de 5 s) y, si quedan cambios, avisa nombrando el número y cambia el botón a "Cerrar sesión y descartar". El aviso solo aparece cuando hay algo que perder. 11 tests | UX — deja de perderse trabajo offline sin que el usuario lo sepa; el descarte pasa a ser una decisión suya |
+| 2026-08-19 | Node 24 en CI (PR #36) | Acciones de GitHub Actions actualizadas a las versiones que corren sobre Node 24 | Mantenimiento — Node 20 está en deprecación en el runner |
 | 2026-08-18 | TD-057 + TD-060 (round conjunto) | **TD-057 Resolved**: `syncPendingOperations` reescribe la cola antes de retirar el create, así que la traducción local→servidor sobrevive a un break y a un reinicio — cerraba una pérdida silenciosa de escrituras offline. **TD-060 Resolved**: creates optimistas con id `pending-` e intercambio de id en una sola emisión. Sin migración ni cambio de esquema. 290 tests | Corrección de datos — TD-057 era el único High abierto que perdía trabajo del usuario sin avisar |
 | 2026-08-18 | TD-007 (parcial) | **Partially resolved**: `completeTask`, `updateTask`, `togglePurchased`, `updateItem`, `deleteTask` y `deleteItem` aplican el cambio a la UI antes de enviar la petición, con guarda de supersesión que no revierte sobre un valor más nuevo. Los creates se cerraron aparte, vía TD-060 | UX — desaparece la espera de round trip en las interacciones frecuentes |
 | 2026-08-17 | TD-059 | **Resolved**: los once escritores de Hive de `CacheService` devuelven `Future<void>` y todos sus call sites los esperan, con política de errores dual (propagar en el camino offline, best-effort + Sentry al cachear lo que el servidor ya tiene) | Durabilidad — una escritura offline prometida al usuario ya no puede perderse en silencio |
@@ -37,14 +40,14 @@
 |---|----|-------------|----------|------------|
 | 1 | TD-001 | Migrar `members` embebido a una colección `HouseholdMember` separada. **Siguiente paso: el documento de diseño**, mismo formato aprobable en bloque que TD-059/TD-007/TD-057. Es el primero del ciclo que toca backend y arrastra migración real en Atlas, con ventana de convivencia de ambos formatos y orden de despliegue obligatorio (ver "Deployment order" en CLAUDE.md) | Alto | Ninguno |
 | 2 | Validación PR #24 | Probar fix white screen en iPhone físico + limpiar debugPrints de diagnóstico | Bajo | Dispositivo físico |
-| 3 | TD-061 | El logout vacía la cola pendiente sin aviso: un cambio hecho offline y no sincronizado se pierde al cerrar sesión. La resolución probable es avisar, no dejar de limpiar | Bajo | Ninguno |
+| 3 | TD-063 | Un fallo de RED durante el refresh se trata como sesión muerta: `_refreshToken()` traga la excepción de conectividad y el interceptor expulsa al login por una desconexión pasajera. Tras TD-062 ya no destruye datos —el usuario recupera su cola al volver a entrar—, así que es molestia, no pérdida | Bajo | Ninguno |
 | 4 | TD-054 | Ventana de token de acceso post-logout (bajo impacto, solo si el modelo de amenaza lo requiere) | Bajo | Ninguno |
 
 ### Micro-pendientes
 
 Ninguno bloquea nada; se listan para que no se pierdan.
 
-- **Node 24 en CI**: `actions/checkout@v4` y compañía corren sobre Node 20, ya en deprecación. Además el comentario de `ci.yml:157` sigue diciendo "11 lints preexistentes" cuando son 14 — no se corrigió por la regla de no tocar CI fuera de su propio round. Ver IMPROVEMENTS.md (2026-08-17).
+- ~~**Node 24 en CI**~~ — hecho en PR #36 (2026-08-19), incluido el comentario de `ci.yml` que decía "11 lints preexistentes" cuando son 14.
 - **Check de enlaces a `CLAUDE.md`**: hoy `scripts/check_docs.sh` solo valida los enlaces de `AGENTS.md`; `CLAUDE.md` enlaza `docs/ADRs.md` y varios más sin verificar.
 - **Homogeneizar `copyWith` y evaluar un mixin para el overlay optimista**: `TaskCubit` y `ShoppingCubit` llevan copias duplicadas del andamiaje, y sus estados difieren en si `copyWith` limpia `error` — lo que invierte el orden de emits en el rollback. Homogeneizar el contrato primero vale más que el mixin. Ver IMPROVEMENTS.md (2026-08-18).
 - **SPM de `flutter_local_notifications`**: pendiente de revisar, sin registro previo en el repo (el precedente conocido de deriva SPM es TD-038, pero es de `sentry_flutter`, no de este plugin). Requiere que quien lo detectó amplíe el síntoma.
@@ -56,6 +59,7 @@ Documentadas en sus entradas de TECH_DEBT.md para que no se persigan como defect
 
 - **Socket echo (TD-060):** el backend emite `task:created` también a quien creó la tarea, así que entre ese evento y la respuesta HTTP puede verse brevemente una fila duplicada. Se resuelve sola al confirmar. La solución limpia —que el socket haga eco de la `Idempotency-Key`— es un cambio de backend.
 - **Recurrentes y Papelera (TD-007):** no reciben la superposición optimista, así que quedan desincronizadas hasta recargar su pestaña.
+- **Marcador ausente (TD-062):** una caché escrita por una versión anterior no tiene marcador, así que la primera autenticación tras actualizar la vacía una vez. Es el comportamiento a prueba de fallos elegido a propósito, y solo ocurre una vez por dispositivo.
 - **Colas envenenadas (TD-057):** una cola escrita por una versión anterior con un update/delete huérfano no se rescata; el dato ya está perdido en esos dispositivos.
 
 ## Futuro (backlog)
