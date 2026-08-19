@@ -104,13 +104,28 @@ class ApiService {
         } on DioException catch (err) {
           return handler.reject(err);
         }
-      } else {
-        // Refresh failed → session is dead.
-        //
-        // TD-063 will narrow this to `rejected` only; today both non-rotated
-        // outcomes still land here, which keeps this commit behaviour-neutral.
+      } else if (outcome.status == _RefreshStatus.rejected) {
+        // The server said no: the session really is dead.
         await _local.clear();
         onSessionExpired?.call();
+      } else {
+        // Unreachable (TD-063). The session is NOT known to be dead, so it
+        // survives: throwing the user back to the login screen over a lift,
+        // a WiFi-to-cellular handoff or a backend deploy is a bug, not a
+        // security measure. The next request will get its own 401 and try
+        // again, by then with a working connection.
+        //
+        // A breadcrumb rather than a captured event on purpose: offline this
+        // fires once per burst of requests, so capturing would guarantee
+        // noise. As a breadcrumb it costs nothing until something else is
+        // reported, and then the timeline says a refresh had failed first —
+        // which is otherwise invisible, since the refresh call deliberately
+        // runs on an interceptor-free Dio.
+        SentryService.addBreadcrumb(
+          'refresh unreachable — session kept',
+          category: 'auth',
+          data: {'path': options.path},
+        );
       }
     }
     handler.next(e);
