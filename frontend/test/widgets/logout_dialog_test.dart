@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homesync/presentation/widgets/logout_dialog.dart';
@@ -110,6 +112,95 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(result, isTrue);
+    });
+  });
+
+  group('draining the queue first (TD-061 §2)', () {
+    Future<void> pumpWithSync(
+      WidgetTester tester,
+      int pendingCount,
+      Future<int> Function() trySync,
+    ) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: ElevatedButton(
+              onPressed: () =>
+                  showLogoutDialog(context, pendingCount: pendingCount, trySync: trySync),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pump();
+    }
+
+    testWidgets('shows the transitional state and blocks confirming',
+        (tester) async {
+      final gate = Completer<int>();
+      await pumpWithSync(tester, 3, () => gate.future);
+
+      expect(find.textContaining('Sincronizando 3 cambios pendientes'),
+          findsOneWidget);
+      // Confirming mid-drain would discard writes seconds away from safety.
+      final button = tester.widget<FilledButton>(find.byType(FilledButton));
+      expect(button.onPressed, isNull);
+
+      gate.complete(0);
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('a drain that empties the queue leaves no warning at all',
+        (tester) async {
+      await pumpWithSync(tester, 3, () async => 0);
+      await tester.pumpAndSettle();
+
+      // The best warning is the one that turns out to be unnecessary.
+      expect(find.text('¿Seguro que quieres cerrar sesión?'), findsOneWidget);
+      expect(find.textContaining('sin sincronizar'), findsNothing);
+      expect(find.widgetWithText(FilledButton, 'Cerrar sesión'), findsOneWidget);
+    });
+
+    testWidgets('a partial drain warns with what is LEFT, not the initial count',
+        (tester) async {
+      await pumpWithSync(tester, 5, () async => 2);
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('2 cambios sin sincronizar'), findsOneWidget);
+      expect(find.textContaining('5 cambios'), findsNothing);
+      expect(find.widgetWithText(FilledButton, 'Cerrar sesión y descartar'),
+          findsOneWidget);
+    });
+
+    testWidgets('no drain is attempted when the queue is already empty',
+        (tester) async {
+      var called = false;
+      await pumpWithSync(tester, 0, () async {
+        called = true;
+        return 0;
+      });
+      await tester.pumpAndSettle();
+
+      expect(called, isFalse);
+      expect(find.text('¿Seguro que quieres cerrar sesión?'), findsOneWidget);
+    });
+
+    testWidgets('dismissing the dialog does not blow up when the drain lands',
+        (tester) async {
+      // TD-061 §4.2: cancelling must not abort the sync — it is already in
+      // flight and useful. All the dialog does is stop caring about the result,
+      // which must not throw a setState-after-dispose.
+      final gate = Completer<int>();
+      await pumpWithSync(tester, 3, () => gate.future);
+
+      await tester.tap(find.text('Cancelar'));
+      await tester.pumpAndSettle();
+
+      gate.complete(1);
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
     });
   });
 }

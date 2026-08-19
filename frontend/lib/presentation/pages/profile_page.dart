@@ -5,7 +5,9 @@ import '../../config/theme.dart';
 import '../../services/cache_service.dart';
 import '../cubit/auth_cubit.dart';
 import '../cubit/household_cubit.dart';
+import '../cubit/shopping_cubit.dart';
 import '../cubit/socket_cubit.dart';
+import '../cubit/task_cubit.dart';
 import '../widgets/common.dart';
 import '../widgets/logout_dialog.dart';
 import '../widgets/user_avatar.dart';
@@ -222,9 +224,15 @@ class ProfilePage extends StatelessWidget {
     // Read once, not from the live stream: a number that changes while the
     // user is reading the sentence is worse than a stable one — they decide
     // about what they saw (TD-061 §3).
+    final pending = CacheService().pendingOperationsCountSync;
+    final tasks = context.read<TaskCubit>();
+    final shopping = context.read<ShoppingCubit>();
+
     final ok = await showLogoutDialog(
       context,
-      pendingCount: CacheService().pendingOperationsCountSync,
+      pendingCount: pending,
+      // Only worth attempting when there is something to drain.
+      trySync: pending == 0 ? null : () => _drainQueue(tasks, shopping),
     );
     if (ok != true || !context.mounted) return;
 
@@ -232,6 +240,59 @@ class ProfilePage extends StatelessWidget {
     // reaction to the AuthState this emits — see the app-wide listener in
     // app.dart (TD-055/TD-058) — so this page only has to trigger it.
     await context.read<AuthCubit>().logout();
+  }
+
+  /// Try to empty the offline queue before logging out, and report what is
+  /// left (TD-061 §2, decision C).
+  ///
+  /// Capped at 5 seconds: past that the user is staring at a dialog that will
+  /// not tell them anything new, and whatever has not synced by then is what
+  /// the warning has to be about.
+  ///
+  /// No connectivity pre-check on purpose. With no network the request fails
+  /// immediately with a network error, so the offline case falls through to
+  /// the warning fast and without spending the budget — a pre-check would only
+  /// add a second source of truth about being online.
+  ///
+  /// Never throws: a failed drain and a drain that synced nothing are the same
+  /// situation from the user's side, and the count says which.
+  static Future<int> _drainQueue(TaskCubit tasks, ShoppingCubit shopping) async {
+    try {
+      await Future.wait([
+        _syncOrAwait(
+          isSyncing: tasks.state.isSyncing,
+          syncing: tasks.stream.map((s) => s.isSyncing),
+          start: tasks.syncPending,
+        ),
+        _syncOrAwait(
+          isSyncing: shopping.state.isSyncing,
+          syncing: shopping.stream.map((s) => s.isSyncing),
+          start: shopping.syncPending,
+        ),
+      ]).timeout(const Duration(seconds: 5));
+    } catch (_) {
+      // Timed out, offline, or the server refused. The remaining count below
+      // is the answer either way.
+    }
+    return CacheService().pendingOperationsCountSync;
+  }
+
+  /// Wait for a sync already in flight instead of starting a second one.
+  ///
+  /// `syncPending()` fires automatically on the offline→online transition, so
+  /// opening the logout dialog right then could overlap two drains. Replaying
+  /// twice is safe (every create carries an Idempotency-Key, Hard Rule 13) but
+  /// it is needless traffic (TD-061 §4.4).
+  static Future<void> _syncOrAwait({
+    required bool isSyncing,
+    required Stream<bool> syncing,
+    required Future<void> Function() start,
+  }) async {
+    if (isSyncing) {
+      await syncing.firstWhere((v) => !v);
+      return;
+    }
+    await start();
   }
 }
 
