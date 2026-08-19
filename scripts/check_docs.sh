@@ -5,8 +5,9 @@
 # Three failure modes this repo has actually hit, each cheap to detect and
 # impossible to notice by eye once the docs grow:
 #
-#   1. AGENTS.md links a doc that does not exist -> an agent following the
-#      "read this first" list silently starts work with missing context.
+#   1. AGENTS.md or CLAUDE.md links a doc that does not exist -> an agent
+#      following the "read this first" list silently starts work with missing
+#      context.
 #   2. CLAUDE.md's short "Currently open TDs" table drifts from the full
 #      registry in docs/TECH_DEBT.md -> a TD reads as open in one file and
 #      Resolved in the other (this happened with TD-002 and TD-015).
@@ -52,23 +53,32 @@ require_file "$CLAUDE"
 require_file "$TECH_DEBT"
 
 # ---------------------------------------------------------------------------
-# 1. Every .md linked from AGENTS.md exists
+# 1. Every .md linked from AGENTS.md and CLAUDE.md exists
 # ---------------------------------------------------------------------------
 # Only real markdown links -- [text](path.md) -- are checked, deliberately.
 # Bare or backticked filenames in prose are NOT links: AGENTS.md discusses
 # AGENTS.legacy.md (deleted on purpose) in its decision note, and requiring
 # that to exist would be wrong. Keeping the rule "a link must resolve" makes
 # the check precise and needs no allowlist to maintain.
-printf '1. Enlaces .md desde %s\n' "$AGENTS"
+#
+# Rutas relativas a la raíz del repo, que es donde viven los dos archivos
+# comprobados. Un documento dentro de docs/ necesitaría resolverlas contra su
+# propio directorio; cuando haga falta, el cambio va aquí y no en dos sitios.
+check_md_links() {
+  local file="$1"
+  printf '   %s\n' "$file"
 
-links=$(strip_fences "$AGENTS" \
-  | grep -oE '\]\([^)]+\.md(#[^)]*)?\)' \
-  | sed -E 's/^\]\(//; s/\)$//; s/#.*$//' \
-  | sort -u)
+  local links link
+  links=$(strip_fences "$file" \
+    | grep -oE '\]\([^)]+\.md(#[^)]*)?\)' \
+    | sed -E 's/^\]\(//; s/\)$//; s/#.*$//' \
+    | sort -u)
 
-if [ -z "$links" ]; then
-  fail "no se encontró ningún enlace markdown a .md (¿se rompió el formato?)"
-else
+  if [ -z "$links" ]; then
+    fail "$file: no se encontró ningún enlace markdown a .md (¿se rompió el formato?)"
+    return
+  fi
+
   while IFS= read -r link; do
     case "$link" in
       http://* | https://*) continue ;;
@@ -76,10 +86,14 @@ else
     if [ -f "$link" ]; then
       ok "$link"
     else
-      fail "enlace roto: $link"
+      fail "enlace roto en $file: $link"
     fi
   done <<< "$links"
-fi
+}
+
+printf '1. Enlaces .md locales\n'
+check_md_links "$AGENTS"
+check_md_links "$CLAUDE"
 
 # ---------------------------------------------------------------------------
 # 2. CLAUDE.md's short open-TD table agrees with docs/TECH_DEBT.md

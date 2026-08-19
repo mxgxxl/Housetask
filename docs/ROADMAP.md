@@ -48,7 +48,7 @@
 Ninguno bloquea nada; se listan para que no se pierdan.
 
 - ~~**Node 24 en CI**~~ — hecho en PR #36 (2026-08-19), incluido el comentario de `ci.yml` que decía "11 lints preexistentes" cuando son 14.
-- **Check de enlaces a `CLAUDE.md`**: hoy `scripts/check_docs.sh` solo valida los enlaces de `AGENTS.md`; `CLAUDE.md` enlaza `docs/ADRs.md` y varios más sin verificar.
+- ~~**Check de enlaces a `CLAUDE.md`**~~ — hecho el 2026-08-19: `check_md_links()` se aplica a los dos archivos. Sus dos enlaces (`docs/ADRs.md`, `docs/TECH_DEBT.md`) ya resolvían, así que no había nada roto que arreglar.
 - **Homogeneizar `copyWith` y evaluar un mixin para el overlay optimista**: `TaskCubit` y `ShoppingCubit` llevan copias duplicadas del andamiaje, y sus estados difieren en si `copyWith` limpia `error` — lo que invierte el orden de emits en el rollback. Homogeneizar el contrato primero vale más que el mixin. Ver IMPROVEMENTS.md (2026-08-18).
 - **SPM de `flutter_local_notifications`**: pendiente de revisar, sin registro previo en el repo (el precedente conocido de deriva SPM es TD-038, pero es de `sentry_flutter`, no de este plugin). Requiere que quien lo detectó amplíe el síntoma.
 - **`UIScene`**: pendiente de revisar, igualmente sin registro previo en el repo ni entrada en TECH_DEBT.md.

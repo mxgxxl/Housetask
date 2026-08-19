@@ -299,7 +299,7 @@ Decisión de diseño: marcadores HTML en vez de un diff por encabezados. Un diff
 
 El job va fuera del filtro de rutas `changes` a propósito: la deriva que detecta la producen precisamente los cambios solo-docs, que es lo que ese filtro se salta. El coste es de segundos, así que no contradice TD-008.
 
-Pendiente menor: el check 1 solo mira `AGENTS.md`. Extenderlo a los enlaces de `CLAUDE.md` (que apunta a `docs/ADRs.md`, entre otros) es una línea más de script, pero quedó fuera del alcance pedido.
+~~Pendiente menor: el check 1 solo mira `AGENTS.md`.~~ Hecho el 2026-08-19: la comprobación se extrajo a `check_md_links()` y se aplica a los dos archivos. Los dos enlaces de `CLAUDE.md` ya resolvían — el valor está en que a partir de ahora no puedan dejar de hacerlo.
 
 ---
 
