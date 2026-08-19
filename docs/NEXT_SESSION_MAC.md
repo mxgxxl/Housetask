@@ -24,6 +24,7 @@
 - 2026-08-18: TD-007 parcialmente cerrado (updates y deletes optimistic); creates aplazados como TD-060.
 - 2026-08-18: round TD-057 + TD-060 cerrado (cola offline sin pérdida de ids, creates optimistas); TD-061 abierto.
 - 2026-08-18: TD-001 fases 0-1 — escritura dual desplegada y backfill aplicado en producción (5 hogares, 5 membresías, 0 divergencias).
+- 2026-08-19: TD-061 cerrado (aviso al cerrar sesión con cola pendiente); TD-062 abierto. Acciones de CI a Node 24 (PR #36).
 - 2026-08-17: PR #32 config fallback (Codex); PR #33 integración legacy
   (Claude); PR #34 sync (Codex, cerrado como superseded sin merge). Plan free de Codex activo y validado.
   gh instalado; Codex CLI instalado y autenticado.
@@ -36,7 +37,7 @@
 
 ## Siguiente tarea
 
-**1. TD-001 en pausa activa de observación.** La fase 2 (lectura dual) se
+**1. TD-001 sigue en pausa activa de observación.** La fase 2 (lectura dual) se
 desplegó el 2026-08-18 (commit `631031d`). Ventana de **48-72 h**: **NO
 autorizar el cutover antes del 2026-08-21.**
 
@@ -49,22 +50,47 @@ autorizar el cutover antes del 2026-08-21.**
   estadístico: significa que la escritura dual tiene un hueco, y el cutover
   haría autoridad a una colección incompleta.
 
-Las lecturas ya consultan `HouseholdMember` **comparando** contra el array
-embebido y reportando cuando difieran, sin cambiar todavía lo que se devuelve
-(que sigue saliendo del embebido). Es la fase que convierte la migración de un
-acto de fe en una medida. El sitio instrumentado es `requireMembership`, que
-corre en toda ruta con `:householdId` y por tanto ve todo el tráfico.
-
 El 2026-08-18 se generaron 30 lecturas household-scoped con
 `scripts/td001-sample-traffic.ts` sobre un hogar dedicado ("Muestras TD-001"),
 para que la ventana no dependa de que alguien abra la app.
 
-**El criterio para avanzar es un dato, no un plazo** — pero el plazo mínimo
-existe para que el dato signifique algo: cero divergencias sobre una muestra de
-minutos no dice lo mismo que sobre una de días.
+**2. Diseño de TD-062 — la caché sobrevive a un cambio de cuenta.** Es lo que
+hay que hacer mientras TD-001 observa, y va por delante de reanudarlo: no se
+pierde trabajo del usuario, se ejecutan escrituras de una cuenta bajo las
+credenciales de otra.
 
-Después: fase 3 (cutover), fase 4 (limpieza del array embebido y de
-`User.households`). Ver `docs/TD-001-DESIGN.md` §3 y §6.
+`CacheService.clearAll()` se llama desde un único sitio, `AuthCubit.logout()`.
+Ni `login()`, ni `register()`, ni `onSessionExpired()` lo llaman, así que tras
+una expiración de sesión de A un login de B hereda en disco la cola de A y la
+reproduce con el token de B. Evidencia completa en `docs/TD-061-DESIGN.md` §1 y
+§6. Mismo formato de documento aprobable en bloque que los rounds anteriores.
+
+Después: fases 3 y 4 de TD-001 (cutover y limpieza).
+
+### Fase 5 — cerrada (TD-061, 2026-08-19)
+
+**Cerrar sesión con cambios sin sincronizar ya avisa.** El logout sigue
+vaciándolo todo —la solución es avisar, no dejar de limpiar—, pero el diálogo
+tiene ahora tres formas: sin cola, la de siempre; con cola y conexión, intenta
+drenar con un tope de 5 s mostrando "Sincronizando N cambios pendientes…" y el
+botón bloqueado; y con cola sin drenar, "Tienes N cambios sin sincronizar. Si
+cierras sesión ahora, se perderán", con el botón renombrado a "Cerrar sesión y
+descartar".
+
+Tres decisiones que sostienen el resto:
+
+- **El aviso aparece solo cuando hay algo que perder.** Uno que apareciera
+  siempre se aprendería a ignorar.
+- **Se descartó bloquear el logout** con cola pendiente: convertiría un
+  problema de datos en uno de seguridad, porque el caso que motiva limpiar el
+  dispositivo —perdido, compartido— es justo donde no puedes permitirte fallar.
+- **Cancelar no aborta el drenaje en vuelo**, y si ya había una sincronización
+  en curso se espera en vez de lanzar otra.
+
+No hizo falta fontanería nueva: `pendingOperationsCountSync` ya existía y ya
+alimentaba el badge del `OfflineBanner`.
+
+Cuatro commits, suite de 290 a 301 tests. Ver `docs/TD-061-DESIGN.md`.
 
 ### TD-001 fases 0-1 — completadas (2026-08-18)
 
