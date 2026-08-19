@@ -26,6 +26,7 @@
 - 2026-08-18: TD-001 fases 0-1 — escritura dual desplegada y backfill aplicado en producción (5 hogares, 5 membresías, 0 divergencias).
 - 2026-08-19: TD-061 cerrado (aviso al cerrar sesión con cola pendiente); TD-062 abierto. Acciones de CI a Node 24 (PR #36).
 - 2026-08-19: TD-062 cerrado (marcador de propietario de la caché; otra cuenta ya no hereda la cola offline). Se abrió TD-063 (un fallo de red en el refresh se trata como sesión muerta).
+- 2026-08-19: TD-063 cerrado (solo un 401 mata la sesión; una desconexión ya no expulsa al login ni pierde la escritura en vuelo). Check de enlaces de docs extendido a CLAUDE.md.
 - 2026-08-17: PR #32 config fallback (Codex); PR #33 integración legacy
   (Claude); PR #34 sync (Codex, cerrado como superseded sin merge). Plan free de Codex activo y validado.
   gh instalado; Codex CLI instalado y autenticado.
@@ -55,27 +56,61 @@ El 2026-08-18 se generaron 30 lecturas household-scoped con
 `scripts/td001-sample-traffic.ts` sobre un hogar dedicado ("Muestras TD-001"),
 para que la ventana no dependa de que alguien abra la app.
 
-**2. Diseño de TD-063 — un fallo de red en el refresh mata la sesión.** Es lo
-que hay que hacer mientras TD-001 observa. `ApiService._refreshToken()` termina
-en `catch (_) { completer.complete(null); }`, así que traga también la excepción
-de conectividad; el interceptor lee ese `null` como "sesión muerta", limpia
-SharedPreferences y expulsa al login. Basta un 401 real con mala cobertura
-detrás.
+**2. Nada abierto que compita con la ventana.** Cerrados TD-061, TD-062 y
+TD-063, no queda ningún TD abierto que toque el ciclo de sesión. Lo que hay
+son micro-pendientes, todos de bajo esfuerzo y ninguno bloqueante: homogeneizar
+`copyWith` de Task/Shopping y evaluar el mixin del overlay optimista, el SPM de
+`flutter_local_notifications`, `UIScene`, y las tres entradas nuevas de
+IMPROVEMENTS del round de TD-062 (assert del marcador en
+`syncPendingOperations`, y el test que falta de la rama cacheada de
+`checkAuth`). Ver la lista en `docs/ROADMAP.md`.
 
-Es molestia y no pérdida —tras TD-062 el usuario recupera su cola al volver a
-entrar con su cuenta—, y por eso va después de la ventana de TD-001 si hubiera
-que elegir. Evidencia en `docs/TD-062-DESIGN.md` §1. Mismo formato de documento
-aprobable en bloque que los rounds anteriores.
+**Pendiente de dispositivo (TD-062 y TD-063).** Se acumulan dos guiones que
+solo se pueden ejercitar con red y cuentas reales:
 
-**Pendiente de dispositivo (TD-062):** los dos escenarios que de verdad validan
-el round necesitan dos cuentas y una expiración real, y no se pueden ejercitar
-en tests: (1) arrancar en modo avión con datos cacheados y comprobar que
-**siguen ahí** —el fallo por exceso se vería como "arranca sin datos"—, y (3)
-expirar la sesión de A, entrar con B y comprobar que **no aparecen descartes en
-Sentry** en los minutos siguientes. Guiones completos en
-`docs/TD-062-DESIGN.md` §6.
+- **TD-062:** arrancar en modo avión con datos cacheados y comprobar que
+  **siguen ahí**; y expirar la sesión de A, entrar con B y comprobar que **no
+  aparecen descartes en Sentry**. Guiones en `docs/TD-062-DESIGN.md` §6.
+- **TD-063:** montaje recomendado, backend local con `JWT_ACCESS_EXPIRES=30s`
+  (esperar 15 min por intento contra producción hace la prueba irrepetible).
+  Los tres que importan: avión durante el refresh y **no** acabar en el login;
+  servidor caído y que la tarea quede **encolada** en vez de revertida; y el
+  control negativo —borrar la fila de `refreshtokens` en el Mongo local— que
+  **sí** debe llevar al login. Sin el tercero, los otros dos podrían pasar
+  simplemente porque la app dejó de cerrar sesión nunca. Guiones en
+  `docs/TD-063-DESIGN.md` §6.
 
 Después: fases 3 y 4 de TD-001 (cutover y limpieza).
+
+### Fase 7 — cerrada (TD-063, 2026-08-19)
+
+**Una desconexión ya no es una expiración.** `_refreshToken` devuelve tres
+desenlaces —rotado, rechazado, inalcanzable— donde antes devolvía `String?`.
+Ese tipo era el root cause, no el `catch (_)`: dos valores para tres
+desenlaces, así que "no pude preguntar" se colapsaba contra "el servidor dijo
+que no", y un ascensor o un deploy de Railway dejaban al usuario en el login.
+
+Tres decisiones que sostienen el resto:
+
+- **Solo un 401 mata la sesión**, por lista blanca. Sin respuesta, 5xx, 429,
+  403 y un 2xx sin tokens (portal cautivo, que no lanza excepción alguna)
+  conservan la sesión. El 403 cae del lado seguro porque el backend nunca lo
+  devuelve en esa ruta: viene de un proxy o un WAF, no de nosotros.
+- **No se reintenta**, y está escrito en el código por qué: la rotación no es
+  idempotente, así que reintentar una llamada cuya respuesta no se vio dispara
+  la detección de replay del backend, levanta una alerta en el canal del robo
+  de tokens y revoca la familia. El reintento útil ya existe gratis — la
+  siguiente petición trae su propio 401.
+- **La escritura en vuelo también se salvó.** Era la mitad del daño que no
+  estaba en la ficha del TD: el 401 propagado no es encolable, así que la tarea
+  recién creada se revertía. Ahora el desenlace inalcanzable rechaza sin
+  respuesta y la escritura toma el camino offline de ADR-010.
+
+De paso se corrigió una afirmación falsa de CLAUDE.md: `/api/auth/refresh` y
+`/api/auth/logout` **no** están exentos del limitador global; la exención solo
+cubre `/register` y `/login`.
+
+Cinco commits, suite de 312 a 323 tests. Ver `docs/TD-063-DESIGN.md`.
 
 ### Fase 6 — cerrada (TD-062, 2026-08-19)
 

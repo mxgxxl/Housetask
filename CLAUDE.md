@@ -167,7 +167,7 @@ Detailed ADRs live in docs/ADRs.md. Index:
 - Passwords hashed with bcrypt, never returned in responses
 - Failed login/register return generic message (never reveal if email exists)
 - Credential endpoints rate-limited: 5 requests / 15 min / IP
-- Every other `/api/*` route is additionally rate-limited globally: 100 requests / 15 min / IP (`app.ts`'s `buildGlobalLimiter`, TD-006), `/api/auth/*` exempted from this counter (it already has the stricter limiter above) via a `skip` on `req.originalUrl` — a request there is never double-limited
+- Every other `/api/*` route is additionally rate-limited globally: 100 requests / 15 min / IP (`app.ts`'s `buildGlobalLimiter`, TD-006). The exemption from that counter is **only** for the two endpoints that already carry the stricter limiter above — `OWN_LIMITER_PREFIXES = ['/api/auth/register', '/api/auth/login']`, matched with a `skip` on `req.originalUrl` so nothing is double-limited. **`/api/auth/refresh` and `/api/auth/logout` are NOT exempt**: they carry no credential limiter of their own and count against the global 100/15 min/IP budget like any other route. This section used to claim all of `/api/auth/*` was exempt, which was never true of the code (corrected 2026-08-19, found while designing TD-063 — it matters there because it is the budget any refresh-retry policy would have to live within, shared between real users behind carrier-grade NAT)
 - Password field has `select: false` in Mongoose schema
 - Replay detection revokes the token family on two triggers: valid signature + missing row (revokes tokens created before the replaying request started — TD-050, 2026-08-17, so a concurrent legitimate rotation's brand-new token survives), OR stored userId mismatch with the JWT payload (tampering, not a race — revokes the full family unconditionally); every family revocation emits a security log (`logger.warn` with userId) as the audit hook for Sentry (TD-009)
 - Production boot fails fast (`utils/env.ts`'s `validateProductionEnv`, called from `server.ts` before anything binds) when `CORS_ORIGINS` is empty, `MONGODB_URI` is unset, or either JWT secret is under 32 characters (TD-016) — a misconfigured production process crashing visibly beats it silently degrading `CORS_ORIGINS` to `*` or running with a forgeable JWT secret
@@ -454,9 +454,7 @@ The full registry (~47 entries, all history) lives in [Full Technical Debt Regis
 | TD-039 | Offline conflict resolution uses last-write-wins; concurrent edits on multiple devices can overwrite | Low | Deferred (Phase 2) |
 | TD-049 | No real Firebase project connected for push notifications (PDR-008) — code is in place, no push actually delivers until a Firebase project + `flutterfire configure` + APNs key are set up manually | High | Planned (before beta push notifications can work) |
 | TD-054 | Access token stays valid up to 15 min after logout (stateless-JWT tradeoff, documented not fixed) | Low | Planned |
-| TD-061 | `logout` vacía la cola pendiente sin aviso: un cambio hecho offline y no sincronizado se pierde al cerrar sesión | Medium | **Resolved (2026-08-19)** |
-| TD-062 | La caché y la cola offline sobreviven a un cambio de cuenta: tras una expiración de sesión, la cola de A se reproduce con el token de B | High | **Resolved (2026-08-19)** |
-| TD-063 | Un fallo de red durante el refresh se trata como sesión muerta: expulsa al login por una desconexión pasajera | Medium | Open |
+| TD-063 | Un fallo de red durante el refresh se trata como sesión muerta: expulsa al login por una desconexión pasajera | Medium | **Resolved (2026-08-19)** |
 
 ---
 
