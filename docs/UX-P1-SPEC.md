@@ -88,7 +88,58 @@ Además de todas las cadenas citadas en las secciones anteriores:
 4. Rachas con hielos.
 5. Misiones semanales cooperativas.
 
-Las misiones entran en scope con reglas cerradas: cooperativas, escaladas por tamaño del hogar y cofre determinista. Su especificación UX detallada está **PENDIENTE**. La mascota sigue una pista de arte separada; P1 solo incorpora ganchos lógicos mediante eventos.
+Las misiones entran en scope con reglas cerradas: cooperativas, escaladas por tamaño del hogar y cofre determinista. Su especificación UX detallada se define en la sección siguiente. La mascota sigue una pista de arte separada; P1 solo incorpora ganchos lógicos mediante eventos.
+
+### Misiones semanales cooperativas
+
+#### Ciclo de vida y generación
+
+Hay una única misión activa por hogar. Se genera una nueva al empezar cada semana, el lunes, y sustituye a la misión anterior: no hay solapamiento entre semanas. La misión mide cooperación del hogar, no actividad de una persona, y es independiente de las rachas personales: ni las prolonga ni las rompe.
+
+Sea `H` el número de miembros activos del hogar al generar o recalcular la misión. Para v1 se cierran estas cuatro variantes de objetivo. El sistema las rota automáticamente y en este orden: semana 1, objetivo 1; semana 2, objetivo 2; semana 3, objetivo 3; semana 4, objetivo 4; después vuelve al objetivo 1. El hogar no elige la variante.
+
+| Objetivo | Fórmula | Hogar de 2 | Hogar de 4 |
+|---|---|---:|---:|
+| «Completad N tareas esta semana» | `N = 6 × H` primeras completaciones de instancias elegibles. | 12 tareas | 24 tareas |
+| «Cada miembro completa al menos M» | `M = 2 + ⌊H / 2⌋` primeras completaciones por cada miembro activo. | 3 por persona (mínimo total 6) | 4 por persona (mínimo total 16) |
+| «Mantened >80 % de cumplimiento» | Con `T` instancias elegibles programadas esa semana, objetivo `completadas ≥ ⌊0,8 × T⌋ + 1`. `T` se calcula sobre las tareas de los miembros activos. | Si `T = 12`, al menos 10 | Si `T = 24`, al menos 20 |
+| «Acumulad X 🪙 de hogar» | `X = 40 × H` 🪙 aportadas a la hucha conjunta activa. No crea una wallet común. | 80 🪙 | 160 🪙 |
+
+«Instancia elegible» significa una instancia de tarea del hogar que puede contar para la primera completación de la semana. La misión de hucha solo se elige si hay una meta conjunta activa; si no, se usa una de las otras tres variantes.
+
+#### Estado y progreso
+
+La home muestra una tarjeta «Misión de la semana» con el objetivo, una barra de avance de hogar y el progreso numérico. Bajo ella se ven las contribuciones por miembro como suma de aportaciones, nunca ordenadas ni comparadas como ranking. Para el objetivo «cada miembro», se muestra el avance de cada persona hacia su propio mínimo, sin clasificar a nadie.
+
+#### Recompensa y finalización
+
+Al completar el objetivo aparece una celebración compartida: modal «Lo habéis conseguido juntos», cofre y reveal al tap. El cofre concede siempre una recompensa útil compartida en el resultado de la misión —monedas y XP— y puede añadir un cosmético controlado por una regla determinista. En v1 ese bonus usa exclusivamente cosméticos ya existentes en la tienda; no se crean assets nuevos hasta que la pista de arte produzca contenido. No hay probabilidades aleatorias ni cofres monetarios.
+
+#### Fallo
+
+Si termina la semana sin completar la misión, no se conserva ni acumula el progreso. La siguiente semana genera una meta nueva. No existe racha de misiones: fallar no afecta rachas personales, niveles, XP ni monedas ya obtenidas.
+
+#### Casos borde
+
+- Si un miembro sale, el progreso ya realizado permanece y la escala se recalcula con los miembros activos. En «cada miembro», deja de exigirse la contribución del exmiembro; en los demás objetivos se recalcula el objetivo o denominador y se conserva el avance realizado.
+- Si un miembro nuevo se une durante una misión activa, la meta se recalcula automáticamente con el nuevo tamaño del hogar y se notifica a todo el hogar.
+- Un hogar de una persona recibe la misma mecánica con tono de hogar: es una misión personal sin competición.
+- Si no hay actividad durante la semana, la misión falla al acabar, sin estado de error ni penalización.
+
+#### Copy exacto
+
+- Encabezado: «Misión de la semana».
+- Objetivo de tareas: «Esta semana, juntos: completad 12 tareas.»
+- Progreso: «Vais 8 de 12. Cada aportación suma.»
+- Objetivo por miembro: «Todos contáis: completa 3 tareas esta semana.»
+- Objetivo de cumplimiento: «Mantened más del 80 % de cumplimiento.»
+- Objetivo de hucha: «Ahorrad 80 🪙 juntos para vuestra meta.»
+- Finalización: «Lo habéis conseguido juntos».
+- Reveal: «Tocad el cofre para descubrir vuestra recompensa.»
+- Fallo: «Esta semana no salió. La próxima trae una misión nueva.»
+- Hogar de una persona: «Tu hogar de una persona también cuenta: esta misión es contigo.»
+- Recalcular tras salida: «La misión se actualizó porque cambió vuestro hogar.»
+- Alta durante misión: «La misión se ha ajustado al nuevo tamaño del hogar».
 
 ## 9. Diferido a v2/P2+
 
