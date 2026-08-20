@@ -10,6 +10,15 @@ El objetivo es estimar y hacer visible el reparto de trabajo doméstico sin conv
 - **Hipótesis:** consecuencia inferida que requiere datos o reproducción.
 - **Pregunta abierta:** decisión no cerrada por el prompt, PDR o código; no se decide aquí.
 
+## Decisiones aprobadas
+
+1. **D4 — Proxy de peso.** V1 usa el peso automático canónico de P1 antes de presupuesto, recompensa cobrada y ajustes manuales. Cada snapshot conserva `weightSource` y `weightVersion`; duración/categoría queda descartada en v1.
+2. **D5 — Ventana.** El balance usa semana natural, de lunes a domingo, coherente con las misiones y el presupuesto x/6.
+3. **D6 — Persistencia.** Se activa la señal cuando un miembro supera el 65 % de la carga durante dos semanas consecutivas. El umbral es configurable.
+4. **D7 — Muestra mínima.** Se necesitan cinco tareas con peso en la semana para mostrar el balance.
+5. **D8 — Tareas sin asignar.** No cuentan en el balance por miembro; se muestran como sugerencia de asignación conectada con TD-068.
+6. **D9 — Ubicación.** V1 vive en la vista de estadísticas del hogar existente y se integrará en el dashboard de salud del hogar cuando este se diseñe.
+
 ## 1. Estado actual
 
 ### Datos disponibles
@@ -33,28 +42,16 @@ Por tanto, la carencia de carga pendiente es **causa confirmada**, no hipótesis
 
 ## 2. Modelo de carga doméstica estimada
 
-### Proxy recomendado y alternativa
+### Proxy aprobado para v1
 
-**Recomendación:** usar como proxy v1 el **peso automático canónico previo al presupuesto** que calcule el mismo motor de PDR-011/TD-066 para distribuir valor entre tareas. No se usa la recompensa realmente cobrada ni el ajuste manual del usuario:
+D4 fija como proxy v1 el **peso automático canónico previo al presupuesto** que calcule el mismo motor de PDR-011/TD-066 para distribuir valor entre tareas. No se usa la recompensa realmente cobrada ni el ajuste manual del usuario:
 
 ```text
 automaticBaseWeight(taskOrRule, weekSnapshot) -> entero positivo
 taskWeight(occurrence) = automaticBaseWeight de su tarea/regla en esa semana
 ```
 
-Esta elección evita reintroducir dificultad manual, reutiliza una explicación que el usuario ya verá en «Ajustar reparto» y mantiene el peso estable aunque una persona agote su presupuesto o cambie temporalmente su `coinAmount` manual. La moneda concedida puede ser cero por cap; el trabajo realizado no pasa a pesar cero.
-
-**Alternativa:** un motor independiente de duración/categoría:
-
-```text
-effectiveMinutes = duración explícita si startsAt/endsAt son válidos
-                 = default automático versionado por categoría en otro caso
-weight = max(1, round(effectiveMinutes / unidadDeTiempo))
-```
-
-La alternativa puede aproximar mejor el esfuerzo que un reparto basado sobre todo en frecuencia, pero exige defaults de categoría que el dueño no ha aprobado y duplica reglas respecto a P1.
-
-**Pregunta abierta — decisión de proxy:** confirmar si la fuente autoritativa será (A) `automaticBaseWeight` compartido con P1 —recomendado— o (B) duración/categoría automática. No se mezclan ambos silenciosamente: cada snapshot guarda `weightSource` y `weightVersion` para que una semana no cambie al desplegar reglas nuevas.
+Esta elección evita reintroducir dificultad manual, reutiliza una explicación que el usuario ya verá en «Ajustar reparto» y mantiene el peso estable aunque una persona agote su presupuesto o cambie temporalmente su `coinAmount` manual. La moneda concedida puede ser cero por cap; el trabajo realizado no pasa a pesar cero. Cada snapshot guarda `weightSource` y `weightVersion` para que una semana no cambie al desplegar reglas nuevas. Un motor alternativo de duración/categoría queda explícitamente descartado en v1.
 
 ### Snapshot e inmutabilidad semanal
 
@@ -97,28 +94,23 @@ La UI redondea y antepone «aproximadamente»: «Miguel ha asumido aproximadamen
 
 ### Ventana temporal
 
-**Pregunta abierta:** semana natural o rolling 7 días.
+D5 fija una semana natural de lunes a domingo en la timezone IANA que TD-066 define para presupuesto y economía. Se modela como intervalo semiabierto `[lunes 00:00, lunes siguiente 00:00)` para cubrir correctamente el domingo y los cambios DST. Así el reparto comparte frontera con las misiones y el presupuesto x/6. La semana actual se presenta «hasta hoy» y no activa por sí sola una alerta persistente.
 
-**Recomendación:** semana natural en la timezone IANA que TD-066 fija para presupuesto y economía. Así el reparto comparte frontera con el plan semanal y permite comparar semanas completas. La semana actual se presenta «hasta hoy» y no activa por sí sola una alerta persistente. Rolling 7 días puede añadirse como vista exploratoria, pero no debe mezclarse con el detector semanal.
-
-No se publica porcentaje si el denominador es cero. **Pregunta abierta:** mínimo de muestra antes de mostrar una cifra; recomendación inicial para piloto: al menos 4 ocurrencias y 8 puntos de peso en la ventana.
+No se publica porcentaje si el denominador es cero. D7 exige al menos cinco tareas con peso contabilizadas en el balance por miembro dentro de la semana; con cuatro o menos se muestra el estado de muestra insuficiente. Las tareas sin asignar quedan fuera de esta muestra conforme a D8.
 
 ## 4. Sugerencias de redistribución
 
 ### Detección persistente
 
-Para `H` miembros activos, la referencia neutral es `expectedShare = 100 / H`.
-
-Baseline configurable recomendado:
+Regla aprobada y configurable:
 
 ```text
-deviation(m, S) = realizedShare(m, S) - expectedShare(S)
-desequilibrio semanal si deviation >= X, con X = 15 puntos porcentuales
-persistente si ocurre durante N = 2 semanas naturales completas consecutivas
-y cada semana supera el mínimo de muestra aprobado
+desequilibrio semanal si realizedShare(m, S) > 65 %
+persistente si ocurre durante 2 semanas naturales completas consecutivas
+y cada semana contiene al menos 5 tareas con peso contabilizadas en el balance por miembro
 ```
 
-En un hogar de dos personas, el umbral empieza en 65 %, por lo que dos semanas alrededor de 68 % cumplen la señal. No se infiere culpa, voluntad ni disponibilidad personal. **Pregunta abierta:** aprobar `X=15`, `N=2` y el mínimo de muestra tras medir falsos positivos en el piloto.
+El valor exacto de 65 % no activa la señal; debe superarse. El porcentaje y el número de semanas se guardan como configuración para poder calibrarlos sin cambiar la fórmula. No se infiere culpa, voluntad ni disponibilidad personal.
 
 ### Selección de tareas reasignables
 
@@ -168,22 +160,21 @@ No se usan mensajes como «Miguel trabaja más», «Ana aporta menos», «ganado
 - No usar títulos/descripciones de tareas en telemetría; registrar ids, pesos, versión de regla y resultado agregado.
 - Permitir descartar una sugerencia y aplicar cooldown; no insistir en cada apertura.
 
-**Causa confirmada:** las estadísticas actuales sí exponen `topCompleter`. TD-069 no lo reutiliza ni lo amplía; el dashboard de equilibrio es una superficie distinta y no añade un ranking nuevo.
+**Causa confirmada:** las estadísticas actuales sí exponen `topCompleter`. TD-069 no lo reutiliza ni lo amplía; el módulo de equilibrio dentro de la vista de estadísticas es una superficie distinta y no añade un ranking nuevo.
 
 ## 6. Presentación y dashboard de salud del hogar
 
-El equilibrio de carga es un componente del futuro «Dashboard de salud del hogar» del punto 17 del PDF:
+Según D9, v1 se integra en la vista de estadísticas del hogar existente:
 
-- Home: tarjeta compacta solo cuando hay datos suficientes, con distribución agregada y acceso al detalle.
-- Dashboard: gráfico de proporciones sin orden competitivo, toggle «Esta semana / Tendencia», carga realizada y prevista separadas, bucket «Por repartir» y explicación del proxy.
-- Tareas: módulo contextual con las tareas candidatas a redistribución.
-- Digest: como máximo una mención semanal y solo si las preferencias futuras lo permiten; sin nombres/porcentajes en lock screen por defecto.
+- `StatsPage`: bloque «Equilibrio de carga» con gráfico de proporciones sin orden competitivo, carga realizada y prevista separadas y explicación del proxy.
+- Dentro del mismo flujo: bucket «Por repartir» y acceso a sugerencias de reasignación; las tareas sin asignar se presentan como sugerencias de asignación conectadas con TD-068.
+- Futuro: cuando se diseñe el «Dashboard de salud del hogar» del punto 17, este bloque se integrará allí sin crear mientras tanto una pantalla paralela.
 
-**Pregunta abierta:** si el dashboard de salud se implementa como nueva pantalla o extensión de `StatsPage`. No se decide navegación en esta ficha.
+No se añade en v1 una tarjeta separada en Home ni un digest/push específico de balance.
 
 ## 7. Dependencias de datos y bloqueo
 
-La recomendación A depende de los modelos de TD-066:
+La decisión D4 depende de los modelos de TD-066:
 
 - `WeeklyPersonalBudget.allocations[]` o una proyección canónica equivalente;
 - `automaticBaseWeight`, `weightVersion` y snapshot por ocurrencia/semana;
@@ -191,25 +182,23 @@ La recomendación A depende de los modelos de TD-066:
 - `RewardGrant`/primera completación para no contar retries;
 - `HouseholdMember` como autoridad de miembros activos.
 
-Por tanto, TD-069 queda **bloqueado por el cutover de TD-001 y por la base de economía de TD-066** si se aprueba el proxy recomendado. Se puede prototipar el cálculo sobre fixtures, pero no activar porcentajes reales con pesos inventados mientras falte esa fuente.
-
-Si el dueño aprueba la alternativa independiente de duración/categoría, la dependencia económica se reduce, pero TD-001 sigue siendo necesaria para cohortes de miembros fiables y habría que aprobar los defaults automáticos antes de producción.
+Por tanto, TD-069 queda **bloqueado por el cutover de TD-001 y por la base de economía de TD-066**. Se puede prototipar el cálculo sobre fixtures, pero no activar porcentajes reales con pesos inventados mientras falte esa fuente. La alternativa independiente de duración/categoría no forma parte de v1.
 
 ## 8. Casos borde
 
 | Caso | Tratamiento |
 |---|---|
 | Hogar de una persona | Mostrar «Tu hogar de una persona también cuenta», sin porcentaje comparativo ni sugerencia de redistribución. |
-| Miembro nuevo | Entra en carga prevista desde el alta; no se comparan semanas anteriores como si hubiera estado presente. `expectedShare` usa el snapshot de miembros de cada semana. |
+| Miembro nuevo | Entra en carga prevista desde el alta; no se comparan semanas anteriores como si hubiera estado presente. El snapshot conserva la cohorte activa de cada semana. |
 | Miembro que sale | Se conserva carga realizada histórica; se retira de pendientes y sugerencias futuras según TD-018/TD-067. |
-| Tarea sin asignar | Bucket «Por repartir»; no se atribuye a nadie. **Pregunta abierta:** si debe contar en el denominador general de carga prevista del hogar. |
+| Tarea sin asignar | No cuenta en el balance por miembro. Aparece en «Por repartir» como sugerencia de asignación conectada con TD-068. |
 | Tarea compartida pendiente | Peso dividido entre asignados activos. |
 | Tarea compartida completada | Todo el peso realizado va a `completedBy`; no se reparte por asignación previa. |
 | Sin `completedBy` histórico | Excluir del reparto individual y mostrarlo como carga histórica sin atribución; no adivinar autor. |
 | Tarea con duración y recurrencia | El código actual no combina ambas; usar el snapshot de la instancia/regla aprobado por P1, sin inferir duración ausente. |
 | Cambio de peso a mitad de semana | El snapshot conserva versión y peso originales hasta la semana siguiente. |
 | Operación offline tardía | Se atribuye a la semana server-authoritative de `occurredAt` validado por TD-066; la UI recalcula y etiqueta la actualización. |
-| Muy pocas tareas | No porcentaje ni sugerencia; estado de muestra insuficiente. |
+| Muy pocas tareas | Con menos de cinco tareas con peso contabilizadas en el balance por miembro no se muestra porcentaje ni señal de desequilibrio; aparece el estado de muestra insuficiente. |
 | Diferente disponibilidad personal | No se infiere desde actividad. **Pregunta abierta:** cualquier ajuste por vacaciones/cuidados requiere una señal voluntaria futura. |
 
 ## 9. Tests nuevos y plan de commits atómicos
@@ -221,7 +210,8 @@ Si el dueño aprueba la alternativa independiente de duración/categoría, la de
 - Semana natural/timezone/DST y semana parcial sin alerta.
 - Tarea compartida pendiente fraccionada y completada atribuida a `completedBy`.
 - Sin asignar, exmiembro, alta a mitad de semana, hogar de uno y muestra insuficiente.
-- Umbral justo por debajo/en/encima de X y persistencia N semanas.
+- Umbral justo por debajo/en/encima del 65 %, persistencia de dos semanas y configuración alternativa.
+- Muestra de cuatro/cinco tareas con peso contabilizadas por miembro y exclusión de tareas sin asignar.
 - Primera completación/retry offline no duplica peso.
 - Selección de reasignables y permisos creador/admin.
 
@@ -257,29 +247,24 @@ El presente PR solo contiene el commit documental solicitado.
 
 ### Rollback
 
-- Feature flag por hogar/usuario para ocultar tarjeta, dashboard y sugerencias.
+- Feature flag por hogar/usuario para ocultar el bloque de `StatsPage` y sus sugerencias.
 - Motor read-only: desactivarlo no modifica asignaciones ni tareas.
 - Versionar snapshots/reglas; no recalcular historia silenciosamente.
 - Desactivar primero notificaciones/sugerencias, después agregados; conservar datos base sin crear un ranking alternativo.
 
 ### Pruebas manuales
 
-1. Crear una semana 17/25 y comprobar «aproximadamente el 68 %».
-2. Repetir una semana y cruzar el umbral; una sola semana no sugiere.
+1. Crear una semana de cinco o más tareas con reparto 17/25 y comprobar «aproximadamente el 68 %».
+2. Crear dos semanas completas por encima del 65 % y comprobar la sugerencia; una sola semana o exactamente 65 % no sugieren.
 3. Ajustar monedas manualmente y verificar que el peso no cambia.
 4. Probar tareas compartidas, sin asignar y alta/salida de miembro.
 5. Cambiar timezone cerca de domingo/lunes y verificar snapshot/frontera.
 6. Abrir como admin, creador y miembro sin permisos; solo quien puede editar reasigna.
-7. Revisar dashboard con lector de pantalla y push en lock screen: sin exposición de nombres/porcentajes.
+7. Revisar el bloque de `StatsPage` con lector de pantalla y comprobar que no existe push de balance con nombres/porcentajes.
 8. Apagar el feature flag: tareas y estadísticas actuales siguen intactas.
 
 ## 11. Preguntas abiertas
 
-- Proxy autoritativo: `automaticBaseWeight` compartido con P1 o duración/categoría automática.
-- Semana natural —recomendada— o rolling 7 días.
-- Umbrales de piloto: X=15 puntos, N=2 semanas y mínimo de muestra.
-- Inclusión de tareas sin asignar en el denominador de carga prevista.
-- Pantalla nueva de salud o extensión de `StatsPage`.
 - Señal voluntaria futura para disponibilidad personal, si se considera necesaria.
 
 ## Proposed Improvements
