@@ -104,6 +104,96 @@ Los PDRs registran decisiones de producto con Context / Decision / Consequences,
   - TD-057 (la cola offline pierde un update/delete cuyo create ya sincronizó) comparte capa con TD-059; conviene revisar si parte de su fix cae de forma natural al hacer awaitable la escritura, aunque son entradas distintas y no se fusionan aquí.
   - No cambia ninguna decisión de producto de cara al usuario: es una decisión de secuenciación de trabajo técnico, registrada aquí porque altera un plan previamente acordado.
 
+## PDR-010: P1 antes de P2/P3
+
+**Status:** Accepted (2026-08-20)
+
+- **Context:** Los bloques P1, P2 y P3 están dentro del alcance del producto, pero el core loop todavía no está cerrado.
+- **Decision:** Se construye y cierra P1 primero. P2 y P3 se decidirán después de ese cierre.
+- **Razón:** Sin core loop no hay tracción sobre la que validar la diferenciación.
+- **Consequences:** P2 y P3 quedan diferidos, sin descartarse ni redefinirse en esta decisión.
+
+## PDR-011: Presupuesto semanal personal sin dificultad manual en v1
+
+**Status:** Accepted (2026-08-20)
+
+- **Context:** La economía necesita recompensar el trabajo doméstico sin exigir configuración inicial ni permitir inflación o farmeo por volumen.
+- **Decision:** Cada miembro recibe un presupuesto semanal de monedas. El reparto automático determinista se calcula por frecuencia esperada; puede ajustarse manualmente y restaurarse con «volver a automático». La dificultad manual por tarea no entra en v1.
+- **Razón:** Cero configuración por defecto, inflación acotada y anti-farm estructural; la dificultad manual por tarea sobrecarga al usuario.
+- **Consequences:** La UI debe exponer el reparto automático y el ajuste avanzado, pero no un campo de dificultad por tarea.
+
+## PDR-012: Presupuesto personal, no de hogar
+
+**Status:** Accepted (2026-08-20)
+
+- **Context:** Un presupuesto de hogar convertiría las recompensas de completar tareas en un recurso compartido y competitivo.
+- **Decision:** Cada miembro tiene el mismo techo personal de monedas. El volumen extra de trabajo se expresa mediante XP; el equilibrio se evaluará con datos en P2.
+- **Razón:** Evita una dinámica competitiva.
+- **Consequences:** La wallet es individual; el diseño no presupone una bolsa común de monedas.
+
+## PDR-013: Asignación diaria x/6 y domingo de descanso
+
+**Status:** Accepted (2026-08-20)
+
+- **Context:** El presupuesto semanal necesita un límite diario que desincentive el farmeo sin penalizar a quien no complete tareas un día concreto.
+- **Decision:** El presupuesto semanal se divide en seis asignaciones diarias, de lunes a sábado. El domingo no genera asignación, otorga XP y nunca rompe la racha personal. La asignación no gastada se acumula dentro de la semana y no caduca.
+- **Razón:** Tope diario anti-farm con un tono no punitivo.
+- **Consequences:** La línea de hoy debe distinguir el saldo disponible, el acumulado y el descanso dominical.
+
+## PDR-014: Feedback de completar breve e inline
+
+**Status:** Accepted (2026-08-20)
+
+- **Context:** Completar una tarea es una acción frecuente; un modal repetido interrumpe el flujo.
+- **Decision:** Al completar, se muestra un chip inline «+N 🪙 · +N XP» durante aproximadamente 1,5 segundos, con animación hacia la wallet y el anillo. Los modales se reservan para nivel, hito y misión.
+- **Razón:** Fricción mínima; la intensidad de la celebración es inversa a la frecuencia del evento.
+- **Consequences:** Los componentes frecuentes no bloquean la interacción con modales.
+
+## PDR-015: Mascota en pista de arte separada
+
+**Status:** Accepted (2026-08-20)
+
+- **Context:** La mascota requiere assets y animación que no son necesarios para validar el core loop.
+- **Decision:** P1 incorpora solo ganchos lógicos mediante eventos. El arte y la animación de mascota —3D, Blender o IA— siguen una pista de trabajo separada.
+- **Razón:** No bloquear el core loop con un pipeline de arte.
+- **Consequences:** La integración visual de mascota no determina el calendario de P1.
+
+## PDR-016: Implementación incremental sin descartes preemptivos
+
+**Status:** Accepted (2026-08-20)
+
+- **Context:** Antes de observar una propuesta en producto no se conoce su aportación real.
+- **Decision:** La implementación es incremental y se filtra por valor observado; lo que no aporte se reworka o se retira al verlo en producto.
+- **Razón:** Evitar descartar por anticipado decisiones que todavía no se han podido evaluar.
+- **Consequences:** No se toma esta decisión como autorización para ampliar P1: los cambios futuros requieren evidencia en producto.
+
+## PDR-017: XP dual, personal portable y de hogar compartido
+
+**Status:** Accepted (2026-08-20)
+
+- **Context:** El progreso personal debe sobrevivir cambios de hogar, mientras que el hogar necesita una señal cooperativa propia.
+- **Decision:** Completar tareas alimenta XP personal portable y XP de hogar compartido. Los niveles y desbloqueos son separados: títulos y badges para el personal; cosméticos compartidos, incluida la mascota, para el hogar. El chip de completar muestra solo lo personal; el hogar celebra por hitos.
+- **Razón:** Portabilidad ante eventos vitales y cooperación sin competición.
+- **Consequences:** El nivel de hogar no sustituye ni borra el progreso personal al salir de un hogar.
+
+## PDR-018: Moneda personal y hucha conjunta para ítems compartidos
+
+**Status:** Accepted (2026-08-20)
+
+- **Context:** Los ítems compartidos necesitan una vía cooperativa sin convertir las monedas personales en una wallet común disputada.
+- **Decision:** La wallet es personal. Los ítems personales se compran con la wallet personal. Para ítems compartidos —mascota y temas de hogar— un miembro puede pagar el importe completo, con atribución «desbloqueado por X», o contribuir a una meta conjunta que se desbloquea automáticamente al alcanzar el precio. En v1 hay una sola meta activa; las aportaciones se reembolsan al cancelar la meta o si el miembro sale del hogar.
+- **Razón:** Sin wallet común que disputar; la compra compartida es una mini-misión cooperativa y la generosidad tiene vía sin ser obligatoria.
+- **Consequences:** La hucha conjunta es una mecánica específica de ítems compartidos, no un saldo común general.
+
+## PDR-019: Hielos de racha como días de gracia
+
+**Status:** Accepted (2026-08-20)
+
+- **Context:** Una racha útil debe tolerar días difíciles y sincronización offline tardía sin volver punitivo el progreso.
+- **Decision:** Los hielos se obtienen por hitos de 7, 14, 30, 50 y 100 días o se compran por 20 🪙, con tope de dos en reserva. Se consumen automáticamente al cierre de un día de lunes a sábado sin actividad útil; el domingo es descanso y nunca consume uno. Si se sincroniza tarde actividad offline, se reembolsa el hielo. El historial muestra ❄️ en el día cubierto. Sin hielo, la racha se reinicia con copy no punitivo; nivel, XP y monedas permanecen intactos.
+- **Razón:** Tolerancia a fallos sin fricción manual; sumidero de monedas para controlar inflación y coherencia con offline-first.
+- **Consequences:** La racha no equivale al nivel ni puede destruir progreso acumulado.
+
 ## 2026-08-18 — Cambio de rol no expuesto en API
 
 ### Decisión

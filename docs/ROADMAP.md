@@ -1,6 +1,6 @@
 # Roadmap HomeSync
 
-> Última actualización: 2026-08-19
+> Última actualización: 2026-08-20
 
 ## Recién Completado (últimas 2 semanas)
 
@@ -39,10 +39,22 @@
 
 | # | ID | Descripción | Esfuerzo | Bloqueante |
 |---|----|-------------|----------|------------|
-| 1 | TD-001 | Migrar `members` embebido a una colección `HouseholdMember` separada. **Siguiente paso: el documento de diseño**, mismo formato aprobable en bloque que TD-059/TD-007/TD-057. Es el primero del ciclo que toca backend y arrastra migración real en Atlas, con ventana de convivencia de ambos formatos y orden de despliegue obligatorio (ver "Deployment order" en CLAUDE.md) | Alto | Ninguno |
+| 1 | TD-001 | Migrar `members` embebido a una colección `HouseholdMember` separada. El siguiente paso técnico es el cutover tras la ventana de observación, cerrada el 2026-08-20 con cero divergencias. Mantiene su orden de despliegue obligatorio (ver «Deployment order» en CLAUDE.md). | Alto | Verificación de cero divergencias |
 | 2 | Validación PR #24 | Probar fix white screen en iPhone físico + limpiar debugPrints de diagnóstico | Bajo | Dispositivo físico |
 | 3 | Micro-pendientes | Ninguno bloquea nada y todos son de bajo esfuerzo; ver la lista de abajo. El más sustancioso es homogeneizar el contrato de `copyWith` de Task/Shopping antes de evaluar el mixin del overlay optimista | Bajo | Ninguno |
 | 4 | TD-054 | Ventana de token de acceso post-logout (bajo impacto, solo si el modelo de amenaza lo requiere) | Bajo | Ninguno |
+
+## Producto — P1 (después del cutover de TD-001)
+
+P1 y los bloques P2/P3 están en scope, pero P1 se cierra antes de decidir los posteriores. La especificación de producto y UX vive en [UX-P1-SPEC.md](UX-P1-SPEC.md); sus decisiones normativas son PDR-010 a PDR-019 en [PRODUCT_DECISIONS.md](PRODUCT_DECISIONS.md).
+
+1. Separar XP y moneda.
+2. Presupuesto semanal, reparto automático y ajuste manual opcional.
+3. Niveles e hitos.
+4. Rachas con hielos.
+5. Misiones semanales cooperativas.
+
+La mascota conserva una pista de arte separada y P1 solo incorpora sus ganchos lógicos. P2/P3 quedan diferidos: reparto inteligente, dashboard de salud, recomendaciones, eventos y notificaciones contextuales. No se eliminan ni sustituyen los ítems técnicos ya priorizados en este roadmap.
 
 ### Micro-pendientes
 
