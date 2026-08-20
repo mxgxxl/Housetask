@@ -1,0 +1,337 @@
+# TD-072 — Diseño de deep-link de notificación a tarea
+
+> Estado: Open. Prioridad: High. Diseño documental; no implementa código, tests ni CI. Cubre el punto 4 del PDF del dueño y el último ítem de P0. El siguiente identificador libre confirmado en `docs/TECH_DEBT.md` es TD-072.
+
+## 0. Alcance y criterio de evidencia
+
+Este diseño define cómo un tap sobre una notificación FCM abre la tarea exacta dentro de la app. No conecta Firebase/APNs en dispositivos reales, no añade un URL scheme externo y no implementa todavía los destinos futuros de misión o reconocimiento.
+
+- **Causa confirmada:** comportamiento, ausencia o contrato visto directamente en el código actual.
+- **Hipótesis:** consecuencia inferida cuyo resultado final depende del sistema operativo, de Firebase o de una carrera no reproducida.
+- **Pregunta abierta:** decisión que este prompt, el código y los PDR no cierran; no se decide aquí.
+
+El payload es una pista de navegación no confiable. La autorización y la existencia de hogar y tarea se vuelven a comprobar en el servidor antes de abrir el destino.
+
+## 1. Estado actual
+
+### Backend y payload emitido
+
+**Causa confirmada:** `sendPushNotification` admite un `data?: Record<string, string>` y lo entrega a FCM junto con título y cuerpo. Los únicos productores actuales están en `task.service.ts`:
+
+- `notifyTaskAssigned`, al asignar una tarea a otro miembro;
+- `notifyTaskCompleted`, al completar otra persona una tarea creada por el destinatario.
+
+**Causa confirmada:** ambos construyen hoy exactamente `{ type: 'task', taskId }`. No incluyen `householdId`, por lo que el cliente no puede resolver de forma inequívoca el hogar que debe activar.
+
+**Causa confirmada:** no existen productores de push de misión ni reconocimiento. TD-071 los diseña, pero su modelo, API y notificación todavía no están implementados.
+
+### Recepción y tap en Flutter
+
+**Causa confirmada:** `NotificationService.initPushNotifications()` se ejecuta después de autenticar. Registra `FirebaseMessaging.onMessage` para mostrar una notificación local en foreground y `FirebaseMessaging.onMessageOpenedApp` para taps que devuelven una app en background a foreground.
+
+**Causa confirmada:** `showLocalNotification()` serializa `message.data` como `payload` de `flutter_local_notifications`, pero la inicialización del plugin no registra `onDidReceiveNotificationResponse`. Por tanto, el payload se conserva al pintar el banner local, pero no existe código que procese su tap.
+
+**Causa confirmada:** `_handleNotificationTap` solo reconoce `type == 'task'` y ejecuta `pushNamedAndRemoveUntil(Routes.main, ...)`. No lee `taskId`, no valida el payload y no carga la tarea.
+
+**Causa confirmada:** no hay llamada a `FirebaseMessaging.instance.getInitialMessage()`. Un tap que arranca una app terminada no entra en el único handler actual.
+
+**Causa confirmada:** no existe un handler común para foreground, background y terminated. `onMessage` muestra, `onMessageOpenedApp` navega de forma genérica y el arranque terminado no se procesa.
+
+**Hipótesis:** al tocar el banner local generado en foreground, la app se limita a volver o permanecer visible sin navegar. La ausencia del callback está confirmada; el efecto exacto por plataforma debe verificarse en dispositivo.
+
+**Hipótesis:** al arrancar desde terminated se pierde el destino y se sigue el arranque ordinario. La ausencia de `getInitialMessage` está confirmada; la entrega real no se puede comprobar hasta cerrar la configuración operativa de TD-049.
+
+### Routing y acceso a una tarea individual
+
+**Causa confirmada:** `Routes` solo declara splash, login, register y main. Las pantallas de feature se abren con `MaterialPageRoute` y argumentos de constructor; no existe una ruta nombrada para una tarea específica.
+
+**Causa confirmada:** `MainScaffold` empieza con `_index = 0`, que corresponde a **Inicio**. La pestaña **Tareas** ocupa el índice 1. Por ello, el tap actual aterriza en Inicio, aunque PDR-008 y comentarios anteriores describan el shell como si su pestaña inicial mostrara Tareas.
+
+**Causa confirmada:** `TaskFormPage(task: task)` es la única superficie individual actual y es un formulario de edición, no una vista de detalle. La lista ya debe tener el objeto `Task` para abrirla.
+
+**Causa confirmada:** el backend no expone `GET /households/:householdId/tasks/:taskId`; el router de tareas solo lista páginas y ofrece create/update/complete/delete/restore. `TaskRepository` tampoco tiene un `getById`. Buscar una tarea mediante el listado paginado no garantiza encontrarla.
+
+**Causa confirmada:** todas las rutas de tareas existentes están detrás de `authMiddleware` y `requireMembership`. Ese middleware responde 404 si el hogar no existe y 403 si la persona ya no pertenece; es el precedente server-authoritative que debe conservar el nuevo lookup individual.
+
+**Causa confirmada:** si un refresh de sesión es rechazado, `SessionListeners` resetea los Cubits y navega a login. No existe hoy una cola de intención de navegación que sobreviva a esa transición.
+
+## 2. Decisiones aprobadas
+
+1. **D1 — Navegación interna por payload FCM.** V1 usa `taskId`, `householdId` y `type` para navegar dentro de Flutter. No añade universal links, app links ni URL scheme externo.
+2. **D2 — Payload mínimo obligatorio.** `taskId`, `householdId` y `type` deben existir y superar validación. Si falta cualquiera, se abre la pantalla de Tareas como fallback.
+3. **D3 — Un solo handler.** Foreground, background y terminated normalizan el tap y lo entregan al mismo handler de navegación profunda; ninguna fuente implementa reglas propias de destino.
+4. **D4 — Destino inválido seguro.** Si la tarea no existe, fue eliminada o la persona no tiene acceso, se abre Tareas y se muestra un aviso explicativo. Nunca se deja una pantalla vacía, un spinner indefinido ni un crash.
+5. **D5 — Dispatcher extensible por tipo.** `type` decide la familia de destino: tarea, misión o reconocimiento. Nuevos tipos se añaden como casos explícitos del dispatcher, no como rutas construidas desde texto sin validar.
+
+Copy exacto común para D4:
+
+> **No pudimos abrir esa tarea. Te mostramos tus tareas.**
+
+Copy exacto cuando la validación local detecta que el payload está incompleto o corrupto:
+
+> **La notificación no tiene un destino válido. Te mostramos tus tareas.**
+
+## 3. Modelo del payload FCM
+
+### Contrato v1 para tarea
+
+FCM exige valores string en `data`. El contrato mínimo es:
+
+```json
+{
+  "type": "task",
+  "householdId": "<ObjectId del hogar>",
+  "taskId": "<ObjectId de la tarea>"
+}
+```
+
+Campos opcionales admitidos sin convertirlos en autoridad:
+
+| Campo | Tipo FCM | Uso |
+|-------|----------|-----|
+| `schemaVersion` | string | Versión del parser; valor inicial recomendado `"1"`. Ausencia se interpreta como contrato v1 mientras dure la migración. |
+| `action` | string enum | Analítica y copy: `assigned` o `completed`. No decide permisos ni destino. |
+| `eventId` | string | Deduplicación transversal si el backend dispone de una identidad durable del evento. |
+
+No se incluyen token, rol, email, nombre, título de tarea ni permiso de edición en `data`. El título y el cuerpo visibles pueden seguir llevando el copy actual, pero nunca sustituyen la lectura canónica del recurso.
+
+### Validación cliente
+
+`NotificationIntent.fromMap` realiza una validación pura antes de cualquier navegación o petición:
+
+1. el mapa existe y sus claves obligatorias son strings no vacíos;
+2. `type` pertenece al enum admitido;
+3. para `type: task`, `householdId` y `taskId` tienen formato ObjectId válido;
+4. los campos opcionales desconocidos se ignoran; no se interpolan como nombres de ruta;
+5. payload inválido produce el fallback de D2 y el copy correspondiente, no una excepción.
+
+La validación sintáctica ahorra peticiones corruptas, pero no demuestra pertenencia ni existencia. El servidor repite el control sobre identificadores y membresía.
+
+### Generación backend
+
+Se propone un constructor tipado central, por ejemplo `buildNotificationData`, para que cada productor entregue el mismo contrato:
+
+| `type` | Productor backend | Identidad canónica | Estado actual |
+|--------|-------------------|--------------------|---------------|
+| `task` | `task.service.ts`, en asignación y completado | `task._id` y `task.householdId` leídos del documento persistido | Existe, pero debe añadir `householdId` y centralizar la forma. |
+| `mission` | Futuro servicio de misiones de P1 | Hogar y misión confirmados por el servidor | No existe productor ni ruta de destino. |
+| `recognition` | Futuro servicio de reconocimiento de TD-071 | Hogar, reacción/completación y tarea de origen confirmados por el servidor | No existe productor ni ruta de destino. |
+
+El productor crea el payload después de tener el recurso canónico. No acepta `householdId`, `taskId` o `type` aportados por el cliente para reenviarlos sin contraste.
+
+**Pregunta abierta:** D2 fija `taskId` como obligatorio, mientras que una misión futura puede no tener tarea de origen. Se recomienda no sobrecargar `taskId` con la identidad de otro recurso: hasta aprobar un contrato versionado con identificadores específicos por tipo, un payload de misión sin `taskId` debe tomar el fallback de D2. Este documento no inventa `missionId` ni `reactionId` como requisito v1.
+
+## 4. Handler unificado de navegación profunda
+
+### Separación entre transporte y navegación
+
+`NotificationService` debe limitarse a recibir y normalizar:
+
+1. **Foreground:** `onMessage` muestra el banner local con el mismo `data` serializado. `onDidReceiveNotificationResponse` decodifica ese payload cuando se toca.
+2. **Background:** `onMessageOpenedApp` aporta el `RemoteMessage` tocado.
+3. **Terminated:** `getInitialMessage()` se consume una sola vez al arrancar.
+4. Las tres fuentes llaman a `handleNotificationTap(rawData, source, messageId)`; no navegan directamente.
+
+El handler publica una `NotificationIntent` a un coordinador conectado a la composición raíz. Si `MaterialApp`, la sesión o el shell todavía no están listos, el coordinador mantiene la intención en memoria y la procesa cuando se cumplen esas condiciones. Así `NotificationService` no intenta leer Cubits ni usar un `BuildContext` inexistente durante bootstrap.
+
+Cada intención lleva una identidad de deduplicación: primero `eventId`, después `RemoteMessage.messageId` y, como fallback, un hash estable de `(type, householdId, taskId, sentTime)`. El mismo tap observado por dos callbacks abre una sola pantalla.
+
+### Resolución de una tarea
+
+El caso `type: task` sigue este flujo server-authoritative:
+
+1. Parsear y validar el contrato. Si falla, seleccionar Tareas, mostrar el copy de payload inválido y terminar.
+2. Esperar a que `AuthCubit` determine la sesión. Nunca navegar a un recurso household-scoped desde `AuthStatus.unknown` o `unauthenticated`.
+3. Capturar un `navigationRequestId`. Cualquier respuesta posterior solo puede cambiar hogar o ruta si esa solicitud sigue vigente; esta guarda evita el mecanismo de respuesta tardía confirmado en TD-065 F0-01.
+4. Resolver `householdId` mediante el backend. Si difiere del hogar activo y la persona todavía pertenece, activarlo, persistirlo como hogar actual, abandonar la sala anterior y unirse a la nueva sala autorizada.
+5. Resolver la tarea mediante el nuevo `GET /api/households/:householdId/tasks/:taskId`. El endpoint queda detrás de auth y `requireMembership`, restringe el query al mismo `householdId` y excluye `isDeleted: true`.
+6. Solo una respuesta válida abre la ruta interna de detalle con argumentos tipados. La tarea recibida se incorpora a la caché/Cubit mediante upsert; no se recorre el listado paginado para encontrarla.
+7. Ante 400, 403 o 404, descartar cualquier resultado parcial del hogar solicitado, seleccionar la pantalla Tareas del hogar válido vigente y mostrar el copy D4. 403 y 404 comparten copy para no revelar si el recurso existe.
+8. Ante error de red o 5xx, conservar una superficie útil y permitir retry; nunca presentar un spinner sin salida. El copy recomendado es **«No pudimos comprobar esa tarea. Reintenta cuando tengas conexión.»**
+
+### Endpoint individual y permisos
+
+Contrato propuesto:
+
+```text
+GET /api/households/:householdId/tasks/:taskId
+Authorization: Bearer <access token>
+
+200 { success: true, data: <Task poblada> }
+```
+
+El middleware valida autenticación y membresía antes del servicio. El servicio valida ambos ObjectId, consulta por hogar y tarea, excluye borradas y devuelve 404 si no hay coincidencia. Cualquier miembro actual puede **ver** la tarea, coherente con el listado actual. Editar o eliminar sigue restringido al creador o admin por Hard Rule 17; el payload nunca concede esa capacidad.
+
+**Causa confirmada:** este endpoint y su método de repositorio no existen hoy. Son prerrequisitos de una resolución exacta y segura; depender solo de páginas ya cargadas dejaría tareas válidas fuera del alcance del deep-link.
+
+### Sesión expirada
+
+Si el lookup recibe 401, `ApiService` intenta la rotación existente y reenvía la misma petición. Si la rotación funciona, el handler continúa. Si el servidor rechaza el refresh, `SessionListeners` lleva a login, limpia estado y el handler no navega con datos anteriores.
+
+**Pregunta abierta:** no está decidido si la intención pendiente debe reanudarse después de que la persona introduzca credenciales otra vez. Se recomienda conservarla solo en memoria durante ese arranque, ligarla al `userId` original y volver a validar todo tras login; si entra otra cuenta o se reinicia el proceso, se descarta. Hasta aprobarlo, el comportamiento mínimo seguro es login sin replay automático.
+
+## 5. Integración con el routing existente
+
+### Ruta interna tipada
+
+Se añade una ruta nombrada interna, por ejemplo `Routes.taskDetail`, con `TaskDetailRouteArgs` tipado. `onGenerateRoute` comprueba el tipo de `settings.arguments`; argumentos ausentes o inválidos no caen en Splash, sino en el fallback seguro de Tareas.
+
+La ruta recibe el `Task` ya resuelto y sus identificadores canónicos. El widget puede escuchar upserts posteriores del `TaskCubit`, pero no dispara un segundo lookup en paralelo al coordinador.
+
+No se crea una URL externa y no se construye una ruta a partir del string recibido en `type`. El dispatcher mantiene una tabla cerrada:
+
+```text
+task         -> resolver hogar+tarea -> Routes.taskDetail
+mission      -> handler futuro explícito
+recognition  -> handler futuro explícito
+desconocido  -> fallback Tareas
+```
+
+### Selección del tab Tareas
+
+El Home actual sigue siendo el destino inicial ordinario. Para deep-link y fallback se propone un controlador de navegación del shell —por ejemplo `MainNavigationCubit`— cuya acción `selectTasks()` fija el índice 1. `MainScaffold` observa ese estado en vez de ocultar toda la selección en `_index`.
+
+El coordinador:
+
+- conserva o reconstruye una sola instancia del shell;
+- selecciona Tareas antes de abrir el detalle;
+- coloca el detalle encima del shell, para que Atrás vuelva a Tareas;
+- en fallback, cierra cualquier detalle inválido, deja Tareas visible y muestra el toast mediante un `ScaffoldMessenger` accesible desde la composición raíz.
+
+Esto mantiene `Routes.main` y su tab Inicio como comportamiento normal; solo las intenciones de notificación seleccionan Tareas.
+
+**Pregunta abierta:** no existe una decisión de producto sobre la superficie exacta de detalle. Se recomienda una `TaskDetailPage` de solo lectura con acciones permitidas, porque `TaskFormPage` es un editor y muchos destinatarios de asignación no son creadores ni admins. Reutilizar directamente el formulario expondría una edición que el backend terminaría rechazando. Este documento no decide su layout final.
+
+### Readiness y carreras
+
+El coordinador no procesa hasta que concurran:
+
+- `AuthStatus.authenticated` con usuario conocido;
+- `Routes.navigatorKey.currentState` disponible;
+- finalización del bootstrap de hogar/socket;
+- ausencia de otra resolución vigente o una política aprobada para sustituirla.
+
+Cada await comprueba `navigationRequestId` y `userId`. Un logout, cambio de cuenta, tap posterior o destrucción del widget invalida la solicitud anterior. Los estados de resolución deben distinguir **«Abriendo tarea…»**, error con retry y fallback; se prohíbe reutilizar el spinner indefinido descrito por TD-065 F0-02.
+
+## 6. Casos borde
+
+| Caso | Comportamiento esperado |
+|------|-------------------------|
+| Tarea eliminada o purgada | El lookup individual excluye soft-deleted y devuelve 404. Se abre Tareas y aparece el copy D4. No se abre Papelera ni se restaura nada. |
+| Usuario expulsado después del envío | `requireMembership` devuelve 403 al resolver hogar/tarea. No se muestra título ni dato cacheado del hogar expulsado; fallback al hogar vigente y copy D4. |
+| Notificación de otro hogar válido | El handler valida membresía, activa ese hogar, cambia la sala socket de forma autorizada, carga la tarea y abre el detalle. |
+| Pareja `householdId`/`taskId` inconsistente | El query household-scoped no encuentra la tarea y responde 404 aunque el id exista en otro hogar. Fallback D4 sin revelar el otro hogar. |
+| Payload incompleto o corrupto | Se rechaza localmente, no se hace request y se abre Tareas con el copy de payload inválido. |
+| `type` desconocido o futuro aún no implementado | El dispatcher no inventa rutas; abre Tareas. Se registra telemetría sin incluir título, nombre ni contenido del push. |
+| App terminated con sesión válida | `getInitialMessage` encola una sola intención, Splash restaura sesión/hogar y el coordinador la procesa al estar listo. |
+| App terminated con sesión expirada | Se intenta refresh al resolver. Si se rechaza, login gana y no queda detalle stale. El replay posterior a login permanece como pregunta abierta. |
+| Tap en banner de foreground | El callback de `flutter_local_notifications` decodifica el mismo payload y llama al handler común; no navega desde `onMessage` antes del tap. |
+| Dos callbacks para el mismo mensaje | `eventId`/`messageId` deduplica; la tarea se abre una sola vez. |
+| Dos notificaciones distintas en rápida sucesión | Se serializan y cada respuesta valida su request id. **Pregunta abierta:** elegir FIFO o «la última gana»; se recomienda la última para evitar apilar detalles obsoletos. |
+| Sin conexión al tocar | **Pregunta abierta:** permitir detalle cacheado implicaría confiar temporalmente en una membresía que pudo revocarse. Se recomienda no abrir datos household-scoped sin revalidación y mostrar el error reintentable sobre Tareas. |
+| Usuario sin hogar activo | Si el payload es válido y la membresía existe, se activa ese hogar. Si no, se muestra el setup de hogar; no se mantiene un spinner ni se crea membresía desde el deep-link. |
+| Notificación local programada de recordatorio | Fuera del alcance FCM de v1. **Pregunta abierta:** reutilizar después el mismo contrato para recordatorios locales, añadiendo `householdId` a su payload. |
+
+## 7. Tests nuevos y plan de commits atómicos
+
+### Backend
+
+- los pushes de asignación y completado contienen exactamente `type`, `householdId` y `taskId` canónicos como strings;
+- el constructor tipado rechaza tipos o identificadores ausentes antes de enviar;
+- `GET .../tasks/:taskId` devuelve una tarea activa del mismo hogar a cualquier miembro actual;
+- devuelve 400 para ObjectId mal formado, 403 para ex-miembro y 404 para tarea inexistente, borrada o perteneciente a otro hogar;
+- la pareja hogar/tarea no filtra existencia cross-household;
+- el endpoint conserva el envelope `{ success, data?, error? }` y no altera permisos de edit/delete;
+- los tests FCM verifican que el `data` multicast conserva el contrato completo;
+- productores futuros de misión/reconocimiento deben tener pruebas de contrato antes de activar sus casos del dispatcher.
+
+### Frontend
+
+- parser acepta el payload mínimo y rechaza cada campo ausente, vacío, de tipo incorrecto o con ObjectId inválido;
+- `onDidReceiveNotificationResponse`, `onMessageOpenedApp` y `getInitialMessage` entregan la misma `NotificationIntent` al mismo handler;
+- `onMessage` solo pinta el banner; no navega antes del tap;
+- el payload local se serializa/decodifica sin pérdida;
+- terminated encola hasta que sesión, hogar, socket y navigator estén listos;
+- mensaje repetido por dos fuentes produce una sola navegación;
+- hogar actual y otro hogar válido resuelven la tarea correcta y seleccionan el tab Tareas;
+- 400/403/404, tarea borrada y payload corrupto terminan en Tareas con el copy exacto, sin crash ni pantalla vacía;
+- error de red presenta retry y no abre caché household-scoped sin la decisión pendiente;
+- refresh exitoso continúa; refresh rechazado navega a login y anula respuestas en vuelo;
+- logout/cambio de usuario/tap más reciente invalida la solicitud anterior;
+- ruta con argumentos mal tipados cae en Tareas, nunca en Splash;
+- Atrás desde el detalle vuelve al tab Tareas; el arranque ordinario sigue abriendo Inicio;
+- destinatario sin permiso de edición puede ver detalle, pero no obtiene acciones prohibidas;
+- evento socket que actualiza o elimina la tarea converge con el detalle sin duplicar el lookup inicial.
+
+### Contrato e integración
+
+- prueba de contrato compartido para `type`, `householdId`, `taskId` y `schemaVersion`;
+- matriz foreground/background/terminated con la misma expectativa de destino;
+- prueba de carrera: hogar A lento, tap posterior a hogar B y respuesta de A al final; B permanece activo;
+- prueba de seguridad: id de tarea real acompañado por otro `householdId` nunca abre ni revela la tarea;
+- prueba de deduplicación y telemetría sin PII.
+
+### Plan de commits de implementación
+
+1. `feat(backend): completar payload y lectura individual de tarea`
+2. `test(backend): cubrir contrato y autorización de deep-link`
+3. `feat(frontend): unificar intents de notificación`
+4. `feat(frontend): integrar detalle de tarea con routing del shell`
+5. `test(frontend): cubrir deep-link en ciclos de vida y fallbacks`
+6. `docs: documentar contrato de navegación de notificaciones`
+
+El despliegue es aditivo: primero backend añade `householdId` y el GET individual; los clientes antiguos ignoran el campo nuevo. Después se publica el cliente que solo activa deep-link para payload completo. No se habilitan misión o reconocimiento hasta que sus rutas y contratos estén implementados.
+
+## 8. Riesgos, rollback y pruebas manuales
+
+### Riesgos y rollback
+
+| Riesgo | Mitigación | Rollback |
+|--------|------------|----------|
+| Abrir datos de otro hogar | Lookup household-scoped, `requireMembership`, exclusión de borradas y revalidación tras cada tap. | Desactivar el dispatcher exacto y conservar fallback a Tareas. |
+| Carreras cambian al hogar equivocado | `navigationRequestId`, `userId` capturado y guardas tras cada await, alineadas con TD-065. | Desactivar cambio de hogar desde notificación; fallback en el hogar actual. |
+| Tap duplicado apila pantallas | Dedupe por evento/mensaje y una sola cola. | Mantener solo el primer intent hasta reinicio. |
+| Bootstrap o sesión dejan pantalla vacía | Queue de readiness, estados explícitos, retry y prioridad de login. | Volver al handler genérico que selecciona Tareas. |
+| Payloads de versiones distintas | Parser versionado, mínimo estricto y campos desconocidos ignorados. | Aceptar solo `type: task` completo; el resto cae en fallback. |
+| Ruta de detalle expone edición indebida | Vista de solo lectura recomendada y acciones derivadas de permisos server-authoritative. | Ocultar acciones; conservar lectura. |
+| Push real no reproducible en CI | Unit/widget/contract tests con dobles; validación física separada por TD-049. | No afecta listas ni tareas; desactivar deep-link por feature flag. |
+| Telemetría filtra contenido | Registrar solo `type`, resultado, fuente y códigos; no título, cuerpo, nombres ni ids completos. | Desactivar telemetría del handler. |
+
+Flags recomendados: `notificationDeepLinks` para el dispatcher y `notificationTaskDetail` para la ruta individual. El rollback no exige retirar el payload enriquecido ni el endpoint de lectura; basta devolver todos los taps al fallback de Tareas.
+
+### Pruebas manuales
+
+1. Con dos dispositivos y dos miembros, asignar una tarea y tocar el push en foreground, background y terminated; los tres abren la misma tarea.
+2. Repetir con una tarea completada por otra persona y comprobar que el creador llega al mismo detalle.
+3. Verificar que un arranque normal sigue abriendo Inicio y que Atrás desde el deep-link vuelve a Tareas.
+4. Tocar una notificación de otro hogar del mismo usuario; debe cambiar al hogar correcto, cambiar la sala socket y abrir la tarea.
+5. Eliminar la tarea después de recibir el push y antes del tap; debe aparecer el copy D4 sobre Tareas.
+6. Expulsar al destinatario después del push; tocarlo y comprobar 403, ausencia de datos del hogar y fallback D4.
+7. Alterar `taskId`, `householdId`, `type` y eliminar cada clave por separado; nunca debe haber request inválida, crash, Splash ni pantalla vacía.
+8. Poner un `taskId` real junto al `householdId` de otro hogar y verificar que no se revela título ni existencia.
+9. Caducar el access token con refresh válido; tocar y confirmar que la rotación continúa al detalle una sola vez.
+10. Revocar también el refresh; tocar desde terminated y comprobar que login prevalece y no aparece contenido stale.
+11. Cortar la red durante la resolución; comprobar estado reintentable y que la app no abre datos cacheados del hogar sin revalidar.
+12. Tocar dos veces el mismo push y provocar también entrega por callbacks solapados; debe existir una sola ruta de detalle.
+13. Enviar dos pushes distintos con respuestas invertidas; ninguna respuesta antigua debe cambiar el hogar o la tarea de la intención vigente.
+14. Actualizar o borrar la tarea desde el segundo dispositivo mientras el detalle está abierto; el primer cliente converge o aplica fallback sin quedar vacío.
+15. Tras completar TD-049, el dueño ejecuta la matriz anterior en dispositivo Android e iOS reales, incluyendo cold start, app expulsada de memoria, permiso denegado y token rotado.
+
+## 9. Preguntas abiertas
+
+1. Superficie de tarea exacta: nueva vista de solo lectura recomendada o adaptación del formulario actual con permisos explícitos.
+2. Contrato versionado de identificadores para `mission` y `recognition` cuando no exista una tarea de origen; no se sobrecarga `taskId` en este diseño.
+3. Replay de una intención tras login manual por sesión expirada; recomendación: solo en memoria, mismo usuario y revalidación completa.
+4. Política offline: recomendación segura de no abrir detalle cacheado sin revalidar membresía.
+5. Dos taps distintos en ráfaga: FIFO o «última intención gana»; se recomienda la última.
+6. Inclusión futura de recordatorios locales programados en el mismo contrato; fuera del alcance FCM v1.
+
+## 💡 Proposed Improvements
+
+- Centralizar la creación y el parseo del payload en contratos tipados y versionados; no repetir mapas libres en cada productor.
+- Añadir el endpoint household-scoped de lectura individual y una vista de detalle no editable por defecto.
+- Extraer la navegación de `NotificationService` a un coordinador con readiness, deduplicación y guardas de generación.
+- Corregir al implementar la descripción obsoleta de PDR-008: el shell actual abre Inicio, no Tareas.
+- Aplicar al flujo las protecciones de respuestas tardías y carga fallida identificadas por TD-065, sin esperar a que una respuesta antigua cambie el hogar activo.
+- Instrumentar resultados agregados (`opened`, `fallback_invalid`, `fallback_forbidden`, `fallback_missing`, `network_error`) sin contenido ni identificadores completos.
+- Extender el mismo handler a recordatorios locales únicamente después de aprobar su payload y su política offline.
