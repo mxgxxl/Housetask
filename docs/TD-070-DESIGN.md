@@ -10,7 +10,7 @@ El dashboard resume señales operativas del hogar sin convertirlas en una nota m
 - **Hipótesis:** consecuencia inferida que requiere medición o reproducción.
 - **Pregunta abierta:** decisión que este prompt, el código y los PDR no cierran; no se decide aquí.
 
-Los umbrales que no están ya aprobados por TD-069 se documentan como baseline configurable. Deben calibrarse con datos del piloto antes de tratarlos como decisión permanente.
+Los umbrales iniciales aprobados son conservadores y configurables. Se etiquetan como «a calibrar con datos reales»: el piloto puede ajustar su configuración sin cambiar la definición ni la versión de cada fórmula de forma silenciosa.
 
 ## 1. Estado actual
 
@@ -45,8 +45,14 @@ TD-070 no reutiliza `topCompleter`, no convierte sus barras en equilibrio de car
 1. **D1 — Categorías, no nota única.** La UI muestra una barra visual por componente. No existe `healthScore`, porcentaje global, semáforo global ni número que juzgue al hogar.
 2. **D2 — Componentes fijos de v1.** En este orden: cumplimiento, equilibrio de carga (TD-069), tareas atrasadas, racha del hogar y actividad reciente.
 3. **D3 — Pull inicial y realtime.** Al entrar en «Salud» se hace pull; mientras el cliente está conectado, una invalidación socket refresca la vista visible.
-4. **D4 — Tab dedicado.** «Salud» vive separado de «Estadísticas» dentro de la superficie actual de estadísticas del hogar.
+4. **D4 — Tab dedicado.** «Salud» vive separado de las estadísticas numéricas existentes.
 5. **D5 — Una acción por anomalía.** Cada componente anómalo muestra exactamente una acción concreta; un componente sano no muestra CTA. Cuando TD-068 tenga una recomendación aplicable, esa recomendación gobierna la acción.
+10. **D10 — Racha canónica de P1.** El dashboard consume la racha de hogar definida en P1/PDR-013: semanas consecutivas en las que se cumple el porcentaje mínimo. TD-070 muestra su estado y progreso, pero no redefine qué actividad la mantiene, su porcentaje mínimo ni sus reglas de continuidad.
+11. **D11 — Actividad reciente.** En v1 cuentan los eventos de tarea `created`, `completed` y `reassigned`, más los hitos de hogar `household_level_reached` y `mission_completed`. Se excluyen las acciones puras de economía, incluidas las compras.
+12. **D12 — Navegación.** «Salud» es un tab nuevo de la navegación inferior. No es el tab inicial: la aplicación sigue abriendo en «Tareas». «Estadísticas» conserva su acceso y presentación actuales.
+13. **D13 — Umbrales iniciales.** Son valores conservadores, configurables y marcados como «a calibrar con datos reales»: cumplimiento sano `>70 %`; equilibrio sano con reparto `40–60 %` por miembro; tareas atrasadas sanas `<20 %` del activo; racha sana cuando está activa.
+14. **D14 — Cumplimiento acotado.** El índice usa una única cohorte temporal y se normaliza al intervalo `[0, 100 %]`. Aunque un dato legado o duplicado atraviese la lectura, el resultado nunca puede superar el 100 %; así se corrige para este dashboard la causa confirmada del cálculo actual de 30 días.
+15. **D15 — Protección ante ráfagas socket.** Las invalidaciones usan debouncing/throttling y una ventana de agregación configurable. Una ráfaga provoca un único pull y, si llega durante otro pull, como máximo un refresco posterior.
 
 ## 3. Contrato del dashboard
 
@@ -103,18 +109,19 @@ Ventana: semana natural actual hasta `now`.
 
 ```text
 eligibleDue = tareas no borradas con dueDate >= weekStart y dueDate < min(now, weekEnd)
-completedDue = eligibleDue con status = completed
-completionRatio = completedDue / |eligibleDue|
+completedDue = tareas únicas de eligibleDue con status = completed
+rawCompletionRatio = |completedDue| / |eligibleDue|
+completionRatio = min(1, max(0, rawCompletionRatio))
 ```
 
 - Datos: `Task.dueDate`, `status`, `isDeleted` y primera completación confirmada.
 - Sin datos: `|eligibleDue| = 0`; el componente no se muestra como 0 %.
-- Sano: `completionRatio >= 0,80`.
-- Anómalo: `completionRatio < 0,80`.
+- Sano: `completionRatio > 0,70`.
+- Anómalo: `completionRatio <= 0,70`.
 - Barra: proporción de la cohorte atendida, acompañada por copy factual «N de M tareas previstas atendidas»; no se presenta como nota del hogar.
 - Acción anómala: la recomendación TD-068 de mayor prioridad asociada a esa cohorte; si no existe una aplicable, fallback «Ver tareas pendientes» con filtro de la semana.
 
-El 80 % reutiliza el umbral cooperativo ya especificado para misiones P1. **Pregunta abierta:** confirmar con el piloto si salud debe conservar ese mismo umbral o configurarlo de forma independiente.
+La cohorte única evita el desfase confirmado entre tareas creadas y completadas de `last30days`; el acotado es una defensa adicional, no una forma de ocultar incoherencias. El umbral aprobado se muestra como «a calibrar con datos reales» y cambia solo mediante configuración versionada.
 
 ### 4.2 Equilibrio de carga
 
@@ -123,35 +130,38 @@ TD-070 consume TD-069 sin recalcular pesos ni usar los pesos por prioridad que T
 ```text
 realizedLoad(m, S) = suma de automaticBaseWeight de ocurrencias completadas por m en S
 realizedShare(m, S) = realizedLoad(m, S) / carga realizada total de S
-anomalía si existe el mismo m con realizedShare > 0,65
+healthyBand(m, S) = 0,40 <= realizedShare(m, S) <= 0,60
+redistributionSignal si existe el mismo m con realizedShare > 0,65
   en 2 semanas naturales completas consecutivas,
   cada una con al menos 5 tareas con peso contabilizadas por miembro
 ```
 
 - Datos: snapshots `automaticBaseWeight`, `weightSource`, `weightVersion`, `completedBy`, cohortes de miembros y carga pendiente de TD-069.
 - Sin datos: menos de dos semanas completas comparables o muestra inferior a cinco tareas; no se sustituye por conteos simples.
-- Sano: hay dos semanas comparables y ningún miembro supera el 65 % en ambas.
-- Anómalo: se cumple la persistencia aprobada de TD-069.
+- Sano: todos los miembros comparables quedan dentro de la banda aprobada `40–60 %` en la última semana comparable y no existe señal persistente de TD-069.
+- Anómalo: al menos un miembro comparable queda fuera de `40–60 %`. La sugerencia de redistribución se activa solo cuando además se cumple la persistencia `>65 %` durante dos semanas de TD-069; antes de eso, la acción factual es «Ver reparto semanal».
 - Barra: distribución apilada de la última semana comparable, con orden estable de miembros y sin ordenar de mayor a menor; la carga pendiente aparece como contexto, no se mezcla con la realizada.
-- Acción anómala: «Ver opciones», usando la sugerencia de redistribución TD-069 materializada y controlada por TD-068.
+- Acción anómala persistente: «Ver opciones», usando la sugerencia de redistribución TD-069 materializada y controlada por TD-068.
+
+TD-069 entrega la cohorte y los porcentajes comparables. TD-070 no inventa una normalización local para hogares de más de dos miembros: consume la distribución server-authoritative que esa dependencia exponga y aplica la banda aprobada a cada porcentaje resultante.
 
 Las tareas sin asignar no entran en ningún porcentaje; aparecen en «Por repartir» dentro de la acción de asignación, conforme a D8 de TD-069.
 
 ### 4.3 Tareas atrasadas
 
-Snapshot puntual en `now`, con contexto de la semana natural:
+Snapshot puntual en `now`:
 
 ```text
 overdue = tareas pendientes, no borradas, con dueDate < now
-scheduledContext = tareas no borradas con dueDate dentro de la semana actual
-                   + overdue anteriores todavía pendientes
-operationalRatio = 1 - |overdue| / max(1, |scheduledContext|)
+active = tareas pendientes y no borradas del hogar
+overdueRatio = |overdue| / |active|
+operationalRatio = 1 - overdueRatio
 ```
 
 - Datos: `dueDate`, `status`, `isDeleted`, prioridad y recomendación activa.
-- Sin datos: hogar sin ninguna tarea histórica y sin contexto programado.
-- Sano: `|overdue| = 0`.
-- Anómalo: `|overdue| >= 1`.
+- Sin datos: `|active| = 0`; no se inventa un denominador.
+- Sano: `overdueRatio < 0,20`.
+- Anómalo: `overdueRatio >= 0,20`.
 - Barra: fracción operativa sin atraso; el texto principal muestra el conteo («2 tareas atrasadas»), no una nota.
 - Acción anómala: recomendación TD-068 más relevante para la tarea olvidada/atrasada; fallback «Revisar tareas atrasadas».
 
@@ -159,24 +169,20 @@ Una tarea pendiente sin `dueDate` no se inventa como atrasada. TD-068 puede dete
 
 ### 4.4 Racha del hogar
 
-**Causa confirmada:** no existe hoy una racha del hogar. TD-066 propone `PersonalStreak`/`StreakDay` y mantiene abierto si el alcance es solo personal o también por hogar.
-
-Baseline recomendado, condicionado a cerrar esa pregunta de producto:
+**Causa confirmada:** el código actual no implementa una racha del hogar. El dashboard no la deriva de tareas ni reutiliza la racha personal: D10 obliga a consumir el estado canónico de P1/PDR-013 cuando exista.
 
 ```text
-activeHouseholdDay(d) = existe al menos una primera completación útil del hogar en d
-currentHouseholdStreak = días activos consecutivos de lunes a sábado
-domingo = descanso neutral; no suma ni rompe
+weeklyGoalMet(S) = resultado canónico P1 de porcentajeCumplido(S) >= porcentajeMínimoP1
+currentHouseholdStreakWeeks = semanas naturales consecutivas con weeklyGoalMet = true
+streakStatus = active | inactive, calculado y versionado por P1
 ```
 
-- Datos: fuente server-authoritative de días útiles de TD-066 y timezone P1.
-- Sin datos: el hogar nunca registró un día útil.
-- Sano: la racha sigue activa al cerrar el último día laborable evaluable.
-- Anómalo: existía histórico activo y la racha se reinició a cero.
-- Barra: siete segmentos de la semana (actividad, hueco y hoja de descanso), no progreso hacia un objetivo arbitrario.
+- Datos: `currentHouseholdStreakWeeks`, progreso de la semana actual, porcentaje mínimo, `streakStatus`, `formulaVersion` y timezone de P1/PDR-013.
+- Sin datos: P1 aún no ha cerrado ninguna semana evaluable para el hogar.
+- Sano: `streakStatus = active`.
+- Anómalo: existía una racha previa y `streakStatus = inactive`.
+- Barra: semanas consecutivas cumplidas y progreso de la semana actual contra el porcentaje mínimo canónico; TD-070 no recalcula el porcentaje.
 - Acción anómala: recomendación TD-068 aplicable para retomar una tarea; fallback «Ver tareas pendientes», con tono «Podéis retomarlo cuando os venga bien».
-
-**Pregunta abierta:** aprobar qué eventos mantienen la racha del hogar, si el domingo conserva la misma neutralidad que la racha personal y si existe cualquier mecanismo de hielo compartido. No se reutilizan hielos personales sin esa decisión.
 
 ### 4.5 Actividad reciente
 
@@ -187,16 +193,16 @@ activeDay(d) = existe al menos un evento útil server-authoritative del hogar en
 activeDays7 = suma de activeDay(d) para los últimos 7 días
 ```
 
-- Datos candidatos: primera completación de tarea, tarea creada/programada, compra confirmada y futuros eventos de misión/hucha. Lecturas, aperturas de pantalla y escrituras rechazadas no cuentan.
+- Eventos incluidos: tarea creada, completada o reasignada; nivel de hogar alcanzado; misión completada.
+- Eventos excluidos: compras y demás acciones puras de economía, además de lecturas, aperturas de pantalla y escrituras rechazadas.
+- Datos: eventos de dominio server-authoritative o una proyección explícita equivalente, con `householdId`, tipo, instante confirmado y versión.
 - Sin datos: no existe ningún evento histórico útil.
 - Sano: `activeDays7 >= 1`.
 - Anómalo: existe histórico, pero `activeDays7 = 0`.
 - Barra: siete segmentos cronológicos activo/inactivo; no mide volumen por persona.
 - Acción anómala: recomendación TD-068 activa con mejor contexto; fallback «Ver tareas».
 
-**Causa confirmada:** no hay event log de actividad y `updatedAt` no identifica qué ocurrió. **Hipótesis:** usarlo como sustituto contaría ediciones técnicas o irrelevantes como salud. El componente requiere una fuente de eventos explícita o una proyección equivalente.
-
-**Pregunta abierta:** cerrar la taxonomía exacta de eventos útiles y decidir si la infraestructura de eventos pendiente de TD-068 es la fuente común. Hasta entonces, la lista anterior es recomendación de diseño, no decisión aprobada.
+**Causa confirmada:** no hay event log de actividad y `updatedAt` no identifica qué ocurrió. **Hipótesis:** usarlo como sustituto contaría ediciones técnicas o irrelevantes como salud. D11 fija la taxonomía de v1; la implementación debe materializarla en una fuente explícita y compartida cuando sea viable con TD-068.
 
 ## 5. Integración y dependencias
 
@@ -206,7 +212,8 @@ El dashboard consume recomendaciones; no vuelve a puntuarlas:
 
 - recibe `recommendationId`, categoría, acción autorizada, explicación, estado y versión;
 - respeta preferencias, cooldowns, dismiss y deduplicación de TD-068;
-- usa hábitos/olvido para cumplimiento, atrasos, racha y actividad;
+- usa hábitos/olvido para cumplimiento, atrasos y actividad;
+- para racha, aporta la acción contextual sin sustituir el estado canónico de P1/PDR-013;
 - usa la categoría de carga para materializar las opciones calculadas por TD-069;
 - convierte tareas sin asignar en sugerencia de asignación, sin sumarlas al balance.
 
@@ -221,8 +228,8 @@ Consume sus pesos P1 versionados, semana natural, cohortes, carga realizada/pend
 | Dependencia | Motivo |
 |---|---|
 | TD-001 | Autoridad única de membresía, cohortes fiables, alta/baja y autorización de salas socket. |
-| TD-066 | `automaticBaseWeight`, timezone/semana P1 y fuente de rachas; TD-069 ya depende de esta base. |
-| TD-068 | Acciones contextuales, preferencias, cooldowns y posible fuente de actividad. |
+| TD-066 | `automaticBaseWeight`, timezone/semana P1 y contrato de racha del hogar; TD-069 ya depende de esta base. |
+| TD-068 | Acciones contextuales, preferencias, cooldowns y proyección de eventos compatible con D11. |
 | TD-069 | Cálculo server-authoritative del componente de equilibrio. |
 
 El dashboard v1 completo queda **bloqueado por TD-001, TD-066, TD-068 y TD-069**. Se puede prototipar el tab y las fórmulas puras sobre fixtures, pero no declarar TD-070 implementado ocultando componentes fijos o sustituyendo sus datos por proxies inventados.
@@ -244,7 +251,7 @@ household:health_invalidated
 }
 ```
 
-4. Si «Salud» está visible, `HealthCubit` agrupa invalidaciones durante 750 ms y hace un solo pull. Si no está visible, marca el snapshot dirty y lo refresca al entrar.
+4. Si «Salud» está visible, `HealthCubit` aplica debounce y throttle sobre una ventana inicial configurable de 750 ms y hace como máximo un pull por ventana. Si no está visible, marca el snapshot dirty y lo refresca al entrar.
 5. El socket nunca transporta un score ni se toma como autoridad del cálculo; solo invalida.
 
 Antes de unir o mantener un socket en `household_<id>`, el servidor verifica membresía contra la autoridad vigente. Una baja expulsa los sockets del exmiembro de la sala. Las emisiones de salud se hacen únicamente después del commit de dominio.
@@ -252,7 +259,7 @@ Antes de unir o mantener un socket en `household_<id>`, el servidor verifica mem
 ### Carreras y orden
 
 - Una respuesta iniciada antes de una invalidación no puede sobrescribir otra más nueva: comparar `generatedAt`/versión de request.
-- Dos invalidaciones de la misma ráfaga se deduplican; el pull devuelve los cinco componentes coherentes en un solo snapshot.
+- Las invalidaciones de la misma ventana se deduplican. Si llegan mientras hay un pull en curso, se marca dirty y se permite como máximo un pull trailing al terminar; el pull devuelve los cinco componentes coherentes en un solo snapshot.
 - Un fallo de pull conserva el snapshot anterior como stale y ofrece reintento de pantalla; no mezcla componentes de momentos distintos.
 
 ## 7. Offline y vuelta a online
@@ -280,12 +287,9 @@ Cambiar de hogar aísla la clave de caché; logout/cambio de cuenta la limpia co
 
 ### Navegación y layout
 
-`StatsPage` pasa a contener dos tabs superiores:
+La navegación inferior añade «Salud» como destino propio. «Tareas» conserva el índice inicial y sigue siendo la primera pantalla al abrir la aplicación. «Salud» no contiene el selector «30 días / Todo».
 
-- «Salud»: nuevo dashboard, sin selector «30 días / Todo»;
-- «Estadísticas»: UI PDR-007 actual, incluido su selector y sus métricas numéricas.
-
-**Pregunta abierta:** cuál de los dos tabs queda seleccionado por defecto al abrir desde Perfil. D4 decide que están separados, no cuál prevalece.
+`StatsPage` y su acceso actual desde Perfil permanecen como «Estadísticas», con la UI PDR-007, su selector y sus métricas numéricas. D4 y D12 evitan mezclar ambas superficies.
 
 Orden vertical fijo en «Salud»:
 
@@ -326,9 +330,9 @@ Este CTA pertenece al empty state, no a un componente sano, por lo que no contra
 | Miembro nuevo | Recalcular inmediatamente carga pendiente y cohorte actual. No emitir anomalía persistente hasta disponer de dos semanas completas comparables con la nueva cohorte; no reescribir historia. |
 | Miembro que sale | Retirar pendientes según TD-018, preservar actividad histórica agregada y dejar de incluirlo en acciones o sockets futuros. |
 | Hogar de un miembro | Equilibrio muestra «—» y «No aplica en hogares de una persona»; no hay CTA ni sugerencia de redistribución. Los demás componentes siguen disponibles. |
-| Semana sin actividad, con histórico previo | Cumplimiento puede quedar sin datos si no hubo tareas vencidas; actividad reciente pasa a anómala tras siete días completos y la racha aplica la regla aprobada futura, con tono de retorno, no castigo. |
+| Semana sin actividad, con histórico previo | Cumplimiento puede quedar sin datos si no hubo tareas vencidas; actividad reciente pasa a anómala tras siete días completos y la racha consume el estado activo/inactivo de P1/PDR-013, con tono de retorno, no castigo. |
 | Semana parcial | Cumplimiento usa solo tareas vencidas hasta `now`; equilibrio persistente usa semanas completas, nunca la actual por sí sola. |
-| Cero tareas con `dueDate` | Cumplimiento y atrasos quedan sin datos; una tarea sin fecha solo puede aparecer mediante recomendación de inactividad TD-068. |
+| Cero tareas con `dueDate` | Cumplimiento queda sin datos. Si existen tareas activas sin fecha, atrasos muestra 0 % atrasado; una tarea sin fecha solo puede aparecer como olvidada mediante TD-068. |
 | Tarea compartida | Carga pendiente se fracciona y carga realizada se atribuye a `completedBy`, exactamente como TD-069. |
 | Tarea sin asignar | No entra en balance; aparece como oportunidad «Por repartir» conectada con TD-068. |
 | Datos cacheados de otro hogar/cuenta | Nunca se muestran; validar propietario y `householdId` antes del primer frame. |
@@ -341,22 +345,22 @@ Este CTA pertenece al empty state, no a un componente sano, por lo que no contra
 
 - Endpoint exige membresía y mantiene `{ success, data?, error? }`.
 - Ausencia explícita de `healthScore` o agregado global.
-- Cumplimiento: cohorte por `dueDate`, 0/80/100 %, tarea antigua completada ahora y soft delete.
-- Equilibrio: consume snapshots TD-069, 65 % exacto no alerta, >65 % dos semanas sí, muestra 4/5 y hogar de uno.
-- Atrasos: justo antes/en/después de `dueDate`, tarea sin fecha y overdue antiguo.
-- Racha: días útiles, domingo y reinicio según la decisión pendiente finalmente aprobada.
-- Actividad: siete días, event types aprobados, cero histórico frente a semana inactiva.
+- Cumplimiento: cohorte única por `dueDate`, 0/70/>70/100 %, dato legado incoherente, tarea antigua completada ahora y soft delete; nunca supera 100 %.
+- Equilibrio: consume snapshots TD-069, banda 40–60 %, 65 % exacto sin señal persistente, >65 % dos semanas sí, muestra 4/5 y hogar de uno.
+- Atrasos: justo antes/en/después de `dueDate`, ratio por debajo/en/encima de 20 %, tarea sin fecha y overdue antiguo.
+- Racha: semanas consecutivas, porcentaje mínimo y estado activo/inactivo suministrados por P1/PDR-013, sin recálculo local.
+- Actividad: siete días; inclusión de tareas creadas/completadas/reasignadas y hitos, exclusión de compras, cero histórico frente a semana inactiva.
 - Miembro nuevo/saliente y dos cohortes no comparables.
 - `household:join` rechaza un hogar ajeno y una baja expulsa el socket de la sala.
 - Invalidaciones posteriores al commit, lista correcta de componentes y ninguna emisión duplicada en retry.
 
 ### Frontend
 
-- Tabs «Salud / Estadísticas» y preservación íntegra de PDR-007.
+- Nuevo destino inferior «Salud», inicio en «Tareas» y preservación íntegra del acceso separado a «Estadísticas» PDR-007.
 - Orden fijo, barras accesibles, ausencia de score/ranking y estados sano/anómalo/sin datos/no aplica.
 - Un CTA por anomalía y ninguno en sano; preferencias/cooldown TD-068.
 - Hogar nuevo, miembro nuevo, hogar de uno y semana sin actividad.
-- Pull al entrar, debounce socket, respuesta vieja descartada y un solo refetch tras ráfaga.
+- Pull al entrar, debounce/throttle socket, respuesta vieja descartada y como máximo un refetch trailing tras una ráfaga durante un pull.
 - Caché correcta por propietario/hogar, stale offline, sin caché y reconciliación al volver.
 
 ### Plan futuro de commits
@@ -393,23 +397,16 @@ El presente PR contiene solo el commit documental solicitado.
 
 ### Pruebas manuales
 
-1. Abrir Perfil → Estadísticas y verificar tabs separados y ausencia de score global.
-2. Crear cohortes por debajo/en/encima de 80 % y comprobar cumplimiento sin superar 100 %.
+1. Abrir la aplicación y verificar que inicia en «Tareas»; entrar en el nuevo destino inferior «Salud» y confirmar que Perfil → Estadísticas permanece separado y sin cambios.
+2. Crear cohortes en 70 %, por encima de 70 % y con datos legados incoherentes; comprobar que el estado respeta el umbral y que cumplimiento nunca supera 100 %.
 3. Sembrar dos semanas TD-069 con 65 % y >65 %, cinco tareas, tareas compartidas y sin asignar.
 4. Vencer una tarea y comprobar un solo CTA; resolverla y comprobar que desaparece.
 5. Probar hogar nuevo, alta de miembro, baja y hogar de una persona.
-6. Completar desde un segundo dispositivo y verificar invalidación/debounce/pull en tiempo real.
+6. Completar y reasignar desde un segundo dispositivo; verificar ventana de agregación, debounce/throttle y como máximo un pull trailing.
 7. Intentar `household:join` con un hogar ajeno y confirmar que no recibe salud ni eventos.
 8. Activar modo avión con/sin snapshot, cambiar de hogar/cuenta y reconectar con operaciones pendientes.
-9. Simular siete días sin actividad y revisar tono, racha y acción sin lenguaje culpabilizador.
+9. Simular siete días sin actividad y una racha P1 activa/inactiva; revisar tono y acción sin lenguaje culpabilizador ni recálculo local.
 10. Apagar realtime y luego el feature flag; «Estadísticas» sigue funcionando sin cambios.
-
-## 12. Preguntas abiertas
-
-- Definición exacta de actividad útil, domingo e hielos para la racha del hogar.
-- Taxonomía/fuente persistente de actividad reciente y su relación con el event log pendiente de TD-068.
-- Tab seleccionado por defecto al abrir la superficie desde Perfil.
-- Calibración tras el piloto del 80 % de cumplimiento y de siete días sin actividad; los valores documentados son baseline configurable.
 
 ## Proposed Improvements
 
