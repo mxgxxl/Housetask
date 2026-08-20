@@ -131,6 +131,126 @@ Invariante: todo hogar persistente tiene al menos un admin.
 
 La destrucción debe ser server-authoritative y abarcar tareas, compras, mascota, economía de hogar, membresías, notificaciones, caché y sockets. El orden, la atomicidad y la política de conservación legal/operativa de esos datos se detallarán antes de implementar; la decisión de producto de destruir el hogar ya está cerrada.
 
+## Destrucción del hogar: atomicidad y retención
+
+### Estado confirmado y alcance
+
+**Causa confirmada:** el código actual no tiene endpoint, servicio ni estado de ciclo de vida para destruir un hogar. La única salida existente es `removeMember`, limitada a admins y protegida contra eliminar al último admin. Los modelos actuales ligados por `householdId` son tareas, compras, membresías espejo, ledger económico de Fase A, mascota y solicitud de adopción. `User.households` conserva además una referencia desnormalizada.
+
+**Causa confirmada:** `RefreshToken` y `DeviceToken` pertenecen al usuario, no al hogar. No existen «sesiones del hogar» en el modelo actual; destruir un hogar no equivale a cerrar la sesión de la cuenta.
+
+**Causa confirmada:** `PersonalCoinLedger`, `RewardGrant`, los ledgers/proyecciones de XP, presupuestos, hucha y misión son modelos propuestos por TD-066/UX P1, no colecciones implementadas hoy. Esta sección fija su contrato de destrucción futuro para evitar que P1 nazca con referencias huérfanas.
+
+### Atomicidad server-authoritative
+
+La destrucción final es un único comando server-authoritative con `Idempotency-Key` estable por operación lógica. La validación, los reembolsos, las cancelaciones, la retención portable, los borrados, el recibo idempotente y el registro de salida realtime se escriben en una sola transacción Mongo. Si falla cualquier paso, se revierte todo: el hogar continúa activo, ningún aporte queda parcialmente reembolsado y ningún recurso desaparece por separado.
+
+El middleware genérico de idempotencia basado solo en TTL no basta para un borrado irreversible: tras eliminar el hogar ya no se puede volver a comprobar su membresía. El diseño necesita un `HouseholdDestructionReceipt` duradero, fuera del agregado borrado, con al menos `householdId`, `requestedBy`, hash de `Idempotency-Key`, estado, `destroyedAt` y respuesta mínima. Un retry autenticado del mismo actor y clave devuelve el resultado original; otra clave contra el hogar ya destruido no reconstruye ni repite nada.
+
+**Pregunta abierta:** método y ruta exactos del comando (`DELETE` dedicado o `POST .../destroy`). La obligación de `Idempotency-Key` y la semántica de replay no dependen de esa elección.
+
+### Retención por recurso
+
+La tabla define la política final recomendada. «Conservar activo» es una excepción deliberada a hard/soft delete: el dato es personal y portable, por lo que borrarlo contradiría PDR-017. Las duraciones legales u operativas de cualquier tombstone son una **pregunta abierta** y deben fijarse antes de producción.
+
+| Recurso | Existencia actual | Política al destruir | Justificación / tratamiento |
+|---|---|---|---|
+| `Household` e invite code | Sí | Hard delete al final de la transacción | Es la raíz del agregado; el código deja de ser reutilizable solo según la política general de unicidad. |
+| `HouseholdMember`, array embebido y `User.households` | Sí | Hard delete / `$pull` transaccional | No debe quedar pertenencia ni referencia navegable. Durante TD-001 se limpian ambas representaciones; tras el cutover, la autoridad vigente. |
+| Tareas, instancias recurrentes y papelera | Sí | Hard delete | Una tarea no es portable entre hogares. Incluye pendientes, completadas, soft-deleted y todas las ocurrencias `parentTaskId`. El soft delete de TD-046 protege borrados ordinarios, no la destrucción confirmada de la raíz. |
+| Compras y recurrencias de compra | Sí | Hard delete | Pertenecen exclusivamente al hogar y no tienen valor portable. |
+| `EconomyLedger` de Fase A | Sí | Hard delete tras cerrar/migrar cualquier saldo exigible | Es saldo compartido del hogar. No contiene `userId`, por lo que no puede convertirse en propiedad personal durante la destrucción sin inventar atribución. |
+| `PersonalCoinLedger` | Diseño TD-066 | Conservar activo | La wallet es personal. Los asientos mantienen `userId`, importe y motivo; `householdId` queda como contexto histórico no navegable, marcado con `sourceHouseholdDeletedAt` o equivalente para no exigir que la raíz exista. |
+| `PersonalXpLedger` y `UserProgress` | Diseño TD-066 | Conservar activos | PDR-017 exige que XP, nivel, títulos y badges personales sobrevivan. `UserProgress` ya se diseña sin `householdId`. |
+| `PersonalStreak` / `StreakDay` de alcance personal | Diseño TD-066 | Conservar activos | Son portables si el `scope` aprobado es personal. **Pregunta abierta:** TD-066 aún no fija si una racha puede estar ligada al hogar; esa variante, si se aprueba, se elimina con el hogar. |
+| `WeeklyPersonalBudget` | Diseño TD-066 | Hard delete después de cerrar la semana afectada | La asignación y sus allocations pertenecen al contexto del hogar; los grants ya consolidados permanecen en los ledgers personales. No se libera presupuesto nuevo tras la destrucción. |
+| `RewardGrant` | Diseño TD-066 | Soft delete/tombstone mínimo | Se conserva `userId`, `completionOperationId` y recompensa personal para auditoría/anti-duplicado; se marca `householdDeletedAt` y se elimina cualquier snapshot de texto. `taskId`/`householdId` quedan como ids históricos no navegables. |
+| `HouseholdXpLedger` y `HouseholdProgress` | Diseño TD-066 | Hard delete | El XP y los desbloqueos de hogar mueren con el hogar; PDR-017 solo preserva el progreso personal. |
+| Mascota y solicitud de adopción | Sí | Hard delete | Mascota, estados y propuesta son compartidos y no pueden existir sin hogar. |
+| Cosméticos de hogar actuales (`Pet.cosmetics`) | Sí | Hard delete con la mascota | Fueron comprados con economía compartida y pertenecen al agregado del hogar. |
+| Cosméticos personales futuros | Diseño P1+ | Conservar activos | Los desbloqueos personales viajan con el usuario; el registro no debe depender de una raíz de hogar existente. |
+| Hucha (`JointSavingsGoal`) activa | Diseño TD-066 | Reembolsar y después hard delete | Cada `SavingsContribution` activa se acredita a su wallet personal dentro de la misma transacción. Si un reembolso no puede escribirse, se bloquea y revierte toda la destrucción. PDR-018 no permite perder aportes al salir. |
+| `SavingsContribution` | Diseño TD-066 | Soft delete como `refunded` | Conserva la prueba de reembolso personal y el `operationId`; deja de ser aporte activo y referencia una meta destruida solo como contexto histórico. |
+| Misión semanal activa | Diseño UX P1 | Cancelar y hard delete, sin recompensa | La misión pertenece al hogar. Destruir no equivale a completarla y nunca concede cofre, monedas ni XP. |
+| Migración/proyecciones económicas de hogar | Diseño TD-066 | Soft-delete del recibo de migración; hard delete de proyecciones de hogar | El tombstone mínimo evita repetir una migración histórica; saldos/progreso compartidos dejan de existir. |
+| Refresh tokens y access tokens | Sí | Conservar | Son sesiones del usuario y pueden dar acceso a otros hogares. Las siguientes peticiones al hogar destruido fallan por ausencia de membresía/recurso. No existe revocación por hogar. |
+| Device tokens push | Sí | Conservar | También son del usuario. Se dejan de seleccionar destinatarios mediante la membresía eliminada; no se desregistra el dispositivo. |
+| Caché local y recordatorios del hogar | Sí, en cliente | Purga client-side tras evento/404 | No participa en la transacción Mongo. El cliente elimina snapshots, cola pendiente y recordatorios vinculados al hogar sin limpiar datos de otros hogares/cuenta. |
+| `HouseholdDestructionReceipt` y outbox | Propuesto aquí | Grace period/tombstone operativo | Deben sobrevivir a la raíz para deduplicar retries y entregar el evento. **Pregunta abierta:** plazo exacto de retención y posterior anonimización/hard delete. |
+
+### Orden dentro de la transacción
+
+1. Reclamar el `Idempotency-Key`; si existe un recibo confirmado para actor/hogar/clave, devolverlo sin nuevas escrituras ni eventos.
+2. Releer y bloquear lógicamente el hogar con versión/estado; verificar que el actor sigue siendo el único miembro y admin y que no comenzó otra destrucción, transferencia o alta.
+3. Marcar el agregado como `destroying` dentro de la transacción para que toda mutación household-scoped participante rechace o entre en conflicto.
+4. Cancelar la hucha activa: acreditar todos los reembolsos personales y marcar contribuciones `refunded`. Un solo fallo aborta.
+5. Cancelar la misión activa sin recompensa y cerrar presupuestos/recibos personales que deban sobrevivir.
+6. Escribir los tombstones de `RewardGrant`, migración, contribuciones y ledgers portables antes de borrar sus tareas/metas de origen.
+7. Hard-delete tareas/instancias/papelera, compras, economía y progreso de hogar, mascota, adopción, cosméticos y demás hijos exclusivos.
+8. Eliminar ambas representaciones de membresía y retirar el hogar de `User.households` para todas las cuentas afectadas.
+9. Crear `HouseholdDestructionReceipt` y un evento outbox `household:destroyed` dentro de la transacción.
+10. Hard-delete `Household` y confirmar. Solo después del commit el dispatcher publica el evento; si el commit falla, no hay borrados, recibo ni evento.
+
+**Hipótesis:** sin un estado/versionado común que todas las escrituras household-scoped comprueben, una operación iniciada antes del paso 3 podría confirmar después y recrear un hijo huérfano. La implementación debe demostrar mediante transacciones/versión que esto no ocurre; no basta con comprobar membresía antes del `await`.
+
+### Realtime y salida limpia de clientes
+
+El outbox publica una sola vez lógicamente (deduplicada por `destructionReceiptId`):
+
+```text
+household:destroyed
+{
+  householdId,
+  destroyedAt,
+  destructionReceiptId,
+  personalEconomyChanged: boolean
+}
+```
+
+El outbox solo puede crearse desde la transacción que acaba de verificar la membresía y el rol del actor; conserva el snapshot de destinatarios autorizados previo al borrado. El dispatcher no acepta un `householdId` arbitrario ni recalcula destinatarios después, cuando la membresía ya no existe. Así, la emisión posterior al commit mantiene la comprobación server-authoritative exigida para eventos household-scoped.
+
+El evento se envía a la sala todavía conectada tras el commit y después el servidor expulsa los sockets de `household_<id>`. El cliente:
+
+1. cancela recordatorios locales del hogar;
+2. elimina snapshots y operaciones offline del hogar;
+3. resetea Cubits asociados sin tocar otros hogares ni la sesión;
+4. abandona la sala y navega a otro hogar o al setup si no queda ninguno;
+5. refresca wallet/XP personal si `personalEconomyChanged` es true.
+
+Si el socket falla, el outbox reintenta. Como red de seguridad, cualquier GET posterior devuelve ausencia del hogar y desencadena la misma limpieza idempotente en cliente. **Pregunta abierta:** 404 frente a 410 durante la retención del recibo; el envelope no cambia.
+
+### Periodo de gracia
+
+**Pregunta abierta:** destrucción inmediata después de la confirmación o grace period reversible.
+
+**Recomendación para v1:** destrucción inmediata tras el diálogo explícito ya aprobado y una confirmación reforzada, porque hoy no existe identidad de recuperación para un hogar sin miembros. Un grace period introduciría un agregado sin admin o exigiría conservar una membresía oculta, además de posponer reembolsos y mantener sockets/cachés en un estado nuevo. Si datos reales muestran destrucciones accidentales, diseñar después un estado `pendingDeletion` reversible con propietario de recuperación, plazo, UX y política de hucha explícitos; no simularlo mediante soft delete parcial.
+
+### Casos borde adicionales
+
+| Caso | Resultado requerido |
+|---|---|
+| Tarea/compra/completación en vuelo | Compite con el lock/versión del hogar: o confirma antes y entra en el conjunto destruido, o aborta/reintenta y recibe hogar destruido; nunca recrea hijos después. |
+| Retry tras respuesta perdida | El mismo `Idempotency-Key` devuelve `HouseholdDestructionReceipt`; no repite reembolsos ni sockets. |
+| Dos dispositivos destruyen a la vez | Solo una transacción reclama la operación; la otra recibe el resultado confirmado o conflicto estable. |
+| Hucha activa | Reembolso completo primero; cualquier fallo bloquea y revierte destrucción. |
+| Misión activa | Cancelada sin recompensa; no cuenta como éxito ni afecta rachas personales. |
+| Último admin inicia transferencia | Transferencia y destrucción se serializan por versión: si transfiere primero deja de cumplirse «último miembro»; si destruye primero, la transferencia no encuentra hogar. |
+| Alta por código concurrente | Si el alta confirma primero, ya no hay último miembro y se aborta la destrucción; si destruye primero, el invite code deja de resolver. |
+| Operación offline llega después | El backend no la aplica; el cliente retira esa operación al reconciliar `household:destroyed`/404 y explica que el hogar ya no existe. |
+| Fallo de socket tras commit | No revierte datos; outbox reintenta y la siguiente lectura fuerza limpieza idempotente. |
+
+### Tests y pruebas manuales adicionales
+
+- Transacción con fallo inyectado en cada paso: cero borrados/reembolsos parciales.
+- Dos destrucciones concurrentes y replay de la misma/diferente clave.
+- Carrera destrucción frente a tarea, join y transferencia.
+- Hucha con aportes de miembros actuales y anteriores; suma exacta de créditos.
+- Misión activa cancelada sin `RewardGrant` ni recompensa.
+- Conservación de XP/ledger/cosméticos personales y desaparición de XP/mascota/cosméticos de hogar.
+- Tokens de usuario siguen válidos para otro hogar y dejan de autorizar el destruido.
+- Evento outbox único, retry del dispatcher y limpieza client-side idempotente en dos dispositivos.
+- Prueba manual de cancelar el diálogo, confirmar, perder la respuesta HTTP, reabrir offline y reconectar.
+
 ## 7. Tests nuevos y commits atómicos futuros
 
 ### Backend
