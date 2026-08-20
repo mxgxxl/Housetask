@@ -54,6 +54,31 @@ Después del cutover, las mutaciones económicas comprobarán membresía mediant
 usa `mongoose.startSession().withTransaction()`; el reembolso de hucha debe ser
 un paso de la misma operación antes de borrar la membresía.
 
+## Decisiones aprobadas
+
+1. **Timezone.** El ciclo semanal, las seis asignaciones y el domingo de
+   descanso se calculan en la timezone local IANA del usuario. El backend
+   almacena los instantes en UTC, pero deriva `weekKey` y `effectiveDayKey`
+   agrupándolos en esa zona IANA, que queda snapshot en
+   `WeeklyPersonalBudget.periodTimeZone`. Si esa complejidad impidiera P1,
+   v1 usa UTC como fallback explícitamente documentado; no cambia los datos
+   UTC ya almacenados.
+2. **Saldo heredado.** Las monedas existentes se conservan como wallet
+   personal mediante un crédito de migración `legacy_balance`; XP personal y
+   XP de hogar empiezan en 0. La migración no destruye `EconomyLedger` ni los
+   cosméticos de Fase A. Como el ledger heredado no contiene `userId`, la
+   activación de cada hogar exige guardar su `legacyWalletUserId` en
+   `HouseholdEconomyMigration` antes de escribir ese crédito: es un dato de
+   migración auditable, no una conversión automática ni una duplicación del
+   saldo.
+3. **Tareas con varios miembros.** La recompensa de la primera completación
+   de una instancia pertenece al miembro que la completa. `RewardGrant.userId`,
+   los dos ledgers personales y el presupuesto se resuelven con el actor de
+   completación, no con `assignedTo`.
+4. **Cancelación de hucha.** Se aplica PDR-018: cancelar la meta reembolsa
+   todos sus aportes activos, y la salida de un miembro reembolsa los suyos.
+   Ambas rutas usan las mismas contribuciones y asientos de compensación.
+
 ## 3. Modelo de datos propuesto
 
 Los importes y los saldos se representan como enteros no negativos salvo los
@@ -66,11 +91,11 @@ actuales de Fase A: no se les cambia semántica ni se redistribuye su saldo.
 | `RewardGrant` | `householdId`, `userId`, `taskId`, `completionOperationId`, `effectiveAt`, `effectiveDayKey`, `coinAwarded`, `personalXpAwarded`, `householdXpAwarded`, `weeklyBudgetId`, `status` | Único `{ householdId, taskId, kind: 'task_first_completion' }`; único de `completionOperationId` por hogar. Es el recibo idempotente que une tarea, presupuesto y los tres progresos. |
 | `PersonalXpLedger` y `UserProgress` | Ledger: `userId`, `amount`, `reason`, `refId`, `createdAt`; proyección: `xp`, `level`, `updatedAt` | Único ledger `{ userId, reason, refId }`. `UserProgress` no lleva `householdId`: XP, nivel, títulos y badges son portables (PDR-017). |
 | `HouseholdXpLedger` y `HouseholdProgress` | Ledger: `householdId`, `amount`, `reason`, `refId`, `createdAt`; proyección: `xp`, `level`, `updatedAt` | Único ledger `{ householdId, reason, refId }`. Sus desbloqueos son del hogar. |
-| `WeeklyPersonalBudget` | `userId`, `householdId`, `weekKey`, `periodTimeZone`, `weeklyCap`, `releasedCoins`, `grantedCoins`, `planVersion`, `allocations[]`, `createdAt`, `updatedAt` | Único `{ userId, householdId, weekKey }`. Cada asignación contiene `allocationKey`, `taskOrRuleId?`, `expectedFrequency`, `coinAmount`, `mode: automatic/manual`. |
+| `WeeklyPersonalBudget` | `userId`, `householdId`, `weekKey`, `periodTimeZone` IANA, `weeklyCap`, `releasedCoins`, `grantedCoins`, `planVersion`, `allocations[]`, `createdAt`, `updatedAt` | Único `{ userId, householdId, weekKey }`. Cada asignación contiene `allocationKey`, `taskOrRuleId?`, `expectedFrequency`, `coinAmount`, `mode: automatic/manual`. |
 | `PersonalStreak` y `StreakDay` | Racha: `userId`, `scope`, `scopeId?`, `currentCount`, `iceReserve`, `lastClosedDayKey`; día: `streakId`, `dayKey`, `usefulActivityCount`, `iceConsumed`, `iceRefunded`, `closeState` | Único `{ streakId, dayKey }`; `iceReserve` siempre 0…2. El día conserva la evidencia para un reembolso tardío. |
 | `JointSavingsGoal` | `householdId`, `status: active/unlocked/cancelled`, `itemType`, `itemId`, `targetCoins`, `contributedCoins`, `createdBy`, marcas de cierre | Índice único parcial de una meta `active` por `householdId` (PDR-018). No representa una wallet común. |
 | `SavingsContribution` | `goalId`, `householdId`, `userId`, `amount`, `status: active/applied/refunded`, `operationId`, `createdAt`, `refundedAt?` | Único `{ goalId, operationId }`; índice `{ goalId, userId }`. Cada aporte deja un débito de wallet enlazado y, si procede, un crédito de reembolso. |
-| `HouseholdEconomyMigration` | `householdId`, `phase`, `legacyBalanceSnapshot`, `legacyLedgerWatermark`, `ownerDecision`, `activatedAt?`, `createdAt` | Único `{ householdId }`. Hace observable y reversible la activación, sin borrar el ledger heredado. |
+| `HouseholdEconomyMigration` | `householdId`, `phase`, `legacyBalanceSnapshot`, `legacyLedgerWatermark`, `legacyWalletUserId`, `activatedAt?`, `createdAt` | Único `{ householdId }`. Hace observable y reversible la activación, sin borrar el ledger heredado. |
 
 `UserProgress` y `HouseholdProgress` son proyecciones reconstruibles de los
 ledgers; se actualizan en la misma transacción que el asiento y nunca se toman
@@ -101,12 +126,9 @@ ambas variantes, valida que no superen `weeklyCap` y guarda `planVersion`.
 
 **Preguntas abiertas:**
 
-- La fuente de `periodTimeZone` no está decidida. TD-013 aún documenta que el
-  hogar no tiene timezone; no se debe usar UTC por omisión como una decisión
-  silenciosa de P1.
 - PDR-011 no define cómo se atribuyen la frecuencia ni el tramo de monedas de
-  una tarea sin asignar o con varios asignados. Se necesita la regla antes de
-  fijar `allocationKey` y los defaults automáticos.
+  una tarea sin asignar. Se necesita la regla antes de fijar `allocationKey`
+  y los defaults automáticos.
 - Los valores de XP, curvas de nivel y umbrales de hitos no están fijados.
 - PDR-019 no decide si la racha se ancla solo a la cuenta o además a cada
   hogar. El campo `scope` evita bloquear ambas opciones; el valor v1 necesita
@@ -161,10 +183,6 @@ marcar la meta `cancelled`. La baja de miembro llama al mismo reembolso dentro
 de la transacción de membresía antes de retirar sus permisos; no toca aportes
 de otros miembros.
 
-**Pregunta abierta:** PDR-018 permite cancelar, pero no fija quién puede
-hacerlo ni el tratamiento de una meta desbloqueada. La autorización y esas
-transiciones deben cerrar el contrato antes de implementarse.
-
 ## 5. API propuesta
 
 Todas las respuestas siguen `{ success, data?, error? }`; toda operación que
@@ -197,9 +215,11 @@ una hora offline fiable para un `PATCH` antiguo.
 2. **Snapshot auditable:** por hogar, guardar `legacyBalanceSnapshot` y el
    watermark de `EconomyLedger` en `HouseholdEconomyMigration`. Mantener
    `EconomyLedger`, `GET /economy`, mascota y cosméticos Fase A intactos.
-3. **Decisión del dueño previa a crédito:** no hay base en PDR-010…019 para
-   repartir un saldo compartido heredado entre wallets personales. La migración
-   no acredita, elimina ni convierte esos importes hasta que exista esa regla.
+3. **Crédito legado no destructivo:** conservar el snapshot y el watermark,
+   registrar `legacyWalletUserId` y escribir una sola entrada
+   `PersonalCoinLedger(legacy_balance)` para esa wallet. XP personal y de
+   hogar se inicializa a 0; `EconomyLedger` y los cosméticos Fase A se
+   mantienen como historial y compatibilidad, no se eliminan ni se duplican.
 4. **Activación gradual:** activar P1 por hogar solo cuando el snapshot y la
    política de legado estén registrados. Los ledgers P1 se escriben separados;
    se puede desactivar el flag y volver a lectura Fase A sin pérdida de la
@@ -266,12 +286,8 @@ Fase A y comprobar que mascota/cosméticos heredados siguen legibles.
   no autoriza una implementación anterior.
 - **Dependencia confirmada:** ADR-010 y TD-059 obligan a persistir y esperar la
   operación P1 antes de mostrarla como recuperable offline.
-- **Pregunta abierta:** conversión, congelación o coexistencia del saldo
-  `EconomyLedger` actual y de cosméticos ya comprados.
-- **Pregunta abierta:** timezone de semana/día, atribución de tareas compartidas,
-  números de XP/nivel, scope de racha, reembolso de hielo al tope y permisos de
-  cancelación de hucha.
-
-El documento `docs/TD-064-DESIGN.md` existe pero TD-064 no aparece en el
-registro de `TECH_DEBT.md`. Es un hallazgo documental reciente; se reporta sin
-modificarlo, tal como exige el alcance de esta tarea.
+- **Dato requerido para cada activación:** el ledger histórico no incluye
+  `userId`; `legacyWalletUserId` debe quedar registrado antes de acreditar su
+  saldo personal, para conservar el total sin duplicarlo.
+- **Pregunta abierta:** tramo automático de tareas sin asignar, números de
+  XP/nivel, scope de racha y reembolso de hielo al tope.
