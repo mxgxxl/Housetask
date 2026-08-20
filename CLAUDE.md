@@ -454,6 +454,7 @@ The full registry (~47 entries, all history) lives in [Full Technical Debt Regis
 | TD-066 | Diseño técnico del refactor de economía P1: wallets personales, XP dual, presupuesto, rachas y hucha; bloqueado por el cutover de TD-001 | High | Open (2026-08-20; diseño técnico pendiente de implementación tras el cutover de TD-001) |
 | TD-067 | Gestión de roles y administración: promoción/degradación, transferencia, confirmaciones sensibles y protección contra hogares sin admin | High | Open (2026-08-20; decisiones de gobernanza aprobadas, pendiente de implementación) |
 | TD-068 | Recomendaciones automáticas por reglas: hábitos, tareas olvidadas, contexto, preferencias y control anti-spam, sin IA generativa | Medium | Open (2026-08-20; diseño pendiente de validar umbrales e implementación) |
+| TD-069 | Reparto inteligente de carga doméstica por peso automático, balance semanal y sugerencias no culpabilizadoras, sin leaderboard | High | Open (2026-08-20; diseño pendiente de decisiones abiertas e implementación; bloqueado por TD-001/TD-066) |
 | TD-013 | Recurrence computed in UTC without household timezone | Medium | Planned (Phase 2) |
 | TD-034 | No deploy-order safety net between backend and Flutter app | Medium | Planned (Phase 3) |
 | TD-039 | Offline conflict resolution uses last-write-wins; concurrent edits on multiple devices can overwrite | Low | Deferred (Phase 2) |

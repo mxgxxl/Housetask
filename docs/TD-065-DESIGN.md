@@ -78,17 +78,17 @@ Los IDs son recomendaciones pendientes de registro, renumeradas tras la colisió
 
 | ID propuesto | Prioridad | Alcance de una línea |
 |--------------|-----------|----------------------|
-| TD-069 | High | Añadir generación/identidad de solicitud por hogar, sesión y periodo a cargas de `HouseholdCubit`, `TaskCubit`, `ShoppingCubit`, `PetCubit` y `StatsCubit`; descartar respuestas tardías. |
-| TD-070 | High | Resolver la carga inicial de hogar fallida con UI de error/retry y transición segura, evitando el spinner indefinido de `MainScaffold`. |
-| TD-071 | High | Modelar explícitamente loading/error/stale/empty en Home para tareas y compras, con reintento sin ocultar datos cacheados. |
-| TD-072 | Medium | Serializar o invalidar refresh/paginación y expresar errores de página siguiente en Tareas/Compras/Recurrentes/Papelera. |
-| TD-073 | Medium | Validar y, si se confirma, fijar exclusión mutua del drenaje offline y ciclo de salas/listeners Socket al cambiar de hogar. |
+| ID a asignar al abrir | High | Añadir generación/identidad de solicitud por hogar, sesión y periodo a cargas de `HouseholdCubit`, `TaskCubit`, `ShoppingCubit`, `PetCubit` y `StatsCubit`; descartar respuestas tardías. |
+| ID a asignar al abrir | High | Resolver la carga inicial de hogar fallida con UI de error/retry y transición segura, evitando el spinner indefinido de `MainScaffold`. |
+| ID a asignar al abrir | High | Modelar explícitamente loading/error/stale/empty en Home para tareas y compras, con reintento sin ocultar datos cacheados. |
+| ID a asignar al abrir | Medium | Serializar o invalidar refresh/paginación y expresar errores de página siguiente en Tareas/Compras/Recurrentes/Papelera. |
+| ID a asignar al abrir | Medium | Validar y, si se confirma, fijar exclusión mutua del drenaje offline y ciclo de salas/listeners Socket al cambiar de hogar. |
 
 ### Preguntas abiertas
 
 - ¿El dueño quiere registrar TD-064, ya diseñado pero ausente del registro, antes de reservar IDs posteriores? Esta auditoría no lo modifica.
 - ¿El fallback tras 403 de `loadHousehold` debe ofrecer selector de hogar, relogin o ambas opciones? Es una decisión de UX/producto, no se decide aquí.
-- ¿Qué nivel de stale data se acepta en Home y listas: banner persistente, timestamp o solo feedback tras un gesto de refresh? Requiere decisión de producto antes de implementar TD-071/TD-072.
+- ¿Qué nivel de stale data se acepta en Home y listas: banner persistente, timestamp o solo feedback tras un gesto de refresh? Requiere decisión de producto antes de implementar los trabajos correspondientes.
 
 ## 6. Plan de verificación para Claude
 
