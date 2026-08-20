@@ -39,9 +39,9 @@
 
 ## Siguiente tarea
 
-**1. TD-001 sigue en pausa activa de observación.** La fase 2 (lectura dual) se
-desplegó el 2026-08-18 (commit `631031d`). Ventana de **48-72 h**: **NO
-autorizar el cutover antes del 2026-08-21.**
+**1. Cutover de TD-001.** La fase 2 (lectura dual) se desplegó el 2026-08-18
+(commit `631031d`). La ventana de observación cerró el 2026-08-20 con cero
+divergencias; el siguiente paso técnico es el cutover.
 
 - **Criterio:** cero divergencias en Sentry (categoría `td001_dual_read`) o en
   los logs de Railway (`dual-read divergence`).
@@ -80,7 +80,9 @@ solo se pueden ejercitar con red y cuentas reales:
   simplemente porque la app dejó de cerrar sesión nunca. Guiones en
   `docs/TD-063-DESIGN.md` §6.
 
-Después: fases 3 y 4 de TD-001 (cutover y limpieza).
+Después del cutover: limpieza de TD-001 y refactor de economía según
+[UX-P1-SPEC.md](UX-P1-SPEC.md) y sus PDRs en
+[PRODUCT_DECISIONS.md](PRODUCT_DECISIONS.md).
 
 ### Fase 7 — cerrada (TD-063, 2026-08-19)
 
