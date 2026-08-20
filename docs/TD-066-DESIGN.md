@@ -78,6 +78,12 @@ un paso de la misma operación antes de borrar la membresía.
 4. **Cancelación de hucha.** Se aplica PDR-018: cancelar la meta reembolsa
    todos sus aportes activos, y la salida de un miembro reembolsa los suyos.
    Ambas rutas usan las mismas contribuciones y asientos de compensación.
+5. **Reembolso de hielo al tope.** Si un sync offline tardío demuestra
+   actividad en un día que ya consumió hielo y la reserva ya está al tope (2
+   hielos), el reembolso se descarta. El hielo ya cumplió su función de
+   protección, la persona mantiene la protección máxima y superar el tope
+   reintroduciría inflación. PDR-019 se interpreta como «reembolso si hay
+   capacidad», no «reembolso incondicional».
 
 ## 3. Modelo de datos propuesto
 
@@ -164,13 +170,10 @@ necesite, registra `StreakDay`. De lunes a sábado sin actividad útil consume u
 hielo si `iceReserve > 0`; domingo cierra como descanso y nunca consume. Una
 completación offline sincronizada tarde conserva su `occurredAt` validado por
 ventana permitida, incrementa `usefulActivityCount` de ese día y, si había
-`iceConsumed`, escribe exactamente un asiento/evento `ice_refund` y restaura la
-reserva hasta dos. La clave única del día y del recibo evita doble reembolso.
-
-**Pregunta abierta:** si una racha ya tiene dos hielos cuando llega el sync
-tardío, PDR-019 dice «se reembolsa» pero no fija el desenlace al tope. Debe
-decidirse si se conserva el reembolso diferido, se convierte a otra recompensa
-o se informa sin acreditar; este diseño no elige.
+`iceConsumed` y `iceReserve < 2`, escribe exactamente un asiento/evento
+`ice_refund` y restaura la reserva. Si ya está a dos, descarta el reembolso; la
+protección ya se aplicó y el tope no se supera. La clave única del día y del
+recibo evita doble procesamiento.
 
 ### Hucha y salidas
 
@@ -290,4 +293,4 @@ Fase A y comprobar que mascota/cosméticos heredados siguen legibles.
   `userId`; `legacyWalletUserId` debe quedar registrado antes de acreditar su
   saldo personal, para conservar el total sin duplicarlo.
 - **Pregunta abierta:** tramo automático de tareas sin asignar, números de
-  XP/nivel, scope de racha y reembolso de hielo al tope.
+  XP/nivel y scope de racha.
