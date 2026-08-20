@@ -12,6 +12,12 @@ Este documento cubre «Gestión de roles y administración» (punto 20 del PDF d
 
 La autoridad actual de membresía sigue siendo `Household.members` durante TD-001; `HouseholdMember` es un espejo. La implementación deberá usar la autoridad vigente cuando se ejecute.
 
+## Decisiones aprobadas
+
+1. **El admin saliente permanece en el hogar como miembro regular.** Transferir la administración transfiere responsabilidad, no pertenencia: el miembro elegido pasa a `admin` y quien transfiere pasa a `member` en la misma operación transaccional.
+2. **Cuando se va el último miembro, el hogar se destruye tras una confirmación explícita.** La eliminación alcanza los recursos ligados al hogar y es coherente con PDR-017: el XP personal es portable, pero el XP y los desbloqueos propios del hogar terminan con el hogar.
+3. **El creador no tiene privilegios especiales.** `createdBy` conserva valor histórico; crear el hogar solo convierte a esa persona en su primer admin. Después se aplican las mismas transiciones y permisos que a cualquier otro admin.
+
 ## 1. Estado actual
 
 ### Roles y verificación
@@ -41,7 +47,7 @@ La autoridad actual de membresía sigue siendo `Household.members` durante TD-00
 
 - Solo un admin puede promover un miembro o degradar otro admin.
 - Un miembro mantiene los permisos cooperativos actuales, pero no gestiona roles, expulsiones, papelera ni acciones administrativas futuras.
-- Ser `createdBy` no concede permisos adicionales por sí solo. **Pregunta abierta:** confirmar si el dueño quiere protección especial para el creador.
+- Ser `createdBy` no concede permisos adicionales: el creador es únicamente el primer admin.
 - El servidor valida actor, objetivo, transición y último admin. La UI solo presenta acciones.
 
 Contrato HTTP de diseño:
@@ -65,20 +71,14 @@ Proponer `household:member_role_changed` con `{ householdId, userId, previousRol
 4. El objetivo pasa a admin antes de modificar al actor.
 5. Se devuelve y emite solo el estado confirmado.
 
-**Pregunta abierta — admin saliente:** el prompt contempla dos desenlaces y no fija uno:
-
-- A: se degrada a miembro y permanece.
-- B: sale después de transferir, reutilizando la limpieza de asignaciones de TD-018.
-
-No deben ocultarse tras una acción ambigua. Si se aprueban ambos, la UI ofrecerá «Transferir y seguir como miembro» y «Transferir y salir» por separado.
-
-**Pregunta abierta:** si ya existen varios admins, ¿transferir degrada siempre al actor o solo promueve al objetivo?
+El admin saliente se degrada siempre a `member` y permanece en el hogar, también cuando ya existían otros admins. La transferencia representa el relevo explícito de responsabilidad; no elimina la membresía ni ejecuta la limpieza de TD-018.
 
 ## 4. Protección contra cero administradores
 
 Invariante: todo hogar persistente tiene al menos un admin.
 
-- Degradar, expulsar o sacar al último admin se rechaza hasta promover/transferir a otra persona.
+- Degradar o expulsar al último admin se rechaza hasta promover a otra persona.
+- Transferir administración promueve al objetivo y degrada al admin saliente dentro de la misma transacción; nunca existe un estado intermedio sin admin. Si el objetivo dejó de ser miembro o la promoción no puede confirmarse, no se degrada al saliente.
 - Contar admins y escribir ocurre en la misma transacción sobre la autoridad vigente.
 - Durante TD-001 se mantiene el contrato de escritura dual; después del cutover manda `HouseholdMember`.
 - Error API propuesto: `El hogar debe conservar al menos un administrador`.
@@ -91,17 +91,11 @@ Invariante: todo hogar persistente tiene al menos un admin.
 - Cuerpo: «¿Quieres expulsar a {nombre}? Dejará de ver este hogar y sus tareas pendientes se desasignarán.»
 - Botones: «Cancelar» / «Expulsar»
 
-### Transferir y permanecer (solo si se aprueba A)
+### Transferir administración
 
 - Título: «Transferir administración»
 - Cuerpo: «¿Quieres convertir a {nombre} en administrador? Tú seguirás en el hogar como miembro.»
 - Botones: «Cancelar» / «Transferir»
-
-### Transferir y salir (solo si se aprueba B)
-
-- Título: «Transferir administración y salir»
-- Cuerpo: «{nombre} pasará a administrar el hogar y tú saldrás. Perderás el acceso y tus tareas pendientes se desasignarán.»
-- Botones: «Cancelar» / «Transferir y salir»
 
 ### Degradar admin
 
@@ -115,6 +109,12 @@ Invariante: todo hogar persistente tiene al menos un admin.
 - Cuerpo: «No puedes dejar el hogar sin administrador. Promueve o transfiere la administración a otro miembro primero.»
 - Botón: «Entendido»
 
+### Destruir el hogar al salir el último miembro
+
+- Título: «Eliminar hogar»
+- Cuerpo: «Eres la última persona de este hogar. Si sales, el hogar y su progreso compartido se eliminarán definitivamente. Tu XP personal se conservará.»
+- Botones: «Cancelar» / «Eliminar hogar y salir»
+
 ## 6. Casos borde
 
 | Caso | Resultado |
@@ -124,12 +124,12 @@ Invariante: todo hogar persistente tiene al menos un admin.
 | Dos admins se degradan/expulsan concurrentemente | Solo confirma lo que preserve al menos uno |
 | Objetivo sale durante la confirmación | Rechazar y refrescar miembros |
 | Transición repetida | No duplicar evento; **pregunta abierta** sobre respuesta exacta |
-| Último miembro | **Pregunta abierta:** destruir, archivar o bloquear salida |
+| Último miembro | Confirmación explícita y destrucción del hogar; se conserva el XP personal y termina el progreso ligado al hogar |
 | Admin sale existiendo otro | La invariante permite salir; **pregunta abierta:** exigir transferencia explícita igualmente |
-| Creador degradado/expulsado | `createdBy` queda histórico; **pregunta abierta:** si se permite |
+| Creador degradado/expulsado | Se permite bajo las mismas reglas que para cualquier admin; `createdBy` queda histórico |
 | Rol cambia durante otra petición | Cada petición reautoriza en servidor con el rol vigente |
 
-Destruir el último hogar afecta tareas, compras, mascota, economía, notificaciones, caché y sockets. Queda fuera hasta decisión expresa.
+La destrucción debe ser server-authoritative y abarcar tareas, compras, mascota, economía de hogar, membresías, notificaciones, caché y sockets. El orden, la atomicidad y la política de conservación legal/operativa de esos datos se detallarán antes de implementar; la decisión de producto de destruir el hogar ya está cerrada.
 
 ## 7. Tests nuevos y commits atómicos futuros
 
@@ -137,10 +137,12 @@ Destruir el último hogar afecta tareas, compras, mascota, economía, notificaci
 
 - Promoción/degradación por admin y 403 para miembro.
 - Objetivo ajeno, rol inválido y hogar inexistente.
-- Bloqueo del último admin en cambio de rol, expulsión y salida.
+- Bloqueo del último admin en degradación y expulsión; transferencia atómica sin estado intermedio sin admin.
 - Carrera entre dos operaciones: nunca cero admins.
 - Consistencia con TD-001 y un único evento tras commit.
-- Cada desenlace de transferencia aprobado; limpieza TD-018 si termina en salida.
+- Transferencia degrada al saliente, lo mantiene como miembro y no ejecuta la limpieza TD-018.
+- Salida del último miembro exige confirmación, destruye el hogar y conserva el XP personal.
+- El creador sigue exactamente la misma matriz de permisos y transiciones.
 
 ### Frontend
 
@@ -165,8 +167,8 @@ Este PR solo contiene el commit documental solicitado.
 - Divergencia entre membresía embebida y `HouseholdMember` durante TD-001.
 - Carreras con cero admins o autorización con rol obsoleto.
 - Cliente con permisos cacheados tras realtime.
-- Transferencia destructiva sin explicar si el actor sale.
-- Recursos huérfanos si se decide implícitamente el último miembro.
+- Borrado parcial al destruir el hogar, dejando recursos o salas huérfanos.
+- Pérdida accidental de progreso compartido si la confirmación no explica que la destrucción es definitiva.
 
 ### Rollback
 
@@ -183,20 +185,18 @@ Este PR solo contiene el commit documental solicitado.
 4. Ejecutar dos operaciones cruzadas con barrera de red.
 5. Expulsar a alguien con tareas pendientes y verificar TD-018.
 6. Cortar red antes/después de confirmar; no duplicar transición/evento.
+7. Transferir y comprobar que el saliente sigue en el hogar como miembro regular.
+8. Salir como último miembro: cancelar conserva todo; confirmar destruye el hogar, conserva XP personal y corta acceso/realtime.
 
 ## 9. Preguntas abiertas
 
-- ¿El admin saliente permanece o sale? ¿Se ofrecen ambas acciones?
-- ¿Transferir degrada al actor cuando ya hay varios admins?
-- ¿El creador conserva atribuciones especiales?
-- ¿Último miembro: destruir, archivar o bloquear?
 - ¿Auditoría persistente o logs?
 - ¿Semántica exacta de repetir un PATCH ya aplicado?
 
 ## Proposed Improvements
 
 - Registrar aparte el gap de salida voluntaria ya reconocido en `ROADMAP.md`.
-- Diseñar destrucción/archivo del hogar como trabajo transversal separado.
+- Especificar la eliminación transaccional y la retención de cada recurso antes de implementar la destrucción aprobada del hogar.
 - Evolucionar a capacidades declarativas para no dispersar comparaciones de rol.
 - Coordinar implementación con el cutover de TD-001.
 - Evaluar auditoría persistente para disputas administrativas.
