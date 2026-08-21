@@ -1,6 +1,6 @@
 import mongoose, { ClientSession, Types } from 'mongoose';
 import { HouseholdModel, IHousehold } from '../models/Household';
-import { HouseholdMemberModel } from '../models/HouseholdMember';
+import { HouseholdMemberModel, IHouseholdMember } from '../models/HouseholdMember';
 import { UserModel } from '../models/User';
 import { TaskModel } from '../models/Task';
 import { AppError } from '../middleware/error.middleware';
@@ -33,19 +33,51 @@ async function generateUniqueInviteCode(): Promise<string> {
 }
 
 /**
- * Shape a household (with populated member users) for API responses.
+ * Load a household's memberships from the authoritative collection, with the
+ * user refs populated for serialization (TD-001 phase 3).
+ *
+ * Sorted by `joinedAt` so the response preserves the order the embedded array
+ * gave for free — creator first, then joins in sequence. Without it the list
+ * would come back in whatever order the index happened to yield, which is a
+ * visible change to every member list in the app even though no field changed.
+ * `_id` breaks ties: two members backfilled with the same timestamp must still
+ * come out in a stable order across requests.
  */
-export function serializeHousehold(household: IHousehold): Record<string, unknown> {
+async function loadMembers(householdId: Types.ObjectId | string): Promise<IHouseholdMember[]> {
+  return HouseholdMemberModel.find({ householdId })
+    .populate('userId', 'name email avatarUrl')
+    .sort({ joinedAt: 1, _id: 1 })
+    .exec();
+}
+
+/**
+ * Shape a household for API responses.
+ *
+ * TD-001 phase 3: the `members` array is composed from the HouseholdMember
+ * collection instead of the embedded array, and the shape is deliberately
+ * unchanged — same key, same three fields, same nesting. That is what keeps
+ * the Flutter client a complete no-op through this migration: an app already
+ * in the stores cannot be rolled back the way a backend deploy can, so a
+ * database migration that changes the wire contract would strand every
+ * installed copy (see "Deployment order" in CLAUDE.md).
+ *
+ * Async now, because the members no longer arrive inside the household
+ * document. The extra query replaces the dual-read verification that ran on
+ * every household-scoped request until the cutover, so the net cost is flat.
+ */
+export async function serializeHousehold(household: IHousehold): Promise<Record<string, unknown>> {
+  const members = await loadMembers(household._id);
+
   return {
     id: household._id.toString(),
     name: household.name,
     inviteCode: household.inviteCode,
     createdBy: household.createdBy.toString(),
     createdAt: household.createdAt,
-    members: household.members.map((m) => {
+    members: members.map((m) => {
       // A non-populated ref is an ObjectId; anything else is a populated user.
-      const isPopulated = !(m.user instanceof Types.ObjectId);
-      const populated = m.user as unknown as {
+      const isPopulated = !(m.userId instanceof Types.ObjectId);
+      const populated = m.userId as unknown as {
         _id?: Types.ObjectId;
         name?: string;
         email?: string;
@@ -59,7 +91,7 @@ export function serializeHousehold(household: IHousehold): Record<string, unknow
               email: populated.email,
               avatarUrl: populated.avatarUrl,
             }
-          : { id: m.user.toString() },
+          : { id: m.userId.toString() },
         role: m.role,
         joinedAt: m.joinedAt,
       };
@@ -121,10 +153,11 @@ async function mirrorMemberAdded(
  * two places to keep in sync.
  */
 export async function getHousehold(householdId: string): Promise<IHousehold> {
-  const household = await HouseholdModel.findById(householdId).populate(
-    'members.user',
-    'name email avatarUrl',
-  );
+  // No populate since the cutover: the members it used to hydrate are read
+  // from the HouseholdMember collection by serializeHousehold. Populating the
+  // embedded array here would fetch the same users a second time to build a
+  // list nobody reads.
+  const household = await HouseholdModel.findById(householdId);
   if (!household) {
     throw new AppError('Household not found', 404);
   }
@@ -140,16 +173,33 @@ export async function joinHousehold(userId: string, inviteCode: string): Promise
     throw new AppError('Invalid invite code', 404);
   }
 
-  const alreadyMember = household.members.some((m) => m.user.toString() === userId);
+  // TD-001 phase 3: idempotency is decided by the authority, the collection.
+  // Reading it from the embedded array would mean a join could be accepted or
+  // rejected on the strength of the copy that is now only a rollback net.
+  const alreadyMember = await HouseholdMemberModel.exists({
+    householdId: household._id,
+    userId: new Types.ObjectId(userId),
+  });
+
   if (!alreadyMember) {
-    household.members.push({
-      user: new Types.ObjectId(userId),
-      role: 'member',
-      joinedAt: new Date(),
-    });
-    await household.save();
+    const joinedAt = new Date();
+
+    // The embedded write is still made — it is the rollback net until phase 4
+    // — but guarded by its own presence check rather than by `alreadyMember`.
+    // The two sources are in step today; if they ever were not, driving this
+    // push from the collection's answer alone could append a duplicate to the
+    // array, corrupting the very copy kept for rolling back.
+    if (!household.members.some((m) => m.user.toString() === userId)) {
+      household.members.push({
+        user: new Types.ObjectId(userId),
+        role: 'member',
+        joinedAt,
+      });
+      await household.save();
+    }
+
     await UserModel.findByIdAndUpdate(userId, { $addToSet: { households: household._id } });
-    await mirrorMemberAdded(household._id, userId, 'member', new Date());
+    await mirrorMemberAdded(household._id, userId, 'member', joinedAt);
 
     emitToHousehold(household._id.toString(), 'household:member_joined', {
       householdId: household._id.toString(),
@@ -157,7 +207,6 @@ export async function joinHousehold(userId: string, inviteCode: string): Promise
     });
   }
 
-  await household.populate('members.user', 'name email avatarUrl');
   return household;
 }
 
@@ -229,15 +278,29 @@ async function removeMemberInTransaction(
     throw new AppError('Household not found', 404);
   }
 
-  const target = household.members.find((m) => m.user.toString() === targetUserId);
+  // TD-001 phase 3: the target's membership and their role come from the
+  // collection, which is the authority. Hard Rule 9 is the last place that
+  // should be deciding from the copy kept only for rollback.
+  const target = await HouseholdMemberModel.findOne({
+    householdId: household._id,
+    userId: new Types.ObjectId(targetUserId),
+  }).session(session);
   if (!target) {
     throw new AppError('Target user is not a member of this household', 404);
   }
 
   // Prevent removing the last admin (protects both self-removal and others).
-  // Roles are read from the document loaded in THIS transaction, so a
-  // concurrent removal cannot commit between the count and the write.
-  const adminCount = household.members.filter((m) => m.role === 'admin').length;
+  // This used to be a filter over an array already loaded in the household
+  // document, where checking and writing touched one document and could not
+  // interleave. It is now a count over a second collection, which is exactly
+  // why the whole function runs inside a transaction (see removeMember): the
+  // count and the delete must be one atomic unit, or two admins removing each
+  // other at the same time could both pass the check and leave the household
+  // with no admin at all.
+  const adminCount = await HouseholdMemberModel.countDocuments({
+    householdId: household._id,
+    role: 'admin',
+  }).session(session);
   if (target.role === 'admin' && adminCount <= 1) {
     throw new AppError('Cannot remove the last admin of the household', 400);
   }
@@ -324,6 +387,5 @@ export async function removeMember(
     logger.error('Error unassigning departed member from tasks', (err as Error).message);
   }
 
-  await household.populate('members.user', 'name email avatarUrl');
   return household;
 }

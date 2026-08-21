@@ -3,9 +3,7 @@ import { HouseholdModel } from '../models/Household';
 import { HouseholdMemberModel } from '../models/HouseholdMember';
 import { AppError } from './error.middleware';
 import { asyncHandler } from '../utils/asyncHandler';
-import { AuthenticatedRequest, RequesterMembership } from '../types';
-import { captureSecurityWarning } from '../utils/sentry';
-import { logger } from '../utils/logger';
+import { AuthenticatedRequest } from '../types';
 
 /**
  * Household membership guard for every household-scoped HTTP route.
@@ -23,64 +21,14 @@ import { logger } from '../utils/logger';
  *
  * Responds 404 when the household does not exist and 403 when the caller is
  * not one of its members.
- */
-/**
- * Compare the HouseholdMember collection against the embedded array that just
- * answered this request (TD-001, phase 2).
  *
- * This is the measurement that decides when the cutover is safe: the criterion
- * agreed for advancing is a number — zero divergences under real traffic — not
- * a date. Every mismatch is reported with the `td001_dual_read` category so a
- * Sentry search on that tag gives the count directly, and mirrored to the log
- * so it is also visible in Railway without opening Sentry.
- *
- * Never throws and never changes the outcome: a fault in the verification path
- * must not turn a working request into a 500. Nothing here is the authority
- * yet.
+ * TD-001 phase 3 (cutover): membership is now read from the HouseholdMember
+ * collection, which is the authority. The embedded `Household.members` array
+ * is no longer read here — it is still written, as the rollback net, until
+ * phase 4. The dual-read verification that measured the two against each
+ * other through the observation window is gone with it: there is no longer a
+ * second opinion to compare against.
  */
-async function verifyMembershipMirror(
-  householdId: string,
-  userId: string,
-  fromEmbedded: RequesterMembership,
-): Promise<void> {
-  try {
-    const rows = await HouseholdMemberModel.find({ householdId })
-      .select('userId role')
-      .lean();
-
-    const mirrored = rows.find((r) => r.userId.toString() === userId);
-    const differences: string[] = [];
-
-    if (!mirrored) {
-      differences.push('caller missing from collection');
-    } else if (mirrored.role !== fromEmbedded.role) {
-      differences.push(`role embedded=${fromEmbedded.role} collection=${mirrored.role}`);
-    }
-
-    const embeddedIds = [...fromEmbedded.memberIds].sort();
-    const collectionIds = rows.map((r) => r.userId.toString()).sort();
-    if (embeddedIds.join(',') !== collectionIds.join(',')) {
-      differences.push(
-        `member set embedded=[${embeddedIds.join('|')}] collection=[${collectionIds.join('|')}]`,
-      );
-    }
-
-    if (differences.length === 0) return;
-
-    const message = `TD-001 dual-read divergence: ${differences.join('; ')}`;
-    logger.warn(message, { householdId, userId });
-    captureSecurityWarning(message, {
-      category: 'td001_dual_read',
-      householdId,
-      userId,
-      differences,
-    });
-  } catch (err) {
-    // A broken verification is a lost sample, not a broken request.
-    logger.error('TD-001 dual-read verification failed', (err as Error).message);
-  }
-}
-
 export const requireMembership = asyncHandler(
   async (req: AuthenticatedRequest, _res: Response, next: NextFunction): Promise<void> => {
     const householdId = req.params.householdId;
@@ -91,31 +39,36 @@ export const requireMembership = asyncHandler(
       throw new AppError('Authentication required', 401);
     }
 
-    const household = await HouseholdModel.findById(householdId).select('members').lean();
-    if (!household) {
-      throw new AppError('Household not found', 404);
-    }
+    // One indexed query on `{householdId: 1, userId: 1}` answers both questions
+    // this middleware exists to answer: is the caller a member, and who else
+    // is. Before the cutover this cost two round trips (the household document
+    // plus the verification read); the hot path is now a single one.
+    const memberships = await HouseholdMemberModel.find({ householdId })
+      .select('userId role joinedAt')
+      .lean();
 
-    const member = household.members.find((m) => m.user.toString() === userId);
+    const member = memberships.find((m) => m.userId.toString() === userId);
+
     if (!member) {
+      // Only the failure path pays for telling 404 from 403. An empty result
+      // is ambiguous on its own — a household that does not exist and one the
+      // caller does not belong to both produce it — and answering 403 for a
+      // missing household would leak nothing but would break the contract
+      // households.test.ts pins. Members, the overwhelming majority, never
+      // reach this branch.
+      const exists = await HouseholdModel.exists({ _id: householdId });
+      if (!exists) {
+        throw new AppError('Household not found', 404);
+      }
       throw new AppError('You are not a member of this household', 403);
     }
 
     req.member = {
       role: member.role,
       joinedAt: member.joinedAt,
-      // Free: the household document is already in hand.
-      memberIds: household.members.map((m) => m.user.toString()),
+      // Free: the whole membership list is already in hand.
+      memberIds: memberships.map((m) => m.userId.toString()),
     };
-
-    // TD-001 phase 2: verify the new collection agrees, WITHOUT letting it
-    // affect the answer. Deliberately awaited rather than fired and forgotten,
-    // so a divergence is reported before the request completes and the sample
-    // is not lost when the process recycles — this middleware sees every
-    // household-scoped request, which is exactly why it is the measurement
-    // point. Remove this call at the cutover, when the collection becomes the
-    // authority and there is nothing left to compare against.
-    await verifyMembershipMirror(householdId, userId, req.member);
 
     next();
   },

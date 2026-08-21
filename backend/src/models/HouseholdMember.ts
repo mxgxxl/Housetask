@@ -11,10 +11,12 @@ import { jsonSchemaOptions } from '../utils/toJSON';
  * rewrite the whole household; it also duplicated the relationship, since
  * `User.households` tracks the same edge from the other side.
  *
- * Nothing reads this collection yet — see docs/TD-001-DESIGN.md for the
- * five-phase migration (dual write → backfill → dual read with verification →
- * cutover → cleanup). Until the cutover, the embedded array stays the
- * authority and this collection is its mirror.
+ * This collection IS the authority since the phase-3 cutover: `requireMembership`,
+ * `serializeHousehold` and the stats service all read it. The embedded array is
+ * still written on every membership change, but only as the rollback net —
+ * nothing reads it. See docs/TD-001-DESIGN.md for the five-phase migration
+ * (dual write → backfill → dual read with verification → cutover → cleanup);
+ * phase 4 stops writing the array and drops it from the schema.
  */
 export interface IHouseholdMember extends Document {
   _id: Types.ObjectId;

@@ -25,7 +25,7 @@ function parsePeriod(raw: unknown): StatsPeriod {
 export async function create(req: AuthenticatedRequest, res: Response): Promise<void> {
   const { name } = req.body;
   const household = await householdService.createHousehold(req.user!.userId, name);
-  sendSuccess(res, householdService.serializeHousehold(household), 201);
+  sendSuccess(res, await householdService.serializeHousehold(household), 201);
 }
 
 /**
@@ -34,7 +34,7 @@ export async function create(req: AuthenticatedRequest, res: Response): Promise<
  */
 export async function getById(req: AuthenticatedRequest, res: Response): Promise<void> {
   const household = await householdService.getHousehold(req.params.householdId);
-  sendSuccess(res, householdService.serializeHousehold(household));
+  sendSuccess(res, await householdService.serializeHousehold(household));
 }
 
 /**
@@ -45,7 +45,7 @@ export async function getById(req: AuthenticatedRequest, res: Response): Promise
 export async function join(req: AuthenticatedRequest, res: Response): Promise<void> {
   const { inviteCode } = req.body;
   const household = await householdService.joinHousehold(req.user!.userId, inviteCode);
-  sendSuccess(res, householdService.serializeHousehold(household));
+  sendSuccess(res, await householdService.serializeHousehold(household));
 }
 
 /**
@@ -54,7 +54,7 @@ export async function join(req: AuthenticatedRequest, res: Response): Promise<vo
  */
 export async function listMembers(req: AuthenticatedRequest, res: Response): Promise<void> {
   const household = await householdService.getHousehold(req.params.householdId);
-  sendSuccess(res, householdService.serializeHousehold(household).members);
+  sendSuccess(res, (await householdService.serializeHousehold(household)).members);
 }
 
 /**
@@ -67,7 +67,7 @@ export async function removeMember(req: AuthenticatedRequest, res: Response): Pr
     req.member!,
     req.params.userId,
   );
-  sendSuccess(res, householdService.serializeHousehold(household));
+  sendSuccess(res, await householdService.serializeHousehold(household));
 }
 
 /**

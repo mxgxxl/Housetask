@@ -1,5 +1,6 @@
 import { Types, FilterQuery } from 'mongoose';
 import { HouseholdModel } from '../models/Household';
+import { HouseholdMemberModel } from '../models/HouseholdMember';
 import { TaskModel, ITask } from '../models/Task';
 import { AppError } from '../middleware/error.middleware';
 
@@ -37,10 +38,17 @@ export async function getHouseholdStats(
   householdId: string,
   period: StatsPeriod,
 ): Promise<HouseholdStats> {
-  const household = await HouseholdModel.findById(householdId).populate(
-    'members.user',
-    'name avatarUrl',
-  );
+  // TD-001 phase 3: members come from the authoritative collection, not from
+  // the embedded array. The household is still read, but only to keep the 404
+  // — a household with zero memberships and one that does not exist would
+  // otherwise be indistinguishable here.
+  const [household, members] = await Promise.all([
+    HouseholdModel.exists({ _id: householdId }),
+    HouseholdMemberModel.find({ householdId })
+      .populate('userId', 'name avatarUrl')
+      .sort({ joinedAt: 1, _id: 1 })
+      .exec(),
+  ]);
   if (!household) {
     throw new AppError('Household not found', 404);
   }
@@ -76,14 +84,14 @@ export async function getHouseholdStats(
   const createdByMember = new Map(createdAgg.map((row) => [row._id.toString(), row.count]));
   const completedByMember = new Map(completedAgg.map((row) => [row._id.toString(), row.count]));
 
-  const memberStats: MemberStat[] = household.members.map((m) => {
-    const isPopulated = !(m.user instanceof Types.ObjectId);
-    const populated = m.user as unknown as {
+  const memberStats: MemberStat[] = members.map((m) => {
+    const isPopulated = !(m.userId instanceof Types.ObjectId);
+    const populated = m.userId as unknown as {
       _id: Types.ObjectId;
       name?: string;
       avatarUrl?: string;
     };
-    const userId = isPopulated ? populated._id.toString() : m.user.toString();
+    const userId = isPopulated ? populated._id.toString() : m.userId.toString();
     return {
       userId,
       userName: isPopulated ? (populated.name ?? 'Former member') : 'Former member',
