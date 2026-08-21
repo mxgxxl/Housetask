@@ -446,7 +446,7 @@ The full registry (~47 entries, all history) lives in [Full Technical Debt Regis
 
 | ID | Description | Severity | Status |
 |----|-------------|----------|--------|
-| TD-001 | Members embedded in Household document | High | En curso (fases 0-1 completas, 2026-08-18) |
+| TD-001 | Members embedded in Household document | High | En curso (fases 0-2 desplegadas; ventana cerrada el 2026-08-21, cutover autorizado y pendiente de ejecución) |
 | TD-007 | No optimistic updates in frontend | Medium | **Partially resolved (2026-08-18): updates y deletes optimistic; creates aplazados al round de TD-057** |
 | TD-010 | No database backups | Medium | Planned (Phase 3) |
 | TD-064 | Paginación del timeline: sesiones keyset y caché normalizada en lugar de refetch de ventanas crecientes | High | Open (2026-08-20; diseño de paginación pendiente de implementación) |

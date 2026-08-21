@@ -40,14 +40,11 @@
 ## Siguiente tarea
 
 **1. Cutover de TD-001.** La fase 2 (lectura dual) se desplegó el 2026-08-18
-(commit `631031d`). La ventana de observación cerró el 2026-08-20 con cero
-divergencias; el siguiente paso técnico es el cutover.
+(commit `631031d`). **La ventana de observación se cerró el 2026-08-21 con cero
+divergencias**; el siguiente paso técnico es el cutover.
 
 - **Criterio:** cero divergencias en Sentry (categoría `td001_dual_read`) o en
   los logs de Railway (`dual-read divergence`).
-- **Cierre de la ventana:** ejecutar
-  `DELETE /households/6a84e3ff6f8391134ebe9dde/members/6a84e33d6f8391134ebe9dd0`
-  —la muestra de escritura que quedó reservada— y hacer el grep de logs.
 - **Una sola divergencia = investigar antes de seguir.** No es un umbral
   estadístico: significa que la escritura dual tiene un hueco, y el cutover
   haría autoridad a una colección incompleta.
@@ -55,6 +52,51 @@ divergencias; el siguiente paso técnico es el cutover.
 El 2026-08-18 se generaron 30 lecturas household-scoped con
 `scripts/td001-sample-traffic.ts` sobre un hogar dedicado ("Muestras TD-001"),
 para que la ventana no dependa de que alguien abra la app.
+
+### Cierre de la ventana — ejecutado el 2026-08-21
+
+Comando de registro, sobre el hogar dedicado y las dos cuentas de muestra:
+
+```
+DELETE /households/6a84e3ff6f8391134ebe9dde/members/6a84e33d6f8391134ebe9dd0
+```
+
+Enviado a las **08:59:57Z** como `td001-sample-1@homesync.test` (admin), con
+respuesta **200**. Se rodeó de lecturas household-scoped —cuatro antes y cuatro
+después— porque el punto de medición vive en `requireMembership`: un hueco
+abierto por la escritura solo se ve en las lecturas **posteriores** a ella.
+Las 14 peticiones respondieron 2xx salvo el 403 final, que es la comprobación
+buscada (el miembro expulsado ya no puede leer el hogar). `railway logs -s
+Housetask` no contiene ni una línea `WARN`/`ERROR`/`divergence` en todo el
+despliegue vivo (arrancado el 2026-08-20T22:40:46Z): **cero divergencias**.
+
+**Dos hallazgos que corrigen suposiciones anteriores, y conviene no repetir:**
+
+1. **La muestra de escritura reservada ya no existía.** `td001-sample-traffic.ts`
+   dejó a propósito al segundo usuario dentro del hogar para consumirlo al
+   cerrar la ventana, pero el 2026-08-21 ese miembro no estaba: ni en el array
+   embebido, ni en `User.households`, ni en la colección espejo —las tres
+   representaciones coincidían—. No se pudo determinar si fue un `DELETE`
+   anterior no registrado o un `join` que nunca ocurrió. Para no cerrar la
+   ventana sobre una ambigüedad, la muestra se **regeneró y se consumió**:
+   `join` (escritura dual vía `mirrorMemberAdded`) → lecturas → `DELETE`
+   (escritura dual transaccional vía `removeMemberInTransaction`) → lecturas.
+   El ciclo se deshace a sí mismo: el hogar queda como estaba, con un solo
+   miembro. Ejercita **ambos** caminos de escritura dual, no solo el borrado.
+
+2. **El silencio en los logs de Railway NO es evidencia de que algo no se
+   ejecutara.** La API no tiene logging de peticiones (no hay morgan ni
+   equivalente en `app.ts`) y `errorHandler` solo registra los 5xx: un 4xx no
+   deja rastro. Un `removeMember` correcto sobre un hogar sin tareas pendientes
+   escribe **cero líneas** de log. La conclusión previa de "Railway no muestra
+   evidencia del DELETE, luego no se ejecutó" no se sostiene. Lo que sí es
+   concluyente es lo contrario: `logger.warn` va a `console.warn` sin filtro en
+   producción (`utils/logger.ts` solo silencia `debug`), así que la **ausencia**
+   de `TD-001 dual-read divergence` sí prueba que no hubo divergencia.
+
+**Pendiente de verificación por el dueño (sin acceso desde el agente):** la
+búsqueda en Sentry por la categoría `td001_dual_read`. Es el segundo canal
+independiente del criterio y solo puede confirmarlo quien tenga el dashboard.
 
 **2. Nada abierto que compita con la ventana.** Cerrados TD-061, TD-062 y
 TD-063, no queda ningún TD abierto que toque el ciclo de sesión. Lo que hay
