@@ -4,6 +4,7 @@ import request from 'supertest';
 
 import { HouseholdModel } from '../models/Household';
 import { HouseholdMemberModel } from '../models/HouseholdMember';
+import { UserModel } from '../models/User';
 import { buildTestApp } from './setup';
 import {
   authHeader,
@@ -14,21 +15,26 @@ import {
 } from './helpers';
 
 /**
- * Phase 3 of TD-001: the HouseholdMember collection becomes the authority for
- * every read, while the embedded `Household.members` array keeps being written
- * as the rollback net.
+ * TD-001 phases 3 and 4: the HouseholdMember collection is the authority for
+ * every read (phase 3, commit 5) and now also the ONLY thing written — the
+ * embedded `Household.members` array is no longer maintained (phase 4,
+ * commit 6).
  *
- * The tests that matter here are the ones with the polarity DELIBERATELY
- * flipped against the phase-2 suite they replace: there, a disagreement had to
- * be reported without changing the answer; here, a disagreement has to change
- * the answer, because the collection is now what counts. A revert of any read
- * back to the embedded array fails these and only these — the rest of the
- * suite cannot see the difference, which is the whole point of the migration.
+ * The reads here have the polarity DELIBERATELY flipped against the phase-2
+ * suite they replaced: there, a disagreement had to be reported without
+ * changing the answer; here, a disagreement changes the answer, because the
+ * collection is what counts. A revert of any read back to the embedded array
+ * fails these and only these — the rest of the suite cannot see the
+ * difference, which is the whole point of the migration.
+ *
+ * The write side is pinned by the `phase 4` block at the bottom: the embedded
+ * array must stay EMPTY. Those are the tests that fail if the dual write is
+ * ever reintroduced by a bad merge.
  *
  * The other half of the contract is covered by NOT being here: households.test.ts
- * exercises the same endpoints through the public API and passes unmodified.
- * If it had needed edits, the response shape would have changed, which is what
- * this phase promises never to do.
+ * exercises the same endpoints through the public API and passes unmodified
+ * through both commits. If it had needed edits, the response shape would have
+ * changed, which is what this migration promises never to do.
  */
 let app: Server;
 
@@ -36,7 +42,7 @@ beforeAll(async () => {
   app = await buildTestApp();
 });
 
-/** Drop a member's row from the authority, leaving the embedded array intact. */
+/** Drop a member's row from the authority, simulating a membership that is gone. */
 async function unmirror(householdId: string, userId: string): Promise<void> {
   await HouseholdMemberModel.deleteOne({
     householdId: new Types.ObjectId(householdId),
@@ -44,7 +50,7 @@ async function unmirror(householdId: string, userId: string): Promise<void> {
   });
 }
 
-/** The embedded array's view, which nothing should be reading any more. */
+/** The vestigial array: nothing reads it, and since commit 6 nothing writes it. */
 async function embeddedMemberIds(householdId: string): Promise<string[]> {
   const household = await HouseholdModel.findById(householdId).select('members').lean();
   return (household?.members ?? []).map((m) => m.user.toString());
@@ -52,22 +58,20 @@ async function embeddedMemberIds(householdId: string): Promise<string[]> {
 
 describe('TD-001 cutover: the collection is the authority', () => {
   describe('requireMembership', () => {
-    it('should refuse a caller the collection does not know, even if the embedded array does',
-      async () => {
-        const user = await createTestUser(app);
-        const household = await createTestHousehold(app, user);
+    it('should refuse a caller whose membership row is gone', async () => {
+      const user = await createTestUser(app);
+      const household = await createTestHousehold(app, user);
 
-        await unmirror(household.id, user.id);
+      await unmirror(household.id, user.id);
 
-        const res = await request(app)
-          .get(`/api/households/${household.id}`)
-          .set(authHeader(user.accessToken));
+      const res = await request(app)
+        .get(`/api/households/${household.id}`)
+        .set(authHeader(user.accessToken));
 
-        // Before the cutover this was 200 with a divergence reported.
-        expect(res.status).toBe(403);
-        // The embedded array still says otherwise — proving which side answered.
-        expect(await embeddedMemberIds(household.id)).toContain(user.id);
-      });
+      // Before the cutover this was 200 with a divergence reported: the
+      // embedded array answered and the collection was only compared.
+      expect(res.status).toBe(403);
+    });
 
     it('should still return 403 to a non-member and 404 for a household that does not exist',
       async () => {
@@ -135,7 +139,7 @@ describe('TD-001 cutover: the collection is the authority', () => {
       expect(res.body.data.members[0].role).toBe('admin');
     });
 
-    it('should list members from the collection, not from the embedded array', async () => {
+    it('should list members from the collection', async () => {
       const { admin, member, household } = await createHouseholdWithMember(app);
 
       await unmirror(household.id, member.id);
@@ -146,8 +150,6 @@ describe('TD-001 cutover: the collection is the authority', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.data.map((m: { user: { id: string } }) => m.user.id)).toEqual([admin.id]);
-      // The embedded array disagrees, and is ignored.
-      expect(await embeddedMemberIds(household.id)).toContain(member.id);
     });
 
     it('should order members by joinedAt so the list does not reshuffle', async () => {
@@ -239,9 +241,7 @@ describe('TD-001 cutover: the collection is the authority', () => {
       expect(res.status).toBe(404);
     });
 
-    it('should still remove a member from both sides', async () => {
-      // The dual write is untouched by the cutover: the embedded array stays
-      // in step as the rollback net.
+    it('should remove the membership row and the User.households entry', async () => {
       const { admin, member, household } = await createHouseholdWithMember(app);
 
       const res = await request(app)
@@ -252,35 +252,84 @@ describe('TD-001 cutover: the collection is the authority', () => {
       expect(res.body.data.members.map((m: { user: { id: string } }) => m.user.id)).toEqual([
         admin.id,
       ]);
-      expect(await embeddedMemberIds(household.id)).toEqual([admin.id]);
       expect(
         await HouseholdMemberModel.findOne({
           householdId: new Types.ObjectId(household.id),
           userId: new Types.ObjectId(member.id),
         }),
       ).toBeNull();
+      const user = await UserModel.findById(member.id).select('households').lean();
+      expect((user?.households ?? []).map((h) => h.toString())).not.toContain(household.id);
     });
   });
 
-  describe('join', () => {
-    it('should decide idempotency from the collection and keep both sides in step',
+  describe('phase 4: the embedded array is no longer written', () => {
+    it('should create a household with an empty members array', async () => {
+      const user = await createTestUser(app);
+      const household = await createTestHousehold(app, user);
+
+      expect(await embeddedMemberIds(household.id)).toEqual([]);
+      // ...while the membership itself exists, in the only place that holds it.
+      expect(
+        await HouseholdMemberModel.countDocuments({
+          householdId: new Types.ObjectId(household.id),
+          role: 'admin',
+        }),
+      ).toBe(1);
+    });
+
+    it('should not push to the embedded array when a member joins', async () => {
+      const { household, member } = await createHouseholdWithMember(app);
+
+      expect(await embeddedMemberIds(household.id)).toEqual([]);
+      expect(
+        await HouseholdMemberModel.countDocuments({
+          householdId: new Types.ObjectId(household.id),
+        }),
+      ).toBe(2);
+      const user = await UserModel.findById(member.id).select('households').lean();
+      expect((user?.households ?? []).map((h) => h.toString())).toContain(household.id);
+    });
+
+    it('should touch the household on removal, keeping the serialization point',
       async () => {
-        const admin = await createTestUser(app);
-        const household = await createTestHousehold(app, admin);
-        const joiner = await createTestUser(app);
+        // Not a proof of the race — see household-member-dual-write.test.ts for
+        // why that cannot be demonstrated in-process. This guards the MECHANISM:
+        // concurrent removals used to serialize because both transactions wrote
+        // the household document for the embedded array. Commit 6 removed that
+        // write, so removeMemberInTransaction now touches the household on
+        // purpose. If someone deletes that write as dead code, this fails.
+        const { admin, member, household } = await createHouseholdWithMember(app);
 
-        await joinTestHousehold(app, joiner, household.inviteCode);
-        await joinTestHousehold(app, joiner, household.inviteCode);
+        const before = await HouseholdModel.findById(household.id).select('updatedAt').lean();
+        await new Promise((resolve) => setTimeout(resolve, 10));
 
-        expect(
-          await HouseholdMemberModel.countDocuments({
-            householdId: new Types.ObjectId(household.id),
-            userId: new Types.ObjectId(joiner.id),
-          }),
-        ).toBe(1);
-        expect((await embeddedMemberIds(household.id)).filter((id) => id === joiner.id)).toHaveLength(
-          1,
+        await request(app)
+          .delete(`/api/households/${household.id}/members/${member.id}`)
+          .set(authHeader(admin.accessToken));
+
+        const after = await HouseholdModel.findById(household.id).select('updatedAt').lean();
+        expect(new Date(after!.updatedAt).getTime()).toBeGreaterThan(
+          new Date(before!.updatedAt).getTime(),
         );
       });
+  });
+
+  describe('join', () => {
+    it('should decide idempotency from the collection', async () => {
+      const admin = await createTestUser(app);
+      const household = await createTestHousehold(app, admin);
+      const joiner = await createTestUser(app);
+
+      await joinTestHousehold(app, joiner, household.inviteCode);
+      await joinTestHousehold(app, joiner, household.inviteCode);
+
+      expect(
+        await HouseholdMemberModel.countDocuments({
+          householdId: new Types.ObjectId(household.id),
+          userId: new Types.ObjectId(joiner.id),
+        }),
+      ).toBe(1);
+    });
   });
 });

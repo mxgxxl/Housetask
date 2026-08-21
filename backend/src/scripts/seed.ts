@@ -4,6 +4,7 @@ import { Types } from 'mongoose';
 import { connectDatabase, disconnectDatabase } from '../config/database';
 import { UserModel } from '../models/User';
 import { HouseholdModel } from '../models/Household';
+import { HouseholdMemberModel } from '../models/HouseholdMember';
 import { TaskModel } from '../models/Task';
 import { ShoppingItemModel } from '../models/ShoppingItem';
 import { logger } from '../utils/logger';
@@ -33,11 +34,18 @@ async function seed(): Promise<void> {
   // ---- Clean previous test data (idempotency) ----
   const existing = await UserModel.findOne({ email: TEST_EMAIL });
   if (existing) {
-    const households = await HouseholdModel.find({ 'members.user': existing._id }).select('_id');
-    const householdIds = households.map((h) => h._id);
+    // TD-001 phase 4: membership lives in HouseholdMember, so the households
+    // to clean up are found there. Querying `members.user` would silently miss
+    // everything seeded after the dual write was retired and leak households
+    // on every re-seed.
+    const memberships = await HouseholdMemberModel.find({ userId: existing._id }).select(
+      'householdId',
+    );
+    const householdIds = memberships.map((m) => m.householdId);
     await TaskModel.deleteMany({ householdId: { $in: householdIds } });
     await ShoppingItemModel.deleteMany({ householdId: { $in: householdIds } });
     await HouseholdModel.deleteMany({ _id: { $in: householdIds } });
+    await HouseholdMemberModel.deleteMany({ householdId: { $in: householdIds } });
     await UserModel.deleteOne({ _id: existing._id });
     logger.info('Removed existing test data');
   }
@@ -55,7 +63,15 @@ async function seed(): Promise<void> {
     name: 'Casa de prueba',
     inviteCode: INVITE_CODE,
     createdBy: user._id,
-    members: [{ user: user._id, role: 'admin', joinedAt: new Date() }],
+  });
+  // The membership row IS the membership since TD-001 phase 4. Without it the
+  // seeded household is unreachable: requireMembership reads this collection,
+  // so every request against it would answer 403.
+  await HouseholdMemberModel.create({
+    householdId: household._id,
+    userId: user._id,
+    role: 'admin',
+    joinedAt: new Date(),
   });
   await UserModel.updateOne({ _id: user._id }, { $addToSet: { households: household._id } });
 

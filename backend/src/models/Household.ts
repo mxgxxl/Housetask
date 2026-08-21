@@ -10,7 +10,13 @@ export interface IHouseholdMember {
 
 /**
  * A household groups users together and owns tasks + shopping items.
- * Membership is embedded so we can read members without a second query.
+ *
+ * Membership used to be embedded here (ADR-005). Since TD-001 phase 4 the
+ * `members` array below is VESTIGIAL: nothing reads it and nothing writes it.
+ * It survives one more deploy on purpose — the rows written before the dual
+ * write was retired are the only reverse-migration material a rollback would
+ * have — and commit 7 drops it from the schema and `$unset`s it from every
+ * document. Do not add a reader or a writer to it.
  */
 export interface IHousehold extends Document {
   _id: Types.ObjectId;

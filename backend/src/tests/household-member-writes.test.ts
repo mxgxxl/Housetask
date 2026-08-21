@@ -13,12 +13,15 @@ import {
 } from './helpers';
 
 /**
- * Phase 0 of TD-001: every membership write lands in both the embedded array
- * (still the authority) and the new HouseholdMember collection.
+ * TD-001 membership writes: create, join and remove must each land in the
+ * HouseholdMember collection.
  *
- * Nothing reads the collection yet, so these tests are the only thing standing
- * between a silent mirroring bug and a backfill that quietly papers over it
- * three phases later.
+ * Written for phase 0, when this collection was a mirror of the embedded array
+ * and nothing read it — these tests were the only thing standing between a
+ * silent mirroring bug and a backfill that quietly papered over it. They keep
+ * their value now that the mirror became the authority (commit 5) and the
+ * embedded array stopped being written altogether (commit 6): the assertions
+ * were always about the collection, so what they pin did not move.
  */
 let app: Server;
 
@@ -32,8 +35,8 @@ const mirrored = (householdId: string, userId: string) =>
     userId: new Types.ObjectId(userId),
   });
 
-describe('TD-001 dual write', () => {
-  it('should mirror the creator as admin when a household is created', async () => {
+describe('TD-001 membership writes', () => {
+  it('should record the creator as admin when a household is created', async () => {
     const user = await createTestUser(app);
     const household = await createTestHousehold(app, user);
 
@@ -44,7 +47,7 @@ describe('TD-001 dual write', () => {
     expect(row!.joinedAt).toBeInstanceOf(Date);
   });
 
-  it('should mirror a member who joins by invite code', async () => {
+  it('should record a member who joins by invite code', async () => {
     const admin = await createTestUser(app);
     const household = await createTestHousehold(app, admin);
     const joiner = await createTestUser(app);
@@ -85,7 +88,7 @@ describe('TD-001 dual write', () => {
     expect(row!.role).toBe('admin');
   });
 
-  it('should remove the mirrored row when a member is removed', async () => {
+  it('should delete the membership row when a member is removed', async () => {
     const { admin, member, household } = await createHouseholdWithMember(app);
 
     const res = await request(app)
@@ -149,11 +152,8 @@ describe('TD-001 Hard Rule 9 under a transaction', () => {
         },
         { $set: { role: 'admin' } },
       );
-      const { HouseholdModel } = await import('../models/Household');
-      await HouseholdModel.updateOne(
-        { _id: household.id, 'members.user': new Types.ObjectId(adminB.id) },
-        { $set: { 'members.$.role': 'admin' } },
-      );
+      // The embedded array used to need the same promotion. Since commit 6 it
+      // is neither read nor written, so promoting there would be a no-op.
 
       const [resA, resB] = await Promise.all([
         request(app)

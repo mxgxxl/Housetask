@@ -106,33 +106,36 @@ export async function serializeHousehold(household: IHousehold): Promise<Record<
 export async function createHousehold(userId: string, name: string): Promise<IHousehold> {
   const inviteCode = await generateUniqueInviteCode();
 
+  // TD-001 phase 4: no `members` array. The household document no longer
+  // carries its own membership; the HouseholdMember row created below is the
+  // only record of it.
   const household = await HouseholdModel.create({
     name: sanitizeString(name, MAX_HOUSEHOLD_NAME_LENGTH, 'Household name'),
     inviteCode,
     createdBy: new Types.ObjectId(userId),
-    members: [{ user: new Types.ObjectId(userId), role: 'admin' as Role, joinedAt: new Date() }],
   });
 
   await UserModel.findByIdAndUpdate(userId, { $addToSet: { households: household._id } });
-  await mirrorMemberAdded(household._id, userId, 'admin', household.members[0].joinedAt);
+  await addMembership(household._id, userId, 'admin', new Date());
 
   return household;
 }
 
 /**
- * Mirror a membership into the HouseholdMember collection (TD-001, phase 0).
+ * Record a membership in the HouseholdMember collection (TD-001).
  *
- * The embedded array is still the authority; this keeps the new collection in
- * step so the later phases have something to read. Deliberately an upsert on
- * `{householdId, userId}`: replaying it — after a partial failure, or from the
- * backfill — must converge instead of throwing on the unique index.
+ * Since phase 4 this is not a mirror of anything — it is THE membership write.
+ * The embedded array it used to shadow is no longer maintained.
  *
- * Not transactional, by design: a divergence here is corrected by the
- * idempotent backfill, and wrapping every join in a transaction would buy
- * consistency for a mirror nobody reads yet. `removeMember` is the exception,
- * because its Hard Rule 9 check has to stay atomic (see below).
+ * Deliberately an upsert on `{householdId, userId}`: replaying it — after a
+ * partial failure, or from the backfill — must converge instead of throwing on
+ * the unique index. `$setOnInsert` means a replay never rewrites the role or
+ * the original `joinedAt` of a membership that already exists.
+ *
+ * Not transactional, by design: the only invariant that needs atomicity is
+ * Hard Rule 9, which lives on the removal path (see removeMember).
  */
-async function mirrorMemberAdded(
+async function addMembership(
   householdId: Types.ObjectId,
   userId: string,
   role: Role,
@@ -173,33 +176,17 @@ export async function joinHousehold(userId: string, inviteCode: string): Promise
     throw new AppError('Invalid invite code', 404);
   }
 
-  // TD-001 phase 3: idempotency is decided by the authority, the collection.
-  // Reading it from the embedded array would mean a join could be accepted or
-  // rejected on the strength of the copy that is now only a rollback net.
+  // Idempotency is decided by the authority, the collection.
   const alreadyMember = await HouseholdMemberModel.exists({
     householdId: household._id,
     userId: new Types.ObjectId(userId),
   });
 
   if (!alreadyMember) {
-    const joinedAt = new Date();
-
-    // The embedded write is still made — it is the rollback net until phase 4
-    // — but guarded by its own presence check rather than by `alreadyMember`.
-    // The two sources are in step today; if they ever were not, driving this
-    // push from the collection's answer alone could append a duplicate to the
-    // array, corrupting the very copy kept for rolling back.
-    if (!household.members.some((m) => m.user.toString() === userId)) {
-      household.members.push({
-        user: new Types.ObjectId(userId),
-        role: 'member',
-        joinedAt,
-      });
-      await household.save();
-    }
-
+    // TD-001 phase 4: the embedded array is no longer written. What used to be
+    // a push plus `household.save()` is now just the membership row.
     await UserModel.findByIdAndUpdate(userId, { $addToSet: { households: household._id } });
-    await mirrorMemberAdded(household._id, userId, 'member', joinedAt);
+    await addMembership(household._id, userId, 'member', new Date());
 
     emitToHousehold(household._id.toString(), 'household:member_joined', {
       householdId: household._id.toString(),
@@ -264,25 +251,47 @@ async function unassignDepartedMemberTasks(householdId: string, userId: string):
  * The mutating half of [removeMember], isolated so it can run inside a
  * transaction (and be re-run if the driver retries it).
  *
- * Writes all three sides of the membership: the embedded array (still the
- * authority in this phase), the HouseholdMember mirror, and the denormalized
- * `User.households`.
+ * Since phase 4 it writes two sides, not three: the HouseholdMember row (the
+ * membership itself) and the denormalized `User.households`. The embedded
+ * array is no longer maintained.
  */
 async function removeMemberInTransaction(
   householdId: string,
   targetUserId: string,
   session: ClientSession,
 ): Promise<void> {
-  const household = await HouseholdModel.findById(householdId).session(session);
-  if (!household) {
+  // Existence check and serialization point in ONE write, and the write is
+  // deliberate — this is the subtlest consequence of dropping the dual write.
+  //
+  // Hard Rule 9 is a count followed by a delete on two DIFFERENT documents, so
+  // transaction isolation alone does not serialize two admins removing each
+  // other at the same time: with snapshot reads neither sees the other's
+  // delete, both count 2 admins, both pass, and the household ends with none.
+  // What actually prevented that until now was incidental — both transactions
+  // also wrote the shared household document (`household.save()` for the
+  // embedded array), so the second hit a WriteConflict and MongoDB retried it
+  // against fresh state. Removing the embedded write would have silently
+  // removed that protection along with it.
+  //
+  // So the conflict is kept on purpose: every removal touches the household
+  // document, which makes concurrent removals in the SAME household serialize
+  // (and leaves removals in different households unaffected, since they touch
+  // different documents). `matchedCount` doubles as the 404 check, so this
+  // costs no extra round trip.
+  const touched = await HouseholdModel.updateOne(
+    { _id: householdId },
+    { $currentDate: { updatedAt: true } },
+    { session },
+  );
+  if (touched.matchedCount === 0) {
     throw new AppError('Household not found', 404);
   }
 
-  // TD-001 phase 3: the target's membership and their role come from the
-  // collection, which is the authority. Hard Rule 9 is the last place that
-  // should be deciding from the copy kept only for rollback.
+  const householdObjectId = new Types.ObjectId(householdId);
+
+  // The target's membership and role come from the collection, the authority.
   const target = await HouseholdMemberModel.findOne({
-    householdId: household._id,
+    householdId: householdObjectId,
     userId: new Types.ObjectId(targetUserId),
   }).session(session);
   if (!target) {
@@ -290,32 +299,24 @@ async function removeMemberInTransaction(
   }
 
   // Prevent removing the last admin (protects both self-removal and others).
-  // This used to be a filter over an array already loaded in the household
-  // document, where checking and writing touched one document and could not
-  // interleave. It is now a count over a second collection, which is exactly
-  // why the whole function runs inside a transaction (see removeMember): the
-  // count and the delete must be one atomic unit, or two admins removing each
-  // other at the same time could both pass the check and leave the household
-  // with no admin at all.
+  // The count and the delete are one atomic unit because of the transaction,
+  // serialized against other removals in this household by the write above.
   const adminCount = await HouseholdMemberModel.countDocuments({
-    householdId: household._id,
+    householdId: householdObjectId,
     role: 'admin',
   }).session(session);
   if (target.role === 'admin' && adminCount <= 1) {
     throw new AppError('Cannot remove the last admin of the household', 400);
   }
 
-  household.members = household.members.filter((m) => m.user.toString() !== targetUserId);
-  await household.save({ session });
-
   await HouseholdMemberModel.deleteOne(
-    { householdId: household._id, userId: new Types.ObjectId(targetUserId) },
+    { householdId: householdObjectId, userId: new Types.ObjectId(targetUserId) },
     { session },
   );
 
   await UserModel.findByIdAndUpdate(
     targetUserId,
-    { $pull: { households: household._id } },
+    { $pull: { households: householdObjectId } },
     { session },
   );
 }
@@ -340,14 +341,15 @@ export async function removeMember(
     throw new AppError('Target user is not a member of this household', 404);
   }
 
-  // The read, the last-admin check and all three writes run inside ONE
-  // transaction (TD-001). While membership lived only in the embedded array,
-  // checking and writing touched the same document, so a concurrent removal
-  // could not slip between them. Now the check counts admins and the writes
-  // land on three different documents — household, householdmember, user — so
-  // without a transaction two admins removing each other simultaneously could
-  // both pass the count and leave the household with NO admin, a state the UI
-  // offers no way back from (Hard Rule 9).
+  // The last-admin check and every write run inside ONE transaction (TD-001).
+  // While membership lived only in the embedded array, checking and writing
+  // touched the same document, so a concurrent removal could not slip between
+  // them. Now the check counts admins and the writes land on different
+  // documents, so without a transaction two admins removing each other
+  // simultaneously could both pass the count and leave the household with NO
+  // admin, a state the UI offers no way back from (Hard Rule 9). See
+  // removeMemberInTransaction for why the transaction alone is not enough and
+  // what serializes concurrent removals now that the embedded write is gone.
   //
   // Requires a replica set. Production is unaffected (Atlas always is) and
   // the test harness runs a single-node replica set for exactly this.
