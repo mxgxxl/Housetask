@@ -61,6 +61,7 @@ import { logger } from '../utils/logger';
  *   npx ts-node src/scripts/td001-validate-fase4.ts --execute
  *   npx ts-node src/scripts/td001-validate-fase4.ts --execute --iterations=5
  *   npx ts-node src/scripts/td001-validate-fase4.ts --check-socket-source   # read-only DB audit, no traffic
+ *   npx ts-node src/scripts/td001-validate-fase4.ts --check-orphan-households # read-only, households with no members
  *   npx ts-node src/scripts/td001-validate-fase4.ts --execute --check-socket-source
  *   API_BASE_URL=http://localhost:3000 npx ts-node src/scripts/td001-validate-fase4.ts --execute
  *
@@ -730,6 +731,90 @@ async function checkSocketSource(): Promise<boolean> {
   }
 }
 
+/**
+ * `--check-orphan-households`: look for households with no membership at all.
+ *
+ * Between the phase-3 cutover (deployed 2026-08-21T09:24Z) and the atomicity
+ * fix, `createHousehold` wrote the household document and the membership row as
+ * two separate, untransacted operations. A failure in between left a household
+ * nobody can reach: `requireMembership` answers 403 for everyone, so it cannot
+ * be read, cannot be joined by anyone who is not already a member (nobody is),
+ * and cannot be deleted — while still holding its unique `inviteCode` forever.
+ *
+ * Worth running BEFORE commit 7: the `$unset` erases the embedded array, which
+ * for anything created before commit 6 is the last surviving clue about who the
+ * household belonged to.
+ *
+ * Read-only. Two queries for the whole sweep — `distinct` over the memberships
+ * rather than a count per household — plus one confirming `countDocuments` on
+ * each suspect, so a finding is never an artifact of the cheap query.
+ */
+async function checkOrphanHouseholds(): Promise<boolean> {
+  logger.info('');
+  logger.info('='.repeat(72));
+  logger.info('ORPHAN HOUSEHOLD CHECK — households with zero memberships');
+  logger.info('='.repeat(72));
+  logger.info('Read-only. Requires MONGODB_URI: households cannot be enumerated over HTTP.');
+  logger.info('');
+
+  await connectDatabase();
+  try {
+    const [households, withMembers] = await Promise.all([
+      HouseholdModel.find({})
+        .select('name inviteCode createdBy createdAt members')
+        .sort({ createdAt: 1 })
+        .lean(),
+      HouseholdMemberModel.distinct('householdId'),
+    ]);
+
+    const populated = new Set(withMembers.map((id) => String(id)));
+    const suspects = households.filter((h) => !populated.has(h._id.toString()));
+
+    logger.info(`Households scanned:      ${households.length}`);
+    logger.info(`With at least one member: ${households.length - suspects.length}`);
+
+    if (suspects.length === 0) {
+      logger.info('');
+      logger.info('Orphan household check: PASS — 0 orphans, every household has a membership.');
+      return true;
+    }
+
+    logger.warn('');
+    logger.warn(`Orphan household check: FAIL — ${suspects.length} orphan(s) found.`);
+
+    for (const h of suspects) {
+      // Confirm against the authoritative count before reporting it.
+      const confirmed = await HouseholdMemberModel.countDocuments({ householdId: h._id });
+      if (confirmed > 0) {
+        logger.warn(`  ${h._id.toString()}: not an orphan after all (${confirmed} rows); skipping.`);
+        continue;
+      }
+
+      const creator = await UserModel.findById(h.createdBy).select('email households').lean();
+      const stillListed = (creator?.households ?? []).some(
+        (id) => id.toString() === h._id.toString(),
+      );
+
+      logger.warn('');
+      logger.warn(`  householdId : ${h._id.toString()}`);
+      logger.warn(`  nombre      : ${h.name}`);
+      logger.warn(`  inviteCode  : ${h.inviteCode}`);
+      logger.warn(`  createdAt   : ${new Date(h.createdAt).toISOString()}`);
+      logger.warn(`  createdBy   : ${creator?.email ?? '(usuario no encontrado)'}`);
+      logger.warn(
+        `  User.households del creador todavía lo lista: ${stillListed ? 'SÍ (entrada colgada)' : 'no'}`,
+      );
+      // The embedded array is the only clue left about who belonged to a
+      // household created before commit 6 — and commit 7 deletes it.
+      logger.warn(`  members embebidos (vestigio): ${(h.members ?? []).length}`);
+    }
+
+    return false;
+  } finally {
+    await disconnectDatabase();
+  }
+}
+
 function parseIterations(): number {
   const flag = process.argv.find((a) => a.startsWith('--iterations='));
   if (!flag) return DEFAULT_ITERATIONS;
@@ -746,16 +831,20 @@ async function main(): Promise<void> {
   // production.
   const execute = process.argv.includes('--execute');
   const socketSource = process.argv.includes('--check-socket-source');
-  // The socket audit is read-only and costs nothing against the rate limiter,
-  // so on its own it skips the traffic entirely. Combined with --execute it
-  // runs after, when the traffic has just exercised all three writes.
-  const trafficRequested = !socketSource || execute;
+  const orphans = process.argv.includes('--check-orphan-households');
+  // The read-only audits cost nothing against the rate limiter, so on their own
+  // they skip the traffic entirely. Combined with --execute they run after,
+  // when the traffic has just exercised all three writes.
+  const trafficRequested = (!socketSource && !orphans) || execute;
 
   try {
     if (trafficRequested) {
       await validate(parseIterations(), execute);
     }
     if (socketSource && !(await checkSocketSource())) {
+      process.exitCode = 1;
+    }
+    if (orphans && !(await checkOrphanHouseholds())) {
       process.exitCode = 1;
     }
   } catch (err) {
