@@ -104,21 +104,49 @@ export async function serializeHousehold(household: IHousehold): Promise<Record<
  * is added to their `households` list.
  */
 export async function createHousehold(userId: string, name: string): Promise<IHousehold> {
+  // Both computed OUTSIDE the transaction on purpose. `withTransaction` may
+  // re-run its callback on a transient error, and minting a fresh invite code
+  // per attempt would burn codes and make the retry non-deterministic; reusing
+  // the one already generated is safe because the aborted attempt left nothing
+  // behind to collide with.
   const inviteCode = await generateUniqueInviteCode();
+  const safeName = sanitizeString(name, MAX_HOUSEHOLD_NAME_LENGTH, 'Household name');
 
-  // TD-001 phase 4: no `members` array. The household document no longer
-  // carries its own membership; the HouseholdMember row created below is the
-  // only record of it.
-  const household = await HouseholdModel.create({
-    name: sanitizeString(name, MAX_HOUSEHOLD_NAME_LENGTH, 'Household name'),
-    inviteCode,
-    createdBy: new Types.ObjectId(userId),
-  });
+  // TD-001 phase 4: no `members` array — the HouseholdMember row is the only
+  // record of the membership. Which is exactly why this needs a transaction:
+  // if the row failed to land after the household document was written, the
+  // household would exist with NO members at all. Nobody could read it
+  // (requireMembership answers 403), nobody could delete it, and it would hold
+  // its unique invite code forever. Before the cutover the embedded array at
+  // least kept a trace; now there is none.
+  const session = await mongoose.startSession();
+  let created: IHousehold | undefined;
+  try {
+    await session.withTransaction(async () => {
+      // Safe to repeat: every attempt writes a brand-new household document
+      // and the membership upsert converges.
+      const [household] = await HouseholdModel.create(
+        [{ name: safeName, inviteCode, createdBy: new Types.ObjectId(userId) }],
+        { session },
+      );
+      await UserModel.updateOne(
+        { _id: userId },
+        { $addToSet: { households: household._id } },
+        { session },
+      );
+      await addMembership(household._id, userId, 'admin', new Date(), session);
+      created = household;
+    });
+  } finally {
+    await session.endSession();
+  }
 
-  await UserModel.findByIdAndUpdate(userId, { $addToSet: { households: household._id } });
-  await addMembership(household._id, userId, 'admin', new Date());
-
-  return household;
+  if (!created) {
+    // Unreachable while withTransaction resolves only after the callback ran,
+    // but the type has to be narrowed and a silent undefined would be worse.
+    throw new AppError('Could not create the household, please retry', 500);
+  }
+  return created;
 }
 
 /**
@@ -130,21 +158,24 @@ export async function createHousehold(userId: string, name: string): Promise<IHo
  * Deliberately an upsert on `{householdId, userId}`: replaying it — after a
  * partial failure, or from the backfill — must converge instead of throwing on
  * the unique index. `$setOnInsert` means a replay never rewrites the role or
- * the original `joinedAt` of a membership that already exists.
+ * the original `joinedAt` of a membership that already exists. That is also
+ * what makes it safe inside `withTransaction`, whose callback may run more
+ * than once.
  *
- * Not transactional, by design: the only invariant that needs atomicity is
- * Hard Rule 9, which lives on the removal path (see removeMember).
+ * Always takes a session: every caller now writes inside a transaction, since
+ * this row became the only record that a membership exists.
  */
 async function addMembership(
   householdId: Types.ObjectId,
   userId: string,
   role: Role,
   joinedAt: Date,
+  session: ClientSession,
 ): Promise<void> {
   await HouseholdMemberModel.updateOne(
     { householdId, userId: new Types.ObjectId(userId) },
     { $setOnInsert: { role, joinedAt } },
-    { upsert: true },
+    { upsert: true, session },
   );
 }
 
@@ -182,17 +213,47 @@ export async function joinHousehold(userId: string, inviteCode: string): Promise
     userId: new Types.ObjectId(userId),
   });
 
-  if (!alreadyMember) {
-    // TD-001 phase 4: the embedded array is no longer written. What used to be
-    // a push plus `household.save()` is now just the membership row.
-    await UserModel.findByIdAndUpdate(userId, { $addToSet: { households: household._id } });
-    await addMembership(household._id, userId, 'member', new Date());
+  if (alreadyMember) return household;
 
-    emitToHousehold(household._id.toString(), 'household:member_joined', {
-      householdId: household._id.toString(),
-      userId,
+  // Transactional for the same reason as createHousehold: the membership row
+  // and the `User.households` entry are two writes on two documents, and half
+  // of the pair is a broken state. A row without the array entry is a member
+  // the socket handshake never puts in the room (it still resolves rooms from
+  // `User.households` until commit 7); an array entry without the row is a
+  // household every HTTP read answers 403 for.
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      await UserModel.updateOne(
+        { _id: userId },
+        { $addToSet: { households: household._id } },
+        { session },
+      );
+      await addMembership(household._id, userId, 'member', new Date(), session);
+
+      // Keeps `updatedAt` meaning "last membership change" across all three
+      // operations. NOT load-bearing here, unlike the identical write in
+      // removeMemberInTransaction: a join only ever adds a non-admin, so it
+      // cannot lower the admin count and cannot put Hard Rule 9 at risk. It is
+      // consistency of the timestamp, not a lock — do not reason about it as
+      // one.
+      await HouseholdModel.updateOne(
+        { _id: household._id },
+        { $currentDate: { updatedAt: true } },
+        { session },
+      );
     });
+  } finally {
+    await session.endSession();
   }
+
+  // After the commit, never inside it: `withTransaction` can re-run its
+  // callback, and a socket event that has already gone out cannot be rolled
+  // back — subscribers would see a join that the database then abandoned.
+  emitToHousehold(household._id.toString(), 'household:member_joined', {
+    householdId: household._id.toString(),
+    userId,
+  });
 
   return household;
 }
