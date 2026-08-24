@@ -1,41 +1,29 @@
 import { Schema, model, Document, Types } from 'mongoose';
-import { Role } from '../types';
 import { jsonSchemaOptions } from '../utils/toJSON';
-
-export interface IHouseholdMember {
-  user: Types.ObjectId;
-  role: Role;
-  joinedAt: Date;
-}
 
 /**
  * A household groups users together and owns tasks + shopping items.
  *
- * Membership used to be embedded here (ADR-005). Since TD-001 phase 4 the
- * `members` array below is VESTIGIAL: nothing reads it and nothing writes it.
- * It survives one more deploy on purpose — the rows written before the dual
- * write was retired are the only reverse-migration material a rollback would
- * have — and commit 7 drops it from the schema and `$unset`s it from every
- * document. Do not add a reader or a writer to it.
+ * Membership used to live here as an embedded `members` array (ADR-005, filed
+ * as "TO BE MIGRATED" from the start). TD-001 moved it to the HouseholdMember
+ * collection across five phases; commit 7 removed the field from this schema
+ * and `$unset` it from the stored documents
+ * (`scripts/unset-household-members.ts`). A household no longer knows who
+ * belongs to it — the memberships know which household they are for, which is
+ * the direction that scales and the one that cannot go out of sync with
+ * itself.
+ *
+ * Nothing here should ever grow a members field again. To list a household's
+ * members: `HouseholdMemberModel.find({ householdId })`.
  */
 export interface IHousehold extends Document {
   _id: Types.ObjectId;
   name: string;
   inviteCode: string;
-  members: IHouseholdMember[];
   createdBy: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
-
-const memberSchema = new Schema<IHouseholdMember>(
-  {
-    user: { type: Schema.Types.ObjectId, ref: 'User', required: true },
-    role: { type: String, enum: ['admin', 'member'], default: 'member' },
-    joinedAt: { type: Date, default: Date.now },
-  },
-  { _id: false },
-);
 
 const householdSchema = new Schema<IHousehold>(
   {
@@ -49,7 +37,6 @@ const householdSchema = new Schema<IHousehold>(
       maxlength: 8,
       index: true,
     },
-    members: { type: [memberSchema], default: [] },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   },
   { timestamps: true, ...jsonSchemaOptions },

@@ -15,7 +15,7 @@ export async function getProfile(req: AuthenticatedRequest, res: Response): Prom
   if (!user) {
     throw new AppError('User not found', 404);
   }
-  sendSuccess(res, toPublicUser(user));
+  sendSuccess(res, await toPublicUser(user));
 }
 
 /**
@@ -44,5 +44,5 @@ export async function updateProfile(req: AuthenticatedRequest, res: Response): P
   if (!user) {
     throw new AppError('User not found', 404);
   }
-  sendSuccess(res, toPublicUser(user));
+  sendSuccess(res, await toPublicUser(user));
 }

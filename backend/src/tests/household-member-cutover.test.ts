@@ -4,7 +4,6 @@ import request from 'supertest';
 
 import { HouseholdModel } from '../models/Household';
 import { HouseholdMemberModel } from '../models/HouseholdMember';
-import { UserModel } from '../models/User';
 import { buildTestApp } from './setup';
 import {
   authHeader,
@@ -50,10 +49,29 @@ async function unmirror(householdId: string, userId: string): Promise<void> {
   });
 }
 
+/**
+ * The `households` list as the CLIENT sees it, via GET /api/users/me.
+ *
+ * Since commit 7 there is no `User.households` field to read: the value is
+ * derived from HouseholdMember. Asserting through the endpoint rather than the
+ * database is deliberate — this list is what `HouseholdCubit.init` picks the
+ * active household from, so the contract is the thing that must not move.
+ */
+async function publicHouseholds(accessToken: string): Promise<string[]> {
+  const res = await request(app).get('/api/users/me').set(authHeader(accessToken));
+  return (res.body.data?.households ?? []) as string[];
+}
+
 /** The vestigial array: nothing reads it, and since commit 6 nothing writes it. */
 async function embeddedMemberIds(householdId: string): Promise<string[]> {
-  const household = await HouseholdModel.findById(householdId).select('members').lean();
-  return (household?.members ?? []).map((m) => m.user.toString());
+  // Raw: commit 7 removed `members` from the schema, so a typed query cannot
+  // see it — and a typed assertion would then pass even if the field were
+  // still being written, which is exactly what these tests exist to catch.
+  const household = await HouseholdModel.collection.findOne({
+    _id: new Types.ObjectId(householdId),
+  });
+  const members = (household?.members ?? []) as { user: Types.ObjectId }[];
+  return members.map((m) => m.user.toString());
 }
 
 describe('TD-001 cutover: the collection is the authority', () => {
@@ -258,8 +276,7 @@ describe('TD-001 cutover: the collection is the authority', () => {
           userId: new Types.ObjectId(member.id),
         }),
       ).toBeNull();
-      const user = await UserModel.findById(member.id).select('households').lean();
-      expect((user?.households ?? []).map((h) => h.toString())).not.toContain(household.id);
+      expect(await publicHouseholds(member.accessToken)).not.toContain(household.id);
     });
   });
 
@@ -287,8 +304,7 @@ describe('TD-001 cutover: the collection is the authority', () => {
           householdId: new Types.ObjectId(household.id),
         }),
       ).toBe(2);
-      const user = await UserModel.findById(member.id).select('households').lean();
-      expect((user?.households ?? []).map((h) => h.toString())).toContain(household.id);
+      expect(await publicHouseholds(member.accessToken)).toContain(household.id);
     });
 
     it('should touch the household on removal, keeping the serialization point',

@@ -1,7 +1,6 @@
 import mongoose, { ClientSession, Types } from 'mongoose';
 import { HouseholdModel, IHousehold } from '../models/Household';
 import { HouseholdMemberModel, IHouseholdMember } from '../models/HouseholdMember';
-import { UserModel } from '../models/User';
 import { TaskModel } from '../models/Task';
 import { AppError } from '../middleware/error.middleware';
 import { emitToHousehold } from '../config/socket';
@@ -100,8 +99,7 @@ export async function serializeHousehold(household: IHousehold): Promise<Record<
 }
 
 /**
- * Create a household. The creator becomes its first admin and the household
- * is added to their `households` list.
+ * Create a household. The creator becomes its first admin.
  */
 export async function createHousehold(userId: string, name: string): Promise<IHousehold> {
   // Both computed OUTSIDE the transaction on purpose. `withTransaction` may
@@ -127,11 +125,6 @@ export async function createHousehold(userId: string, name: string): Promise<IHo
       // and the membership upsert converges.
       const [household] = await HouseholdModel.create(
         [{ name: safeName, inviteCode, createdBy: new Types.ObjectId(userId) }],
-        { session },
-      );
-      await UserModel.updateOne(
-        { _id: userId },
-        { $addToSet: { households: household._id } },
         { session },
       );
       await addMembership(household._id, userId, 'admin', new Date(), session);
@@ -215,20 +208,14 @@ export async function joinHousehold(userId: string, inviteCode: string): Promise
 
   if (alreadyMember) return household;
 
-  // Transactional for the same reason as createHousehold: the membership row
-  // and the `User.households` entry are two writes on two documents, and half
-  // of the pair is a broken state. A row without the array entry is a member
-  // the socket handshake never puts in the room (it still resolves rooms from
-  // `User.households` until commit 7); an array entry without the row is a
-  // household every HTTP read answers 403 for.
+  // Still transactional after commit 7 retired `User.households`, even though
+  // the membership row is now the only write: `withTransaction` is what makes
+  // the row's absence on failure guaranteed rather than incidental, and the
+  // next write added to this path inherits the guarantee instead of having to
+  // rediscover it.
   const session = await mongoose.startSession();
   try {
     await session.withTransaction(async () => {
-      await UserModel.updateOne(
-        { _id: userId },
-        { $addToSet: { households: household._id } },
-        { session },
-      );
       await addMembership(household._id, userId, 'member', new Date(), session);
 
       // Keeps `updatedAt` meaning "last membership change" across all three
@@ -312,9 +299,9 @@ async function unassignDepartedMemberTasks(householdId: string, userId: string):
  * The mutating half of [removeMember], isolated so it can run inside a
  * transaction (and be re-run if the driver retries it).
  *
- * Since phase 4 it writes two sides, not three: the HouseholdMember row (the
- * membership itself) and the denormalized `User.households`. The embedded
- * array is no longer maintained.
+ * Since commit 7 it writes ONE side: the HouseholdMember row. The embedded
+ * array stopped being written in commit 6 and the denormalized
+ * `User.households` is gone entirely — membership lives in exactly one place.
  */
 async function removeMemberInTransaction(
   householdId: string,
@@ -375,11 +362,6 @@ async function removeMemberInTransaction(
     { session },
   );
 
-  await UserModel.findByIdAndUpdate(
-    targetUserId,
-    { $pull: { households: householdObjectId } },
-    { session },
-  );
 }
 
 /**

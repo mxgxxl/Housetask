@@ -11,16 +11,28 @@ import {
  * TD-001 phase 1. The backfill only ever runs against real data, once, so its
  * guarantees have to be pinned here: idempotent, non-destructive, and honest
  * about divergences instead of papering over them.
+ *
+ * Still tested after commit 7 removed `members` from the Household schema,
+ * because the script is still the disaster-recovery path: until
+ * `unset-household-members.ts` has been applied, it is the only thing that can
+ * rebuild memberships from the embedded array. Both it and this fixture now go
+ * through the RAW collection, since a typed write can no longer produce the
+ * legacy shape they operate on.
  */
 const joinedAt = new Date('2026-03-01T09:00:00.000Z');
 
 async function seedHousehold(members: Array<{ user: Types.ObjectId; role: 'admin' | 'member' }>) {
-  return HouseholdModel.create({
+  const _id = new Types.ObjectId();
+  await HouseholdModel.collection.insertOne({
+    _id,
     name: 'Casa',
     inviteCode: Math.random().toString(36).slice(2, 10).toUpperCase(),
     createdBy: members[0].user,
     members: members.map((m) => ({ ...m, joinedAt })),
+    createdAt: new Date(),
+    updatedAt: new Date(),
   });
+  return { _id };
 }
 
 describe('backfillHouseholdMembers', () => {

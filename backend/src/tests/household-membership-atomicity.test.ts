@@ -4,7 +4,6 @@ import request from 'supertest';
 
 import { HouseholdModel } from '../models/Household';
 import { HouseholdMemberModel } from '../models/HouseholdMember';
-import { UserModel } from '../models/User';
 import { buildTestApp } from './setup';
 import {
   authHeader,
@@ -23,13 +22,16 @@ import {
  *   - createHousehold: the household document lands, the membership row does
  *     not. The household exists with no members — unreadable (requireMembership
  *     answers 403), undeletable, and holding its unique invite code forever.
- *   - joinHousehold: the `User.households` entry lands, the membership row does
- *     not (or the reverse). Half a membership, and the two halves feed
- *     different subsystems — HTTP reads the collection, the socket handshake
- *     still reads `User.households` until commit 7.
+ *   - joinHousehold: the membership row is what makes the join real, so a
+ *     failure there must leave nothing at all — not a household the user
+ *     believes they joined and every read answers 403 for.
  *
- * Both paths now run inside a transaction. These tests force the second write
- * to fail and assert nothing survives.
+ * Both paths run inside a transaction. These tests force the membership write
+ * to fail and assert nothing survives. (Commit 7 later removed the second
+ * write these transactions originally coordinated — `User.households` — but the
+ * transaction stays: it makes the rollback guaranteed rather than incidental,
+ * and the next write added to either path inherits that instead of having to
+ * rediscover it.)
  *
  * The failure is injected at `HouseholdMemberModel.updateOne`, which is what
  * `addMembership` calls and nothing else on these paths does — so the mock hits
@@ -45,6 +47,12 @@ beforeAll(async () => {
 afterEach(() => {
   jest.restoreAllMocks();
 });
+
+/** The `households` list as the client sees it — derived, not stored (commit 7). */
+async function publicHouseholds(accessToken: string): Promise<string[]> {
+  const res = await request(app).get('/api/users/me').set(authHeader(accessToken));
+  return (res.body.data?.households ?? []) as string[];
+}
 
 function failTheMembershipWrite(): jest.SpyInstance {
   return jest.spyOn(HouseholdMemberModel, 'updateOne').mockImplementation(() => {
@@ -73,7 +81,7 @@ describe('createHousehold atomicity', () => {
     expect(await HouseholdModel.findOne({ name })).toBeNull();
   });
 
-  it('should not leave the creator holding a dangling User.households entry', async () => {
+  it('should leave the creator belonging to no household at all', async () => {
     const user = await createTestUser(app);
     failTheMembershipWrite();
 
@@ -83,8 +91,7 @@ describe('createHousehold atomicity', () => {
       .set('Idempotency-Key', new Types.ObjectId().toString())
       .send({ name: `Hogar huérfano ${new Types.ObjectId().toString()}` });
 
-    const stored = await UserModel.findById(user.id).select('households').lean();
-    expect(stored?.households ?? []).toHaveLength(0);
+    expect(await publicHouseholds(user.accessToken)).toHaveLength(0);
   });
 
   it('should still create a household normally when nothing fails', async () => {
@@ -98,8 +105,7 @@ describe('createHousehold atomicity', () => {
         role: 'admin',
       }),
     ).toBe(1);
-    const stored = await UserModel.findById(user.id).select('households').lean();
-    expect((stored?.households ?? []).map((h) => h.toString())).toEqual([household.id]);
+    expect(await publicHouseholds(user.accessToken)).toEqual([household.id]);
   });
 });
 
@@ -124,10 +130,8 @@ describe('joinHousehold atomicity', () => {
         userId: new Types.ObjectId(joiner.id),
       }),
     ).toBeNull();
-    // The other half of the pair must be gone too: an entry here without a row
-    // is a household the socket would join a room for and HTTP would 403.
-    const stored = await UserModel.findById(joiner.id).select('households').lean();
-    expect((stored?.households ?? []).map((h) => h.toString())).not.toContain(household.id);
+    // And the client-visible list, derived from the same collection, agrees.
+    expect(await publicHouseholds(joiner.accessToken)).not.toContain(household.id);
   });
 
   it('should leave the joiner unable to read the household after the rollback', async () => {

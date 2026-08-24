@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { connectDatabase, disconnectDatabase } from '../config/database';
+import { Types } from 'mongoose';
 import { HouseholdModel } from '../models/Household';
 import { HouseholdMemberModel } from '../models/HouseholdMember';
 import { logger } from '../utils/logger';
@@ -23,6 +24,17 @@ import { logger } from '../utils/logger';
  *   npx ts-node src/scripts/backfill-household-members.ts        # dry run
  *   npx ts-node src/scripts/backfill-household-members.ts --yes  # writes
  */
+/**
+ * The embedded member shape as it exists in stored documents. Declared here
+ * because TD-001 commit 7 removed it from the Household schema; this script
+ * is the last reader of that legacy data.
+ */
+interface LegacyEmbeddedMember {
+  user: Types.ObjectId;
+  role: 'admin' | 'member';
+  joinedAt?: Date;
+}
+
 export interface BackfillSummary {
   households: number;
   membershipsSeen: number;
@@ -43,12 +55,21 @@ export async function backfillHouseholdMembers(confirmed: boolean): Promise<Back
   // Cursor rather than find().toArray(): the collection is small today, but a
   // backfill that only works while the data is small is a backfill that fails
   // exactly when it matters.
-  const cursor = HouseholdModel.find({}, { members: 1 }).lean().cursor();
+  //
+  // Reads through the RAW collection since TD-001 commit 7 removed `members`
+  // from the schema: a typed query can no longer see the field this script
+  // exists to read. Deliberately kept working rather than deleted — until
+  // `scripts/unset-household-members.ts` has been applied, this is the only
+  // tool that can rebuild memberships from the embedded array, which makes it
+  // the disaster-recovery path for the migration. After the $unset it finds
+  // nothing and reports zeros, which is the correct answer, not a failure.
+  const cursor = HouseholdModel.collection.find({}, { projection: { members: 1 } });
 
   for await (const household of cursor) {
     summary.households += 1;
 
-    for (const member of household.members ?? []) {
+    const embedded = (household.members ?? []) as LegacyEmbeddedMember[];
+    for (const member of embedded) {
       summary.membershipsSeen += 1;
 
       const existing = await HouseholdMemberModel.findOne({

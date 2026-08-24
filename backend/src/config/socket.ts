@@ -4,6 +4,7 @@ import { createAdapter } from '@socket.io/redis-adapter';
 import { initRedis } from './redis';
 import { verifyAccessToken } from '../utils/jwt';
 import { UserModel } from '../models/User';
+import { HouseholdMemberModel } from '../models/HouseholdMember';
 import { logger } from '../utils/logger';
 import { captureServerError } from '../utils/sentry';
 
@@ -34,13 +35,32 @@ async function authenticateSocket(
     }
 
     const payload = verifyAccessToken(token);
-    const user = await UserModel.findById(payload.userId).select('households').lean();
+    const user = await UserModel.findById(payload.userId).select('_id').lean();
     if (!user) {
       return next(new Error('User not found'));
     }
 
+    // TD-001 commit 7: rooms are resolved from HouseholdMember, the single
+    // source of membership, instead of the denormalized `User.households` that
+    // used to shadow it (finding H1). Until this commit the socket and the HTTP
+    // surface answered from DIFFERENT copies, so a drift between them showed up
+    // as the worst kind of bug: data that loads correctly over HTTP and then
+    // never updates live, indistinguishable from nothing happening. One indexed
+    // lookup on `{userId: 1}`, once per connection.
+    const memberships = await HouseholdMemberModel.find({ userId: user._id })
+      .select('householdId')
+      .lean();
+
     socket.data.userId = payload.userId;
-    socket.data.households = (user.households || []).map((h) => h.toString());
+    socket.data.households = memberships.map((m) => m.householdId.toString());
+
+    if (memberships.length === 0) {
+      // Called out in docs/TD-001-DESIGN.md §7 as a risk of this phase: a user
+      // who joins no rooms loses realtime with no visible error. Legitimate for
+      // someone with no household yet, so it is a debug line, not a warning —
+      // but it has to be greppable when someone reports "it stopped updating".
+      logger.debug(`Socket auth: user=${payload.userId} belongs to no household`);
+    }
     next();
   } catch (err) {
     logger.warn('Socket auth failed', (err as Error).message);

@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs';
 import { Types } from 'mongoose';
 import { UserModel, IUser } from '../models/User';
 import { RefreshTokenModel } from '../models/RefreshToken';
+import { HouseholdMemberModel } from '../models/HouseholdMember';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../utils/jwt';
 import { sha256 } from '../utils/hash';
 import { sanitizeString } from '../utils/sanitize';
@@ -38,14 +39,32 @@ export interface PublicUser {
 
 /**
  * Strip a user document down to the fields safe to return to clients.
+ *
+ * TD-001 commit 7: `households` is no longer a field on the user document — it
+ * is queried from HouseholdMember, the only place membership lives now. The
+ * SHAPE of the response is deliberately unchanged, because this list is not
+ * internal bookkeeping: `HouseholdCubit.init` picks the active household from
+ * it (`household_cubit.dart:54-56`), so an app already in the stores would
+ * open with no household selected if it started arriving empty. Dropping the
+ * field without replacing the value here would have been a silent break of a
+ * client that cannot be rolled back.
+ *
+ * Async as a result. The extra query is one indexed lookup on `{userId: 1}`,
+ * and it runs on login/register/refresh and profile reads — not on any hot
+ * path.
  */
-export function toPublicUser(user: IUser): PublicUser {
+export async function toPublicUser(user: IUser): Promise<PublicUser> {
+  const memberships = await HouseholdMemberModel.find({ userId: user._id })
+    .select('householdId')
+    .sort({ joinedAt: 1, _id: 1 })
+    .lean();
+
   return {
     id: user._id.toString(),
     email: user.email,
     name: user.name,
     avatarUrl: user.avatarUrl,
-    households: (user.households || []).map((h) => h.toString()),
+    households: memberships.map((m) => m.householdId.toString()),
   };
 }
 
@@ -96,7 +115,7 @@ export async function register(
   });
 
   const tokens = await generateTokens(user._id.toString(), user.email);
-  return { user: toPublicUser(user), tokens };
+  return { user: await toPublicUser(user), tokens };
 }
 
 /**
@@ -125,7 +144,7 @@ export async function login(
   }
 
   const tokens = await generateTokens(user._id.toString(), user.email);
-  return { user: toPublicUser(user), tokens };
+  return { user: await toPublicUser(user), tokens };
 }
 
 /**

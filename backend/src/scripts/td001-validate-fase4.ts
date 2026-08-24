@@ -498,25 +498,40 @@ function difference(a: Set<string>, b: Set<string>): string[] {
  * what it measures destroys the evidence it was run to collect.
  */
 async function readSources(email: string): Promise<MembershipSources | null> {
-  const user = await UserModel.findOne({ email }).select('households').lean();
+  const user = await UserModel.findOne({ email }).select('_id').lean();
   if (!user) return null;
 
   const userId = user._id.toString();
+
+  // `households` was removed from the User schema in commit 7, so a typed query
+  // can no longer see it — but the field is still PRESENT in documents written
+  // before then, because dropping it from the schema does not delete stored
+  // data. Read it through the raw collection: that leftover is exactly what
+  // this check is here to compare against.
+  const legacy = (await UserModel.collection.findOne(
+    { _id: user._id },
+    { projection: { households: 1 } },
+  )) as { households?: unknown[] } | null;
 
   const [rows, embeddedHouseholds] = await Promise.all([
     HouseholdMemberModel.find({ userId: new Types.ObjectId(userId) })
       .select('householdId')
       .lean(),
-    HouseholdModel.find({ 'members.user': new Types.ObjectId(userId) })
-      .select('_id')
-      .lean(),
+    // RAW, and not a typed query: `members` left the schema in commit 7, and
+    // `strictQuery: true` (config/database.ts) silently DROPS a condition on a
+    // path the schema does not know — turning this filter into `find({})` and
+    // reporting every household as drifted for every user. The false positive
+    // is louder than the real signal, so the query has to bypass the schema.
+    HouseholdModel.collection
+      .find({ 'members.user': new Types.ObjectId(userId) }, { projection: { _id: 1 } })
+      .toArray(),
   ]);
 
   return {
     email,
     userId,
     collection: new Set(rows.map((r) => r.householdId.toString())),
-    userHouseholds: new Set((user.households ?? []).map((h) => h.toString())),
+    userHouseholds: new Set((legacy?.households ?? []).map((h) => String(h))),
     embedded: new Set(embeddedHouseholds.map((h) => h._id.toString())),
   };
 }
@@ -760,10 +775,13 @@ async function checkOrphanHouseholds(): Promise<boolean> {
   await connectDatabase();
   try {
     const [households, withMembers] = await Promise.all([
-      HouseholdModel.find({})
-        .select('name inviteCode createdBy createdAt members')
+      // Raw: `members` is no longer on the schema (commit 7), and the count of
+      // whatever legacy array survives is part of what makes an orphan report
+      // actionable.
+      HouseholdModel.collection
+        .find({}, { projection: { name: 1, inviteCode: 1, createdBy: 1, createdAt: 1, members: 1 } })
         .sort({ createdAt: 1 })
-        .lean(),
+        .toArray(),
       HouseholdMemberModel.distinct('householdId'),
     ]);
 
@@ -790,9 +808,13 @@ async function checkOrphanHouseholds(): Promise<boolean> {
         continue;
       }
 
-      const creator = await UserModel.findById(h.createdBy).select('email households').lean();
-      const stillListed = (creator?.households ?? []).some(
-        (id) => id.toString() === h._id.toString(),
+      const creator = await UserModel.findById(h.createdBy).select('email').lean();
+      const legacy = (await UserModel.collection.findOne(
+        { _id: h.createdBy },
+        { projection: { households: 1 } },
+      )) as { households?: unknown[] } | null;
+      const stillListed = (legacy?.households ?? []).some(
+        (id) => String(id) === h._id.toString(),
       );
 
       logger.warn('');
@@ -806,7 +828,7 @@ async function checkOrphanHouseholds(): Promise<boolean> {
       );
       // The embedded array is the only clue left about who belonged to a
       // household created before commit 6 — and commit 7 deletes it.
-      logger.warn(`  members embebidos (vestigio): ${(h.members ?? []).length}`);
+      logger.warn(`  members embebidos (vestigio): ${((h.members as unknown[]) ?? []).length}`);
     }
 
     return false;

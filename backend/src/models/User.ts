@@ -11,7 +11,6 @@ export interface IUser extends Document {
   password: string;
   name: string;
   avatarUrl?: string;
-  households: Types.ObjectId[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -40,12 +39,12 @@ const userSchema = new Schema<IUser>(
     avatarUrl: {
       type: String,
     },
-    households: [
-      {
-        type: Schema.Types.ObjectId,
-        ref: 'Household',
-      },
-    ],
+    // TD-001 commit 7: the denormalized `households` array is gone. It was the
+    // second copy of the same edge HouseholdMember now owns (finding H1 of
+    // docs/TD-001-DESIGN.md), and keeping it would have preserved exactly the
+    // consistency problem this migration exists to remove — only on the other
+    // side. "Which households does this user belong to" is now
+    // `HouseholdMember.find({ userId })`, covered by its `{userId: 1}` index.
   },
   { timestamps: true, ...jsonSchemaOptions },
 );
