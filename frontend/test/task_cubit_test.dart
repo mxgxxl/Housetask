@@ -626,285 +626,14 @@ void main() {
     });
   });
 
-  group('TaskCubit timeline (PDR-003)', () {
-    test('loadTimeline groups dated tasks by local day and separates undated ones', () async {
-      final today = DateTime.now();
-      final tomorrow = today.add(const Duration(days: 1));
-      final repo = FakeTaskRepository(timelinePages: [
-        page([
-          buildTask('a', dueDate: today),
-          buildTask('b', dueDate: tomorrow),
-          buildTask('c'), // undated
-        ]),
-      ]);
-      final cubit = TaskCubit(repo, FakeNotificationService());
-
-      await cubit.loadTimeline('h1');
-
-      final todayKey = DateTime(today.year, today.month, today.day);
-      final tomorrowKey = DateTime(tomorrow.year, tomorrow.month, tomorrow.day);
-      expect(cubit.state.timelineDays[todayKey]?.map((t) => t.id), ['a']);
-      expect(cubit.state.timelineDays[tomorrowKey]?.map((t) => t.id), ['b']);
-      expect(cubit.state.timelineUndated.map((t) => t.id), ['c']);
-    });
-
-    test('loadTimeline sends a window from yesterday through today+6', () async {
-      final repo = FakeTaskRepository(timelinePages: [page([])]);
-      final cubit = TaskCubit(repo, FakeNotificationService());
-      final before = DateTime.now();
-
-      await cubit.loadTimeline('h1');
-
-      final from = repo.receivedFrom.single!;
-      final to = repo.receivedTo.single!;
-      final expectedFrom = DateTime(before.year, before.month, before.day - 1);
-      final expectedTo = DateTime(before.year, before.month, before.day + 6, 23, 59, 59, 999);
-      expect(from, expectedFrom);
-      expect(to, expectedTo);
-    });
-
-    test('"show more" is purely local: revealing a day\'s extra items issues no request',
-        () async {
-      // The cubit itself never fetches for "show more" — TasksPage's
-      // _DaySection reveals already-loaded items locally. This test pins
-      // that loadTimeline() alone already carries every item for the day
-      // (nothing paginated per-day), which is what makes that possible.
-      final today = DateTime.now();
-      final repo = FakeTaskRepository(timelinePages: [
-        page(List.generate(5, (i) => buildTask('t$i', dueDate: today))),
-      ]);
-      final cubit = TaskCubit(repo, FakeNotificationService());
-
-      await cubit.loadTimeline('h1');
-
-      final todayKey = DateTime(today.year, today.month, today.day);
-      expect(cubit.state.timelineDays[todayKey], hasLength(5));
-      expect(repo.timelineListCalls, 1);
-    });
-
-    test('loadMoreTimeline pages within the current window via the cursor first', () async {
-      final today = DateTime.now();
-      final repo = FakeTaskRepository(timelinePages: [
-        page([buildTask('a', dueDate: today)], nextCursor: 'c1', hasMore: true),
-        page([buildTask('b', dueDate: today)]),
-      ]);
-      final cubit = TaskCubit(repo, FakeNotificationService());
-      await cubit.loadTimeline('h1');
-      final windowToAfterLoad = cubit.state.timelineWindowTo;
-      expect(cubit.state.timelineCursor, 'c1');
-
-      // F11: the original version of this test called loadMoreTimeline()
-      // immediately after loadTimeline(), with no emit in between — which
-      // hid TD-056 (copyWith wiping timelineCursor on any unrelated emit),
-      // since nothing else ever got a chance to clear it. An unrelated
-      // cubit action (any copyWith call that doesn't mention
-      // timelineCursor) interleaved here reproduces a real app's actual
-      // emit pattern — MainScaffold fires several loads back to back, and
-      // realtime events can land at any time — and must NOT lose the
-      // cursor, or loadMoreTimeline below would incorrectly widen the
-      // window instead of draining this page via the cursor.
-      cubit.clearOfflineNotice();
-      expect(cubit.state.timelineCursor, 'c1');
-
-      await cubit.loadMoreTimeline();
-
-      // Same window: the second scripted page was reached via the cursor,
-      // not by widening `to`.
-      expect(repo.receivedTo[1], windowToAfterLoad);
-      expect(repo.receivedFrom[1], repo.receivedFrom[0]);
-      final todayKey = DateTime(today.year, today.month, today.day);
-      expect(
-        cubit.state.timelineDays[todayKey]?.map((t) => t.id).toSet(),
-        {'a', 'b'},
-      );
-      expect(cubit.state.timelineHasMore, isFalse);
-    });
-
-    test('loadMoreTimeline extends the window forward once the current one is exhausted',
-        () async {
-      final today = DateTime.now();
-      final future = today.add(const Duration(days: 10));
-      final repo = FakeTaskRepository(timelinePages: [
-        page([buildTask('a', dueDate: today)]), // hasMore: false
-        page([buildTask('a', dueDate: today), buildTask('b', dueDate: future)]),
-      ]);
-      final cubit = TaskCubit(repo, FakeNotificationService());
-      await cubit.loadTimeline('h1');
-      final initialTo = cubit.state.timelineWindowTo!;
-
-      await cubit.loadMoreTimeline();
-
-      // No cursor left in the current window, so it widened `to` instead and
-      // re-fetched from scratch (cursor: null).
-      expect(repo.receivedCursors[1], isNull);
-      expect(repo.receivedTo[1], isNot(initialTo));
-      expect(repo.receivedTo[1]!.isAfter(initialTo), isTrue);
-      expect(cubit.state.timelineWindowTo, repo.receivedTo[1]);
-
-      // The re-fetched 'a' (already bucketed) overwrote in place rather than
-      // duplicating, and the newly-included 'b' was added.
-      final todayKey = DateTime(today.year, today.month, today.day);
-      final futureKey = DateTime(future.year, future.month, future.day);
-      expect(cubit.state.timelineDays[todayKey]?.map((t) => t.id), ['a']);
-      expect(cubit.state.timelineDays[futureKey]?.map((t) => t.id), ['b']);
-    });
-
-    test('loadTimeline/loadMoreTimeline never touch the TaskFilter.all bucket Home/Calendar read',
-        () async {
-      final today = DateTime.now();
-      final repo = FakeTaskRepository(
-        pagesByStatus: {
-          null: [page([buildTask('home-1')], total: 1)],
-        },
-        timelinePages: [
-          page([buildTask('t1', dueDate: today)], nextCursor: 'c1', hasMore: true),
-          page([buildTask('t2', dueDate: today)]),
-        ],
-      );
-      final cubit = TaskCubit(repo, FakeNotificationService());
-
-      // Mirrors MainScaffold._loadForHousehold: both load() (for
-      // Home/Calendar's `all` bucket) and loadTimeline() fire for the same
-      // household.
-      await cubit.load('h1');
-      await cubit.loadTimeline('h1');
-      await cubit.loadMoreTimeline();
-
-      expect(cubit.state.allTasks.map((t) => t.id), ['home-1']);
-    });
-  });
-
-  group('TaskCubit timeline stays in sync with mutations and realtime (bugfix)', () {
-    // "Todas" (tasks_page.dart's _TimelineList) renders timelineDays/
-    // timelineUndated directly, not bucket(TaskFilter.all) — so before this
-    // fix, _upsert/_remove (the shared engine behind createTask, updateTask,
-    // completeTask, deleteTask, restoreTask and applyRealtime) only touched
-    // buckets and left the timeline stale: a created task never appeared on
-    // the main tab, a deleted one stayed visible, and a realtime event from
-    // another device updated nothing there at all.
-
-    test('createTask inserts the new (undated) task into timelineUndated', () async {
-      final repo = FakeTaskRepository(timelinePages: [page([])]);
-      final cubit = TaskCubit(repo, FakeNotificationService());
-      await cubit.loadTimeline('h1');
-      expect(cubit.state.timelineUndated, isEmpty);
-
-      // FakeTaskRepository.create() always returns an undated task, which
-      // lands in "Sin fecha" — the backend includes undated tasks in every
-      // window response regardless of from/to.
-      await cubit.createTask({'title': 'Nueva'});
-
-      expect(cubit.state.timelineUndated.map((t) => t.id), contains('created'));
-    });
-
-    test('deleteTask (online) removes the task from its timeline day', () async {
-      final today = DateTime.now();
-      final repo = FakeTaskRepository(timelinePages: [
-        page([buildTask('t1', dueDate: today)]),
-      ]);
-      final cubit = TaskCubit(repo, FakeNotificationService());
-      await cubit.loadTimeline('h1');
-      final todayKey = DateTime(today.year, today.month, today.day);
-      expect(cubit.state.timelineDays[todayKey]?.map((t) => t.id), ['t1']);
-
-      await cubit.deleteTask('t1');
-
-      expect(cubit.state.timelineDays[todayKey] ?? const [], isEmpty);
-    });
-
-    test('applyRealtime task:created inserts into the matching timeline day', () async {
-      final today = DateTime.now();
-      final repo = FakeTaskRepository(timelinePages: [page([])]);
-      final cubit = TaskCubit(repo, FakeNotificationService());
-      await cubit.loadTimeline('h1');
-
-      cubit.applyRealtime('task:created', {
-        'id': 'remote-1',
-        'householdId': 'h1',
-        'title': 'De otro dispositivo',
-        'status': 'pending',
-        'isRecurring': false,
-        'dueDate': today.toIso8601String(),
-      });
-
-      final todayKey = DateTime(today.year, today.month, today.day);
-      expect(cubit.state.timelineDays[todayKey]?.map((t) => t.id), contains('remote-1'));
-    });
-
-    test('applyRealtime task:deleted removes the task from the timeline', () async {
-      final today = DateTime.now();
-      final repo = FakeTaskRepository(timelinePages: [
-        page([buildTask('t1', dueDate: today)]),
-      ]);
-      final cubit = TaskCubit(repo, FakeNotificationService());
-      await cubit.loadTimeline('h1');
-      final todayKey = DateTime(today.year, today.month, today.day);
-      expect(cubit.state.timelineDays[todayKey]?.map((t) => t.id), ['t1']);
-
-      cubit.applyRealtime('task:deleted', {'id': 't1', 'householdId': 'h1'});
-
-      expect(cubit.state.timelineDays[todayKey] ?? const [], isEmpty);
-    });
-
-    test('applyRealtime task:updated moves the task to its new day when dueDate changes',
-        () async {
-      final today = DateTime.now();
-      final tomorrow = today.add(const Duration(days: 1));
-      final repo = FakeTaskRepository(timelinePages: [
-        page([buildTask('t1', dueDate: today)]),
-      ]);
-      final cubit = TaskCubit(repo, FakeNotificationService());
-      await cubit.loadTimeline('h1');
-
-      cubit.applyRealtime('task:updated', {
-        'id': 't1',
-        'householdId': 'h1',
-        'title': 'Tarea',
-        'status': 'pending',
-        'isRecurring': false,
-        'dueDate': tomorrow.toIso8601String(),
-      });
-
-      final todayKey = DateTime(today.year, today.month, today.day);
-      final tomorrowKey = DateTime(tomorrow.year, tomorrow.month, tomorrow.day);
-      expect(cubit.state.timelineDays[todayKey] ?? const [], isEmpty);
-      expect(cubit.state.timelineDays[tomorrowKey]?.map((t) => t.id), ['t1']);
-    });
-
-    test('a task due outside the loaded window is not added to the timeline', () async {
-      final today = DateTime.now();
-      final farFuture = today.add(const Duration(days: 30));
-      final repo = FakeTaskRepository(timelinePages: [page([])]);
-      final cubit = TaskCubit(repo, FakeNotificationService());
-      await cubit.loadTimeline('h1');
-
-      cubit.applyRealtime('task:created', {
-        'id': 'far-1',
-        'householdId': 'h1',
-        'title': 'Muy lejos',
-        'status': 'pending',
-        'isRecurring': false,
-        'dueDate': farFuture.toIso8601String(),
-      });
-
-      expect(
-        cubit.state.timelineDays.values.expand((l) => l).map((t) => t.id),
-        isNot(contains('far-1')),
-      );
-    });
-
-    test('a mutation before loadTimeline() has ever run does not populate the timeline',
-        () async {
-      final repo = FakeTaskRepository(pages: [page([buildTask('1')])]);
-      final cubit = TaskCubit(repo, FakeNotificationService());
-      await cubit.load('h1'); // loadTimeline() deliberately never called
-
-      await cubit.createTask({'title': 'Nueva'});
-
-      expect(cubit.state.timelineDays, isEmpty);
-      expect(cubit.state.timelineUndated, isEmpty);
-    });
-  });
+  // TD-064 commit 4: the two timeline groups that lived here are gone with the
+  // feature. TaskCubit no longer owns a timeline — TimelineCubit does, and
+  // timeline_cubit_test.dart covers the same ground on the keyset endpoints
+  // (pagination, realtime, mutations, day grouping). What replaces the
+  // "stays in sync with mutations" group is stronger than a test: TaskCubit
+  // now echoes into a TimelineSink whose state is keyed by id, so the
+  // desynchronisation those tests guarded against is unrepresentable. The
+  // echo itself is pinned by task_cubit_timeline_sink_test.dart.
 
   group('TaskCubit start-reminder notifications (PDR-004)', () {
     test('createTask with startsAt schedules a start reminder', () async {
@@ -1240,13 +969,11 @@ void main() {
         FakeNotificationService(),
       );
       await cubit.load('h1');
-      await cubit.loadTimeline('h1');
       cubit.emit(cubit.state.copyWith(
         recurringTasks: [buildTask('r1', isRecurring: true)],
         trashTasks: [buildTask('d1', isDeleted: true)],
       ));
       expect(cubit.state.allTasks, isNotEmpty);
-      expect(cubit.state.timelineDays, isNotEmpty);
       expect(cubit.householdId, 'h1');
 
       cubit.reset();
@@ -1294,17 +1021,6 @@ void main() {
           isOffline: true,
           offlineNotice: 'saved offline',
           isSyncing: true,
-          timelineDays: {
-            DateTime(2026, 1, 1): [buildTask('2')],
-          },
-          timelineUndated: [buildTask('3')],
-          timelineCursor: 'tc1',
-          timelineHasMore: true,
-          timelineWindowFrom: DateTime(2026, 1, 1),
-          timelineWindowTo: DateTime(2026, 1, 10),
-          timelineLoading: true,
-          timelineLoadingMore: true,
-          timelineError: 'timeline error',
           recurringTasks: [buildTask('4', isRecurring: true)],
           recurringLoading: true,
           recurringLoaded: true,
@@ -1331,15 +1047,6 @@ void main() {
         isOffline: original.isOffline,
         offlineNotice: null,
         isSyncing: original.isSyncing,
-        timelineDays: original.timelineDays,
-        timelineUndated: original.timelineUndated,
-        timelineCursor: original.timelineCursor,
-        timelineHasMore: original.timelineHasMore,
-        timelineWindowFrom: original.timelineWindowFrom,
-        timelineWindowTo: original.timelineWindowTo,
-        timelineLoading: original.timelineLoading,
-        timelineLoadingMore: original.timelineLoadingMore,
-        timelineError: original.timelineError,
         recurringTasks: original.recurringTasks,
         recurringLoading: original.recurringLoading,
         recurringLoaded: original.recurringLoaded,
@@ -1353,41 +1060,37 @@ void main() {
       expect(copied, expected);
       expect(copied.offlineNotice, isNull,
           reason: 'offlineNotice is the one deliberate exception (see its doc comment)');
-      expect(copied.timelineCursor, 'tc1', reason: 'TD-056: must survive an untargeted copyWith');
+      expect(copied.recurringError, 'recurring error',
+          reason: 'TD-056: must survive an untargeted copyWith');
     });
 
     test('each clearX flag nulls exactly its own field and leaves the other sticky ones alone', () {
       final original = fullyPopulated();
 
       expect(original.copyWith(clearError: true).error, isNull);
-      expect(original.copyWith(clearError: true).timelineCursor, 'tc1');
-
-      expect(original.copyWith(clearTimelineCursor: true).timelineCursor, isNull);
-      expect(original.copyWith(clearTimelineCursor: true).error, 'some error');
-
-      expect(original.copyWith(clearTimelineError: true).timelineError, isNull);
-      expect(original.copyWith(clearTimelineError: true).recurringError, 'recurring error');
+      expect(original.copyWith(clearError: true).recurringError, 'recurring error');
 
       expect(original.copyWith(clearRecurringError: true).recurringError, isNull);
       expect(original.copyWith(clearRecurringError: true).trashError, 'trash error');
 
       expect(original.copyWith(clearTrashError: true).trashError, isNull);
-      expect(original.copyWith(clearTrashError: true).timelineError, 'timeline error');
+      expect(original.copyWith(clearTrashError: true).recurringError, 'recurring error');
     });
 
     test('passing a new value overwrites regardless of the clearX flag', () {
       final original = fullyPopulated();
 
-      final copied = original.copyWith(error: 'new error', timelineCursor: 'tc2');
+      final copied =
+          original.copyWith(error: 'new error', recurringError: 'new recurring');
 
       expect(copied.error, 'new error');
-      expect(copied.timelineCursor, 'tc2');
+      expect(copied.recurringError, 'new recurring');
     });
   });
 
   group('TaskCubit.clearOfflineNotice (F7)', () {
-    test('clears only offlineNotice — error/timelineCursor/timelineError/recurringError/'
-        'trashError all survive', () async {
+    test('clears only offlineNotice — error/recurringError/trashError all survive',
+        () async {
       final repo = FakeTaskRepository(
         pages: [page([buildTask('1')])],
         timelinePages: [
@@ -1402,11 +1105,8 @@ void main() {
       // in — F7 was specifically that these got wiped as a side effect of
       // an unrelated, purely-cosmetic "dismiss the offline banner" action.
       await cubit.load('h1');
-      await cubit.loadTimeline('h1');
-      expect(cubit.state.timelineCursor, 'tc1');
       cubit.emit(cubit.state.copyWith(
         error: 'boom',
-        timelineError: 'timeline boom',
         recurringError: 'recurring boom',
         trashError: 'trash boom',
         offlineNotice: kOfflineNoticeMessage,
@@ -1417,8 +1117,6 @@ void main() {
 
       expect(cubit.state.offlineNotice, isNull);
       expect(cubit.state.error, 'boom');
-      expect(cubit.state.timelineCursor, 'tc1');
-      expect(cubit.state.timelineError, 'timeline boom');
       expect(cubit.state.recurringError, 'recurring boom');
       expect(cubit.state.trashError, 'trash boom');
     });

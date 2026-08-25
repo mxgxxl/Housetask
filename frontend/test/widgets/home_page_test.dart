@@ -13,6 +13,7 @@ import 'package:homesync/presentation/cubit/pet_cubit.dart';
 import 'package:homesync/presentation/cubit/shopping_cubit.dart';
 import 'package:homesync/presentation/cubit/socket_cubit.dart';
 import 'package:homesync/presentation/cubit/task_cubit.dart';
+import 'package:homesync/presentation/cubit/timeline_cubit.dart';
 import 'package:homesync/presentation/pages/main_scaffold.dart';
 import 'package:homesync/services/socket_service.dart';
 import 'package:intl/date_symbol_data_local.dart';
@@ -44,6 +45,10 @@ PaginatedResponse<Task> page(List<Task> items, {int? total}) {
 Widget _host({
   required HouseholdCubit householdCubit,
   required TaskCubit taskCubit,
+  // TD-064: TasksPage's "Todas" tab reads TimelineCubit. Defaulted here rather
+  // than threaded through every call site — these tests assert on the bottom
+  // nav and Home, not on the timeline.
+  TimelineCubit? timelineCubit,
   required ShoppingCubit shoppingCubit,
   required PetCubit petCubit,
   required AuthCubit authCubit,
@@ -55,6 +60,9 @@ Widget _host({
         BlocProvider<AuthCubit>.value(value: authCubit),
         BlocProvider<HouseholdCubit>.value(value: householdCubit),
         BlocProvider<TaskCubit>.value(value: taskCubit),
+        BlocProvider<TimelineCubit>.value(
+          value: timelineCubit ?? TimelineCubit(FakeTaskRepository()),
+        ),
         BlocProvider<ShoppingCubit>.value(value: shoppingCubit),
         BlocProvider<PetCubit>.value(value: petCubit),
         BlocProvider<SocketCubit>.value(value: socketCubit),

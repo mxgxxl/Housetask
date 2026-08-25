@@ -5,6 +5,7 @@ import 'household_cubit.dart';
 import 'pet_cubit.dart';
 import 'shopping_cubit.dart';
 import 'task_cubit.dart';
+import 'timeline_cubit.dart';
 
 /// Bridges the Socket.io connection to the feature cubits: it connects using
 /// the stored token, joins the active household room, and forwards realtime
@@ -16,6 +17,9 @@ class SocketCubit extends Cubit<bool> {
   final ShoppingCubit _shoppingCubit;
   final HouseholdCubit _householdCubit;
   final PetCubit _petCubit;
+  /// Optional so a test that only cares about task/shopping events does not
+  /// have to build a timeline it never asserts on.
+  final TimelineCubit? _timelineCubit;
 
   bool _listenersBound = false;
 
@@ -25,8 +29,10 @@ class SocketCubit extends Cubit<bool> {
     this._taskCubit,
     this._shoppingCubit,
     this._householdCubit,
-    this._petCubit,
-  ) : super(false);
+    this._petCubit, {
+    TimelineCubit? timeline,
+  })  : _timelineCubit = timeline,
+        super(false);
 
   /// Connect with the stored access token and start listening for events.
   Future<void> connectAndListen() async {
@@ -49,11 +55,21 @@ class SocketCubit extends Cubit<bool> {
     if (_listenersBound) return;
     _listenersBound = true;
 
-    _socket.onTaskUpdated(_taskCubit.applyRealtime);
+    // Both, deliberately: TaskCubit keeps its status buckets, the timeline
+    // keeps its own normalized map. Feeding one from the other would make the
+    // timeline's correctness depend on bucket bookkeeping, which is exactly
+    // the coupling TD-064 removes.
+    _socket.onTaskUpdated((event, data) {
+      _taskCubit.applyRealtime(event, data);
+      _timelineCubit?.applyRealtime(event, data);
+    });
     _socket.onShoppingUpdated(_shoppingCubit.applyRealtime);
     _socket.onHouseholdUpdated(_householdCubit.applyRealtime);
     // A batch of recurring occurrences was generated elsewhere; reload tasks.
-    _socket.onTasksBatchCreated((_) => _taskCubit.refresh());
+    _socket.onTasksBatchCreated((_) {
+      _taskCubit.refresh();
+      _timelineCubit?.refresh();
+    });
     // PDR-001 A4: any pet/adoption/economy change elsewhere reloads the pet.
     _socket.onPetUpdated(_petCubit.applyRealtime);
   }

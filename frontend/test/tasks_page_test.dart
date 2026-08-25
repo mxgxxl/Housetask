@@ -5,6 +5,7 @@ import 'package:homesync/data/models/paginated_response.dart';
 import 'package:homesync/data/models/task.dart';
 import 'package:homesync/presentation/cubit/household_cubit.dart';
 import 'package:homesync/presentation/cubit/task_cubit.dart';
+import 'package:homesync/presentation/cubit/timeline_cubit.dart';
 import 'package:homesync/presentation/pages/tasks_page.dart';
 
 import 'fakes.dart';
@@ -32,19 +33,23 @@ PaginatedResponse<Task> page(
 /// `_host`.
 Future<TaskCubit> pumpTasksPage(
   WidgetTester tester,
-  FakeTaskRepository repo,
-) async {
-  final cubit = TaskCubit(repo, FakeNotificationService());
+  FakeTaskRepository repo, {
+  TimelineCubit? timeline,
+}) async {
+  final timelineCubit = timeline ?? TimelineCubit(repo);
+  final cubit = TaskCubit(repo, FakeNotificationService(), timeline: timelineCubit);
   await cubit.load('h1');
   // MainScaffold warms both up front (see main_scaffold.dart
   // _loadForHousehold); mirrored here so "Todas" (PDR-003 timeline) has data
-  // to render exactly like it would in the real app.
-  await cubit.loadTimeline('h1');
+  // to render exactly like it would in the real app. Since TD-064 the
+  // timeline is its own cubit, on its own endpoints.
+  await timelineCubit.load('h1');
 
   await tester.pumpWidget(
     MultiBlocProvider(
       providers: [
         BlocProvider<TaskCubit>.value(value: cubit),
+        BlocProvider<TimelineCubit>.value(value: timelineCubit),
         // TaskTile reads HouseholdCubit to resolve "who completed this"
         // (PDR-002); an empty/initial state is enough for these tests.
         BlocProvider<HouseholdCubit>(
@@ -212,13 +217,15 @@ void main() {
         (tester) async {
       final today = DateTime.now();
       final tomorrow = today.add(const Duration(days: 1));
-      final repo = FakeTaskRepository(timelinePages: [
-        page([
-          buildTask('u1', title: 'Sin fecha alguna'),
-          buildTask('t1', title: 'Tarea de hoy', dueDate: today),
-          buildTask('m1', title: 'Tarea de mañana', dueDate: tomorrow),
-        ]),
-      ]);
+      final repo = FakeTaskRepository(
+        keysetTimelinePages: [
+          page([
+            buildTask('t1', title: 'Tarea de hoy', dueDate: today),
+            buildTask('m1', title: 'Tarea de mañana', dueDate: tomorrow),
+          ]),
+        ],
+        undatedPages: [page([buildTask('u1', title: 'Sin fecha alguna')])],
+      );
       await pumpTasksPage(tester, repo);
 
       // Two matches by design, not a collision: each day section's header
@@ -235,11 +242,11 @@ void main() {
     testWidgets('"Mostrar más" reveals a day\'s extra tasks without issuing a new request',
         (tester) async {
       final today = DateTime.now();
-      final repo = FakeTaskRepository(timelinePages: [
+      final repo = FakeTaskRepository(keysetTimelinePages: [
         page(List.generate(5, (i) => buildTask('t$i', title: 'Tarea $i', dueDate: today))),
       ]);
       await pumpTasksPage(tester, repo);
-      final callsAfterLoad = repo.timelineListCalls;
+      final callsAfterLoad = repo.timelineCalls;
 
       // Capped at 3 rows until "Mostrar más" is tapped.
       expect(find.text('Tarea 0'), findsOneWidget);
@@ -255,7 +262,7 @@ void main() {
       expect(find.text('Tarea 3'), findsOneWidget);
       expect(find.text('Tarea 4'), findsOneWidget);
       // Revealing already-loaded items is local state, not a fetch.
-      expect(repo.timelineListCalls, callsAfterLoad);
+      expect(repo.timelineCalls, callsAfterLoad);
     });
   });
 

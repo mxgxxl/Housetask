@@ -17,6 +17,7 @@ import 'presentation/cubit/shopping_cubit.dart';
 import 'presentation/cubit/socket_cubit.dart';
 import 'presentation/cubit/stats_cubit.dart';
 import 'presentation/cubit/task_cubit.dart';
+import 'presentation/cubit/timeline_cubit.dart';
 import 'presentation/widgets/session_listeners.dart';
 import 'services/notification_service.dart';
 import 'services/socket_service.dart';
@@ -58,7 +59,18 @@ class HomeSyncApp extends StatelessWidget {
             return cubit;
           }),
           BlocProvider(create: (_) => HouseholdCubit(householdRepo)),
-          BlocProvider(create: (_) => TaskCubit(taskRepo, notifications)),
+          BlocProvider(create: (_) => TimelineCubit(taskRepo)),
+          // TD-064: TaskCubit echoes every mutation into the timeline through
+          // the TimelineSink interface, so an optimistic write or a rollback
+          // updates both surfaces without a refetch. Created after
+          // TimelineCubit for that reason.
+          BlocProvider(
+            create: (ctx) => TaskCubit(
+              taskRepo,
+              notifications,
+              timeline: ctx.read<TimelineCubit>(),
+            ),
+          ),
           BlocProvider(create: (_) => ShoppingCubit(shoppingRepo)),
           BlocProvider(create: (_) => PetCubit(petRepo)),
           BlocProvider(create: (_) => StatsCubit(householdRepo)),
@@ -70,6 +82,7 @@ class HomeSyncApp extends StatelessWidget {
               ctx.read<ShoppingCubit>(),
               ctx.read<HouseholdCubit>(),
               ctx.read<PetCubit>(),
+              timeline: ctx.read<TimelineCubit>(),
             ),
           ),
         ],

@@ -15,6 +15,18 @@ const int kTimelineLookbackDays = 1;
 /// más" (see TimelineCubit.loadMoreUndated).
 const int kTimelinePageSize = 50;
 
+/// What TaskCubit needs from the timeline, and nothing more.
+///
+/// TaskCubit owns mutations; the timeline has to hear about them without
+/// either class taking a dependency on the other's shape. An interface keeps
+/// TaskCubit testable with no timeline at all — every existing TaskCubit test
+/// passes null and is unaffected.
+abstract class TimelineSink {
+  void upsert(Task task);
+  void replace(String temporaryId, Task confirmed);
+  void remove(String id);
+}
+
 /// The timeline, stored NORMALIZED BY ID.
 ///
 /// Not a list of days holding lists of tasks — a map keyed by task id, with
@@ -163,7 +175,7 @@ class TimelineState extends Equatable {
 /// TaskCubit keeps owning mutations and its status buckets. It feeds this
 /// class through [upsert]/[remove] instead of triggering refetches, so a
 /// socket event or an optimistic write costs no HTTP call here.
-class TimelineCubit extends Cubit<TimelineState> {
+class TimelineCubit extends Cubit<TimelineState> implements TimelineSink {
   final TaskRepository _repo;
 
   String? _householdId;
@@ -346,6 +358,7 @@ class TimelineCubit extends Cubit<TimelineState> {
   /// TaskCubit for optimistic writes and by the socket for events from other
   /// devices. An upsert by id can never duplicate: replacing a row and adding
   /// one are the same operation here.
+  @override
   void upsert(Task task) {
     if (state.from == null) return; // no walk started; nothing to keep in sync.
 
@@ -373,6 +386,7 @@ class TimelineCubit extends Cubit<TimelineState> {
   /// The operation that used to be split across two structures and lost half
   /// of itself. Here it is a remove plus an upsert on the same map, so the
   /// intermediate state where both exist is not representable.
+  @override
   void replace(String temporaryId, Task confirmed) {
     if (state.from == null) return;
 
@@ -391,6 +405,7 @@ class TimelineCubit extends Cubit<TimelineState> {
   }
 
   /// Drop [id] from the timeline. No-op if it was never there.
+  @override
   void remove(String id) {
     if (!state.dated.containsKey(id) && !state.undated.containsKey(id)) return;
     emit(state.copyWith(

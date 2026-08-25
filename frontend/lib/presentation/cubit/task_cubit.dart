@@ -10,7 +10,8 @@ import '../../data/repositories/task_repository.dart';
 import '../../services/connectivity_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/sentry_service.dart';
-import 'timeline_grouping.dart';
+import 'timeline_cubit.dart' show TimelineSink;
+import 'timeline_grouping.dart' show sortTasksForDisplay;
 
 /// Shown once (via BlocListener) after a mutation the repository could only
 /// perform optimistically, offline (TD-003).
@@ -148,33 +149,6 @@ class TaskState extends Equatable {
   /// drives the spinner in the offline banner (TD-003).
   final bool isSyncing;
 
-  /// Day-grouped timeline for the "Todas" tab (PDR-003) — deliberately
-  /// separate from [buckets]: [TaskFilter.all] stays the unfiltered,
-  /// unbounded-by-date list Home/Calendar read via [allTasks], while the
-  /// timeline is scoped to a rolling from/to window that would otherwise
-  /// silently drop tasks outside it from those dashboards.
-  ///
-  /// Keyed by local midnight ([DateTime] with only year/month/day set) so a
-  /// task's day is decided once, in [TaskCubit], rather than re-derived by
-  /// every widget that reads it.
-  final Map<DateTime, List<Task>> timelineDays;
-
-  /// Tasks with no dueDate — always included in every from/to window response
-  /// (see task.service.ts `dueDateWindowFilter`) since they have no day to be
-  /// grouped under; the UI puts them in a "Sin fecha" section instead.
-  final List<Task> timelineUndated;
-
-  final String? timelineCursor;
-  final bool timelineHasMore;
-
-  /// Current window bounds, so [TaskCubit.loadMoreTimeline] knows what to
-  /// extend. Null before the first [TaskCubit.loadTimeline] call.
-  final DateTime? timelineWindowFrom;
-  final DateTime? timelineWindowTo;
-
-  final bool timelineLoading;
-  final bool timelineLoadingMore;
-  final String? timelineError;
 
   /// One row per recurring series for the Recurrentes tab (TD-035): the
   /// current occurrence (pending if one exists, otherwise the most
@@ -217,15 +191,6 @@ class TaskState extends Equatable {
     this.isOffline = false,
     this.offlineNotice,
     this.isSyncing = false,
-    this.timelineDays = const {},
-    this.timelineUndated = const [],
-    this.timelineCursor,
-    this.timelineHasMore = false,
-    this.timelineWindowFrom,
-    this.timelineWindowTo,
-    this.timelineLoading = false,
-    this.timelineLoadingMore = false,
-    this.timelineError,
     this.recurringTasks = const [],
     this.recurringLoading = false,
     this.recurringLoaded = false,
@@ -260,7 +225,7 @@ class TaskState extends Equatable {
   /// nothing preserves the current value (via `??`), and clearing one to
   /// null requires its dedicated `clearX` flag. Before this, [copyWith]
   /// assigned every nullable field unconditionally, so any emit that didn't
-  /// happen to re-pass e.g. [timelineCursor] silently wiped it — 16 of the
+  /// happen to re-pass e.g. [recurringCursor] silently wiped it — 16 of the
   /// 18 emit sites in this file didn't. See TD-056 in docs/TECH_DEBT.md and
   /// the `clearError` pattern StatsCubit/HouseholdCubit/AuthCubit already
   /// used, which this replicates.
@@ -273,17 +238,6 @@ class TaskState extends Equatable {
     bool? isOffline,
     String? offlineNotice,
     bool? isSyncing,
-    Map<DateTime, List<Task>>? timelineDays,
-    List<Task>? timelineUndated,
-    String? timelineCursor,
-    bool clearTimelineCursor = false,
-    bool? timelineHasMore,
-    DateTime? timelineWindowFrom,
-    DateTime? timelineWindowTo,
-    bool? timelineLoading,
-    bool? timelineLoadingMore,
-    String? timelineError,
-    bool clearTimelineError = false,
     List<Task>? recurringTasks,
     bool? recurringLoading,
     bool? recurringLoaded,
@@ -305,15 +259,6 @@ class TaskState extends Equatable {
       // Deliberately unconditional — see the field's own doc comment.
       offlineNotice: offlineNotice,
       isSyncing: isSyncing ?? this.isSyncing,
-      timelineDays: timelineDays ?? this.timelineDays,
-      timelineUndated: timelineUndated ?? this.timelineUndated,
-      timelineCursor: clearTimelineCursor ? null : (timelineCursor ?? this.timelineCursor),
-      timelineHasMore: timelineHasMore ?? this.timelineHasMore,
-      timelineWindowFrom: timelineWindowFrom ?? this.timelineWindowFrom,
-      timelineWindowTo: timelineWindowTo ?? this.timelineWindowTo,
-      timelineLoading: timelineLoading ?? this.timelineLoading,
-      timelineLoadingMore: timelineLoadingMore ?? this.timelineLoadingMore,
-      timelineError: clearTimelineError ? null : (timelineError ?? this.timelineError),
       recurringTasks: recurringTasks ?? this.recurringTasks,
       recurringLoading: recurringLoading ?? this.recurringLoading,
       recurringLoaded: recurringLoaded ?? this.recurringLoaded,
@@ -335,15 +280,6 @@ class TaskState extends Equatable {
         isOffline,
         offlineNotice,
         isSyncing,
-        timelineDays,
-        timelineUndated,
-        timelineCursor,
-        timelineHasMore,
-        timelineWindowFrom,
-        timelineWindowTo,
-        timelineLoading,
-        timelineLoadingMore,
-        timelineError,
         recurringTasks,
         recurringLoading,
         recurringLoaded,
@@ -370,7 +306,14 @@ class TaskCubit extends Cubit<TaskState> {
   /// repeat `true` without ever having gone offline).
   bool _wasOnline = true;
 
-  TaskCubit(this._repo, this._notifications, {ConnectivityService? connectivity})
+  /// Where mutations are echoed so the timeline stays in step without a
+  /// refetch per event (TD-064). Optional: a TaskCubit with no timeline
+  /// attached behaves exactly as before, which is what every test that does
+  /// not care about the timeline relies on.
+  TimelineSink? timeline;
+
+  TaskCubit(this._repo, this._notifications,
+      {ConnectivityService? connectivity, this.timeline})
       : _connectivity = connectivity ?? ConnectivityService(),
         super(const TaskState()) {
     _connectivitySub = _connectivity.isOnline.listen((online) {
@@ -417,8 +360,8 @@ class TaskCubit extends Cubit<TaskState> {
 
   /// Consume the one-shot [TaskState.offlineNotice] after the UI has shown
   /// it, without disturbing anything else (F7 — this used to also silently
-  /// clear [TaskState.timelineError]/[TaskState.recurringError]/
-  /// [TaskState.trashError] via the same bug TD-056 fixed in [copyWith]).
+  /// clear [TaskState.recurringError]/[TaskState.trashError] via the same bug
+  /// TD-056 fixed in [copyWith]).
   void clearOfflineNotice() {
     emit(state.copyWith());
   }
@@ -542,78 +485,11 @@ class TaskCubit extends Cubit<TaskState> {
     }
   }
 
-  /// Fetch the initial timeline window for the "Todas" tab (PDR-003):
-  /// yesterday through today+6, computed from the DEVICE's local calendar so
-  /// day boundaries match what the user actually sees, independent of
-  /// TD-013 (household timezone, not yet implemented).
-  Future<void> loadTimeline(String householdId) async {
-    _householdId = householdId;
-    final now = DateTime.now();
-    final from = startOfLocalDay(now.subtract(const Duration(days: _timelineLookbackDays)));
-    final to = endOfLocalDay(now.add(const Duration(days: _timelineInitialForwardDays)));
-
-    emit(state.copyWith(timelineLoading: true, clearTimelineError: true));
-    try {
-      final result = await _repo.list(householdId, from: from, to: to);
-      final grouped = groupTasksByLocalDay(result.items);
-      emit(state.copyWith(
-        timelineLoading: false,
-        timelineDays: grouped.days,
-        timelineUndated: grouped.undated,
-        // result.nextCursor legitimately being null (no more pages) must
-        // still overwrite a previous cursor, not just be ignored as "not
-        // specified" — see copyWith's clearTimelineCursor.
-        timelineCursor: result.nextCursor,
-        clearTimelineCursor: result.nextCursor == null,
-        timelineHasMore: result.hasMore,
-        timelineWindowFrom: from,
-        timelineWindowTo: to,
-      ));
-    } on Failure catch (f) {
-      emit(state.copyWith(timelineLoading: false, timelineError: f.message));
-    }
-  }
-
-  /// Continue the timeline: first drains any further pages of the CURRENT
-  /// window via [TaskState.timelineCursor] (a household with a busy week can
-  /// exceed one page), then — once that window is exhausted — extends `to`
-  /// forward by [_timelineExtendDays] and fetches page one of the wider
-  /// window. Either way the response is merged into the existing buckets by
-  /// task id rather than appended, so re-fetching an already-seen item when
-  /// the window widens (a plain superset re-fetch, since `from` never moves)
-  /// overwrites it in place instead of duplicating it.
-  Future<void> loadMoreTimeline() async {
-    if (_householdId == null || state.timelineLoadingMore) return;
-
-    final from = state.timelineWindowFrom;
-    var to = state.timelineWindowTo;
-    if (from == null || to == null) return; // loadTimeline() never ran.
-
-    final continuingWithinWindow = state.timelineHasMore && state.timelineCursor != null;
-    final cursor = continuingWithinWindow ? state.timelineCursor : null;
-    if (!continuingWithinWindow) {
-      to = endOfLocalDay(to.add(const Duration(days: _timelineExtendDays)));
-    }
-
-    emit(state.copyWith(timelineLoadingMore: true));
-    try {
-      final result = await _repo.list(_householdId!, from: from, to: to, cursor: cursor);
-      final merged = _mergeTimelineItems(state.timelineDays, state.timelineUndated, result.items);
-      emit(state.copyWith(
-        timelineLoadingMore: false,
-        timelineDays: merged.days,
-        timelineUndated: merged.undated,
-        // Same reasoning as loadTimeline's success emit: a null nextCursor
-        // must overwrite, not be treated as "not specified".
-        timelineCursor: result.nextCursor,
-        clearTimelineCursor: result.nextCursor == null,
-        timelineHasMore: result.hasMore,
-        timelineWindowTo: to,
-      ));
-    } on Failure catch (f) {
-      emit(state.copyWith(timelineLoadingMore: false, timelineError: f.message));
-    }
-  }
+  // TD-064 commit 4: loadTimeline/loadMoreTimeline are gone. The "Todas" tab
+  // is TimelineCubit's now — keyset pagination that never revisits ground,
+  // instead of the window-widening walk that re-fetched page one of an
+  // ever-larger superset. TaskCubit keeps mutations and status buckets, and
+  // echoes each mutation to [timeline].
 
   /// Ask the backend to generate any missed recurring occurrences, then reload
   /// if new tasks were created. Silent + non-critical: never surfaces errors.
@@ -752,6 +628,9 @@ class TaskCubit extends Cubit<TaskState> {
   /// — when it fell back to the queue — the same write with a `local-` id and
   /// isSynced:false. Both are the same operation from here: an id swap.
   void _confirmCreate(String tempId, Task confirmed, {String? offlineNotice}) {
+    // One call, not remove+upsert: the timeline models the id swap as a single
+    // operation so the intermediate state with both rows is unrepresentable.
+    timeline?.replace(tempId, confirmed);
     _rollbackSnapshots.remove(tempId);
     _optimisticApplied.remove(tempId);
 
@@ -760,17 +639,10 @@ class TaskCubit extends Cubit<TaskState> {
       buckets: _bucketsAfterRemove(state, tempId),
       pendingIds: state.pendingIds.difference({tempId}),
     );
-    // `replacing:` es la mitad que faltaba. El intercambio de id es un REMOVE
-    // del temporal más un UPSERT del real, y el timeline está indexado por id
-    // igual que los buckets: quitarlo solo de éstos dejaba la fila optimista
-    // y su reemplazo confirmado conviviendo en la misma vista.
-    final timeline = _timelineAfterUpsert(withoutTemp, confirmed, replacing: tempId);
     emit(withoutTemp.copyWith(
       status: TaskStatusUi.loaded,
       buckets: _bucketsAfterUpsert(withoutTemp, confirmed),
       offlineNotice: offlineNotice,
-      timelineDays: timeline?.days,
-      timelineUndated: timeline?.undated,
     ));
   }
 
@@ -941,10 +813,9 @@ class TaskCubit extends Cubit<TaskState> {
         _rollbackSnapshots.remove(taskId);
         emit(state.copyWith(pendingIds: state.pendingIds.difference({taskId})));
         // Idempotent on purpose: the optimistic branch above only fires for
-        // entities present in the paginated buckets, but a row can be visible
-        // in another surface built from the same cubit (the timeline) without
-        // being in any bucket — e.g. a session that only ran loadTimeline().
-        // Removing again here costs nothing and keeps those surfaces correct.
+        // entities present in the paginated buckets, and the echo to
+        // [timeline] has to happen whether or not the row was in one.
+        // Removing again here costs nothing and keeps both surfaces correct.
         _remove(taskId);
       }
       await _notifications.cancelTaskReminder(taskId);
@@ -1140,13 +1011,11 @@ class TaskCubit extends Cubit<TaskState> {
   }
 
   void _upsert(Task task, {String? offlineNotice}) {
-    final timeline = _timelineAfterUpsert(state, task);
+    timeline?.upsert(task);
     emit(state.copyWith(
       status: TaskStatusUi.loaded,
       buckets: _bucketsAfterUpsert(state, task),
       offlineNotice: offlineNotice,
-      timelineDays: timeline?.days,
-      timelineUndated: timeline?.undated,
     ));
   }
 
@@ -1167,75 +1036,11 @@ class TaskCubit extends Cubit<TaskState> {
   }
 
   void _remove(String id) {
-    final timeline = _timelineAfterRemove(state, id);
-    emit(state.copyWith(
-      buckets: _bucketsAfterRemove(state, id),
-      timelineDays: timeline?.days,
-      timelineUndated: timeline?.undated,
-    ));
+    timeline?.remove(id);
+    emit(state.copyWith(buckets: _bucketsAfterRemove(state, id)));
   }
 
-  /// Keep [TaskState.timelineDays]/[TaskState.timelineUndated] consistent with
-  /// [task], the same way the loop above keeps [TaskState.buckets] consistent
-  /// — the PDR-003 "Todas" tab renders the timeline directly (see
-  /// tasks_page.dart's `_TimelineList`), not `buckets[TaskFilter.all]`, so a
-  /// local mutation or realtime event that only patched buckets left an
-  /// equally real staleness bug there: a created task invisible until
-  /// pull-to-refresh, a deleted one stuck on screen, a rescheduled one stuck
-  /// on its old day.
-  ///
-  /// Mirrors what a fresh [loadTimeline] response would contain: [task] lands
-  /// in its due date's day (moved if the date changed since the last upsert),
-  /// in "Sin fecha" if it has none (the backend always includes undated tasks
-  /// regardless of window), or is dropped if its date now falls outside
-  /// [TaskState.timelineWindowFrom]..[TaskState.timelineWindowTo] — e.g. a
-  /// task just rescheduled past the loaded window. Returns null (no-op) until
-  /// the first [loadTimeline] call establishes those window bounds.
-  ///
-  /// [replacing], cuando se pasa, es un id que SALE del timeline en la misma
-  /// operación: el id temporal de un create optimista al que [task] sustituye.
-  /// Va aquí y no en una llamada aparte para que el intercambio siga siendo UN
-  /// solo emit — dos dejarían un frame sin la fila y provocarían el parpadeo
-  /// que TD-060 existe para evitar.
-  TimelineGroups? _timelineAfterUpsert(
-    TaskState state,
-    Task task, {
-    String? replacing,
-  }) {
-    final from = state.timelineWindowFrom;
-    final to = state.timelineWindowTo;
-    if (from == null || to == null) return null;
 
-    final byId = <String, Task>{
-      for (final t in state.timelineDays.values.expand((l) => l)) t.id: t,
-      for (final t in state.timelineUndated) t.id: t,
-    };
-    if (replacing != null) byId.remove(replacing);
-
-    final due = task.dueDate?.toLocal();
-    final withinWindow = due == null || (!due.isBefore(from) && !due.isAfter(to));
-    if (withinWindow) {
-      byId[task.id] = task;
-    } else {
-      byId.remove(task.id);
-    }
-    return groupTasksByLocalDay(byId.values.toList());
-  }
-
-  /// Companion to [_timelineAfterUpsert] for a hard delete/removal by [id].
-  /// Same null-means-no-op rule before the first [loadTimeline] call.
-  TimelineGroups? _timelineAfterRemove(TaskState state, String id) {
-    if (state.timelineWindowFrom == null || state.timelineWindowTo == null) {
-      return null;
-    }
-
-    final byId = <String, Task>{
-      for (final t in state.timelineDays.values.expand((l) => l)) t.id: t,
-      for (final t in state.timelineUndated) t.id: t,
-    };
-    if (byId.remove(id) == null) return null; // wasn't in the timeline anyway.
-    return groupTasksByLocalDay(byId.values.toList());
-  }
 
   /// [bucket.total] shifted by [delta], but only once the bucket has actually
   /// been fetched: a total of null means "unknown", and unknown ± 1 is still
@@ -1252,16 +1057,6 @@ class TaskCubit extends Cubit<TaskState> {
   List<Task> _sorted(List<Task> tasks) => sortTasksForDisplay(tasks);
 }
 
-/// Timeline window (PDR-003): starts at "yesterday" so a task due yesterday
-/// but not yet done is never hidden the moment the clock ticks past
-/// midnight, and initially reaches 6 days into the future (an 8-day window
-/// total: yesterday, today, +1..+6).
-const _timelineLookbackDays = 1;
-const _timelineInitialForwardDays = 6;
-
-/// Extra days appended to the window each time [TaskCubit.loadMoreTimeline]
-/// runs out of pages within the current one.
-const _timelineExtendDays = 7;
 
 
 
@@ -1273,20 +1068,6 @@ const _timelineExtendDays = 7;
 /// Merge a newly-fetched page into the existing timeline buckets, keyed by
 /// task id so a widened window's superset re-fetch overwrites rather than
 /// duplicates already-bucketed items.
-TimelineGroups _mergeTimelineItems(
-  Map<DateTime, List<Task>> existingDays,
-  List<Task> existingUndated,
-  List<Task> newItems,
-) {
-  final byId = <String, Task>{
-    for (final t in existingDays.values.expand((l) => l)) t.id: t,
-    for (final t in existingUndated) t.id: t,
-  };
-  for (final t in newItems) {
-    byId[t.id] = t;
-  }
-  return groupTasksByLocalDay(byId.values.toList());
-}
 
 /// One row per recurring series (grouped by parentTaskId, or the task's own
 /// id for a series' very first occurrence): the PENDING occurrence if one

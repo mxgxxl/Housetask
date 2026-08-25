@@ -8,6 +8,7 @@ import '../cubit/pet_cubit.dart';
 import '../cubit/shopping_cubit.dart';
 import '../cubit/socket_cubit.dart';
 import '../cubit/task_cubit.dart';
+import '../cubit/timeline_cubit.dart';
 import 'calendar_page.dart';
 import 'home_page.dart';
 import 'household_setup_page.dart';
@@ -64,7 +65,7 @@ class _MainScaffoldState extends State<MainScaffold> {
     // "Todas" (PDR-003) is warmed up front like every other tab, rather than
     // lazily from TasksPage.initState, so it is ready the moment the user
     // switches to the Tareas tab instead of showing its own loading spinner.
-    context.read<TaskCubit>().loadTimeline(householdId);
+    context.read<TimelineCubit>().load(householdId);
     context.read<ShoppingCubit>().load(householdId);
     context.read<SocketCubit>().joinHousehold(householdId);
     // Generate any missed recurring occurrences for this household.
