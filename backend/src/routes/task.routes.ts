@@ -15,6 +15,12 @@ router.use(authMiddleware);
 router.use(requireMembership);
 
 router.get('/', asyncHandler(taskController.list));
+
+// TD-064: the timeline reads. Registered before any `/:taskId` route so a
+// literal segment can never be captured as an id — there is no GET `/:taskId`
+// today, but adding one later must not silently swallow these.
+router.get('/timeline', asyncHandler(taskController.timeline));
+router.get('/undated', asyncHandler(taskController.undated));
 // validate() before idempotency: a malformed body fails fast without ever
 // claiming/burning the client's Idempotency-Key (TD-028).
 router.post('/', validate(createTaskSchema), idempotency, asyncHandler(taskController.create));

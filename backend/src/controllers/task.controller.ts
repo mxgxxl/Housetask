@@ -55,6 +55,42 @@ export async function list(req: AuthenticatedRequest, res: Response): Promise<vo
 }
 
 /**
+ * GET /api/households/:householdId/tasks/timeline?from=<ISO>&limit=&cursor=
+ *
+ * Active, DATED tasks from `from` onwards, keyset-paginated (TD-064).
+ * `from` is required: it is both the lower bound and the identity of the
+ * pagination session, so there is no sensible default — a missing one would
+ * silently start a different walk than the cursors already in flight.
+ */
+export async function timeline(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const from = parseDateParam(req.query.from, 'from');
+  if (!from) {
+    throw new AppError('from is required', 400);
+  }
+
+  const page = await taskService.listTimeline(req.params.householdId, {
+    from,
+    limit: parseLimit(req.query.limit),
+    cursor: parseCursorParam(req.query.cursor),
+  });
+  sendSuccess(res, page);
+}
+
+/**
+ * GET /api/households/:householdId/tasks/undated?limit=&cursor=
+ *
+ * Active tasks with no due date, paginated on their own so a backlog of them
+ * never rides along with every dated page (TD-064).
+ */
+export async function undated(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const page = await taskService.listUndatedTasks(req.params.householdId, {
+    limit: parseLimit(req.query.limit),
+    cursor: parseCursorParam(req.query.cursor),
+  });
+  sendSuccess(res, page);
+}
+
+/**
  * POST /api/households/:householdId/tasks
  * Creates a task and broadcasts task:created.
  */

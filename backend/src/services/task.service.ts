@@ -379,6 +379,195 @@ export async function listTasks(
   };
 }
 
+/* ------------------------------------------------------------------ *
+ * TD-064: the timeline reads                                          *
+ * ------------------------------------------------------------------ */
+
+/**
+ * Sort position of the last DATED task on a timeline page.
+ *
+ * Versioned (`v`) because the cursor is opaque and long-lived in a client's
+ * memory: a future change to the sort key has to be able to reject old
+ * cursors instead of silently walking them with the wrong comparator.
+ *
+ * `f` pins the cursor to the session it was issued for. A cursor is a position
+ * in ONE ordered result set; replaying it against a different `from` would
+ * resume at a coordinate that means something else, skipping or repeating rows
+ * with no error anywhere. Binding it makes that a 400 instead of a silent hole.
+ */
+interface TimelineCursor {
+  v: 1;
+  f: string;
+  d: string;
+  id: string;
+}
+
+/** Sort position of the last UNDATED task. Only an id: nothing else orders them. */
+interface UndatedCursor {
+  v: 1;
+  id: string;
+}
+
+function isTimelineCursor(value: unknown): value is TimelineCursor {
+  if (typeof value !== 'object' || value === null) return false;
+  const c = value as Record<string, unknown>;
+  if (c.v !== 1) return false;
+  if (typeof c.f !== 'string' || Number.isNaN(Date.parse(c.f))) return false;
+  if (typeof c.d !== 'string' || Number.isNaN(Date.parse(c.d))) return false;
+  return typeof c.id === 'string' && Types.ObjectId.isValid(c.id);
+}
+
+function isUndatedCursor(value: unknown): value is UndatedCursor {
+  if (typeof value !== 'object' || value === null) return false;
+  const c = value as Record<string, unknown>;
+  if (c.v !== 1) return false;
+  return typeof c.id === 'string' && Types.ObjectId.isValid(c.id);
+}
+
+/** `dueDate ASC, _id ASC` — a total order, which a keyset walk requires. */
+const TIMELINE_SORT = { dueDate: 1, _id: 1 } as const;
+
+/**
+ * Undated tasks keep the order they had inside the old combined list: newest
+ * first. MongoDB sorts null before any date, so under the previous
+ * `{status, dueDate, _id: -1}` sort they surfaced ahead of dated tasks ordered
+ * by descending id. Splitting them into their own read must not silently
+ * reshuffle a bucket the user already knows.
+ */
+const UNDATED_SORT = { _id: -1 } as const;
+
+export interface TimelineOptions {
+  from: Date;
+  limit: number;
+  cursor?: string;
+}
+
+export interface UndatedOptions {
+  limit: number;
+  cursor?: string;
+}
+
+/**
+ * One page of a household's ACTIVE, DATED tasks from `from` onwards (TD-064).
+ *
+ * Deliberately not a variant of [listTasks]. That endpoint answers "the
+ * household's tasks, optionally windowed", and its `from`/`to` window returns
+ * undated tasks in EVERY window (`dueDateWindowFilter` ORs `dueDate: null`
+ * in), so a client walking forward re-reads them on every page and the backend
+ * re-scans them. The timeline instead walks a single open-ended range with a
+ * cursor that never revisits ground, and the undated tasks get their own
+ * paginated read below.
+ *
+ * `dueDate: {$gte: from}` also does the "dated only" filtering for free:
+ * MongoDB range operators match within a BSON type, so null and missing
+ * dueDates cannot satisfy it.
+ */
+export async function listTimeline(
+  householdId: string,
+  options: TimelineOptions,
+): Promise<Page<ITask>> {
+  const baseFilter: Record<string, unknown> = {
+    householdId: new Types.ObjectId(householdId),
+    isDeleted: { $ne: true },
+    dueDate: { $gte: options.from },
+  };
+
+  let pageFilter = baseFilter;
+  if (options.cursor) {
+    const cursor = decodeCursor(options.cursor, isTimelineCursor);
+    if (cursor.f !== options.from.toISOString()) {
+      throw new AppError('Cursor does not belong to this timeline query', 400);
+    }
+    const after = new Date(cursor.d);
+    // Top-level `$or` alongside the base `dueDate` bound: both apply (implicit
+    // AND) and neither clobbers the other, since they live under different keys.
+    pageFilter = {
+      ...baseFilter,
+      $or: [
+        { dueDate: { $gt: after } },
+        { dueDate: after, _id: { $gt: new Types.ObjectId(cursor.id) } },
+      ],
+    };
+  }
+
+  const [total, docs] = await Promise.all([
+    options.cursor ? Promise.resolve(null) : TaskModel.countDocuments(baseFilter),
+    TaskModel.find(pageFilter)
+      .sort(TIMELINE_SORT)
+      .limit(options.limit + 1)
+      .populate('assignedTo', POPULATE_FIELDS)
+      .populate('createdBy', POPULATE_FIELDS)
+      .populate('completedBy', POPULATE_FIELDS),
+  ]);
+
+  const hasMore = docs.length > options.limit;
+  const items = hasMore ? docs.slice(0, options.limit) : docs;
+  const last = items[items.length - 1];
+
+  return {
+    items,
+    hasMore,
+    total,
+    nextCursor:
+      hasMore && last?.dueDate
+        ? encodeCursor({
+            v: 1,
+            f: options.from.toISOString(),
+            d: last.dueDate.toISOString(),
+            id: last._id.toString(),
+          })
+        : null,
+  };
+}
+
+/**
+ * One page of a household's ACTIVE, UNDATED tasks (TD-064).
+ *
+ * Separate from the timeline on purpose: a household with a long list of
+ * undated tasks would otherwise push them through every dated page, so the
+ * cost of reading "next week" would grow with a backlog that has nothing to do
+ * with next week.
+ */
+export async function listUndatedTasks(
+  householdId: string,
+  options: UndatedOptions,
+): Promise<Page<ITask>> {
+  const baseFilter: Record<string, unknown> = {
+    householdId: new Types.ObjectId(householdId),
+    isDeleted: { $ne: true },
+    // `$eq: null` matches BOTH an explicit null and a missing key, which is
+    // what documents created before dueDate existed look like.
+    dueDate: null,
+  };
+
+  let pageFilter = baseFilter;
+  if (options.cursor) {
+    const cursor = decodeCursor(options.cursor, isUndatedCursor);
+    pageFilter = { ...baseFilter, _id: { $lt: new Types.ObjectId(cursor.id) } };
+  }
+
+  const [total, docs] = await Promise.all([
+    options.cursor ? Promise.resolve(null) : TaskModel.countDocuments(baseFilter),
+    TaskModel.find(pageFilter)
+      .sort(UNDATED_SORT)
+      .limit(options.limit + 1)
+      .populate('assignedTo', POPULATE_FIELDS)
+      .populate('createdBy', POPULATE_FIELDS)
+      .populate('completedBy', POPULATE_FIELDS),
+  ]);
+
+  const hasMore = docs.length > options.limit;
+  const items = hasMore ? docs.slice(0, options.limit) : docs;
+  const last = items[items.length - 1];
+
+  return {
+    items,
+    hasMore,
+    total,
+    nextCursor: hasMore && last ? encodeCursor({ v: 1, id: last._id.toString() }) : null,
+  };
+}
+
 /**
  * Create a task in a household and broadcast `task:created`.
  */

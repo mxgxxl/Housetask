@@ -125,6 +125,17 @@ taskSchema.index({ householdId: 1, status: -1, isDeleted: 1, dueDate: 1, _id: -1
 // unconstrained forces a bounds-less scan of the whole household on dueDate.
 // This is a genuinely different key order, not a prefix of the index above,
 // so it is not redundant with it (unlike the index TD-026 already removed).
-taskSchema.index({ householdId: 1, dueDate: 1 });
+//
+// TD-064 extends it with `_id` so the keyset timeline's total order
+// (`dueDate ASC, _id ASC`) is served entirely from the index: without the
+// tiebreaker in the key, every page whose boundary falls inside a group of
+// tasks sharing a dueDate would need an in-memory sort to resolve it, which
+// is exactly where a cursor walk must not lose its footing.
+//
+// Note for whoever looks at Atlas: Mongoose only CREATES indexes, it never
+// drops them, so the two-field `{householdId, dueDate}` version still exists
+// there. It is a prefix of this one and therefore redundant — dropping it is
+// a safe manual cleanup, not something this schema can do.
+taskSchema.index({ householdId: 1, dueDate: 1, _id: 1 });
 
 export const TaskModel = model<ITask>('Task', taskSchema);

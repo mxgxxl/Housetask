@@ -276,14 +276,24 @@ describe('list indexes match the listing sort', () => {
     expect(patterns).not.toContain(JSON.stringify({ householdId: 1, status: 1, dueDate: 1 }));
   });
 
-  it('should have built a second Task index for the PDR-003 from/to window query', async () => {
+  it('should have built a second Task index for the timeline query', async () => {
     const patterns = await builtKeyPatterns(TaskModel);
 
     // { householdId, status, dueDate, _id } above cannot bound dueDate
     // tightly when status is unfiltered (the timeline query, which shows
     // both statuses) — this narrower index is genuinely different, not a
     // duplicate of it.
-    expect(patterns).toContain(JSON.stringify({ householdId: 1, dueDate: 1 }));
+    //
+    // TD-064 added the `_id` tiebreaker: the keyset timeline sorts by
+    // `dueDate ASC, _id ASC`, so without it every page whose boundary lands
+    // inside a group of tasks sharing a dueDate would need an in-memory sort
+    // to resolve — the one place a cursor walk must not be approximate.
+    expect(patterns).toContain(JSON.stringify({ householdId: 1, dueDate: 1, _id: 1 }));
+    // The two-field shape it replaces is a prefix of the above, so keeping it
+    // would be pure write overhead. Mongoose never drops indexes, so an
+    // existing deployment keeps it in Atlas until dropped by hand — but no
+    // fresh database should build it.
+    expect(patterns).not.toContain(JSON.stringify({ householdId: 1, dueDate: 1 }));
   });
 
   it('should have built a ShoppingItem index with exactly the listing sort key pattern', async () => {

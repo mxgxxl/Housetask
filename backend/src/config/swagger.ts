@@ -429,6 +429,56 @@ export const swaggerSpec: Record<string, unknown> = {
         },
       },
     },
+    '/households/{householdId}/tasks/timeline': {
+      get: {
+        tags: ['Tasks'],
+        summary: 'Timeline: active DATED tasks from `from` onwards (TD-064)',
+        description:
+          'Keyset pagination over `dueDate ASC, _id ASC`. `from` is required and is part of ' +
+          'the pagination session identity: a cursor issued for one `from` is rejected with ' +
+          '400 if replayed against another. Undated tasks are NOT included — they have their ' +
+          'own endpoint, so a backlog of them never rides along with every dated page. ' +
+          '`total` is returned on the first page only (ADR-008).',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+          {
+            name: 'from',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', format: 'date-time' },
+            description: 'Lower bound, inclusive. ISO-8601.',
+          },
+          { name: 'limit', in: 'query', schema: { type: 'integer' } },
+          { name: 'cursor', in: 'query', schema: { type: 'string' } },
+        ],
+        responses: {
+          200: { description: 'One page of dated tasks' },
+          400: { description: 'Missing `from`, bad limit, or a cursor from another query' },
+          403: { description: 'Not a member of this household' },
+        },
+      },
+    },
+    '/households/{householdId}/tasks/undated': {
+      get: {
+        tags: ['Tasks'],
+        summary: 'Active tasks with no due date (TD-064)',
+        description:
+          'Paginated separately from the timeline, newest first — the order these tasks ' +
+          'already had inside the combined list. `total` on the first page only.',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'limit', in: 'query', schema: { type: 'integer' } },
+          { name: 'cursor', in: 'query', schema: { type: 'string' } },
+        ],
+        responses: {
+          200: { description: 'One page of undated tasks' },
+          400: { description: 'Bad limit or cursor' },
+          403: { description: 'Not a member of this household' },
+        },
+      },
+    },
     '/households/{householdId}/tasks': {
       get: {
         tags: ['Tasks'],
