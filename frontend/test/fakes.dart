@@ -134,6 +134,16 @@ class FakeTaskRepository implements TaskRepository {
   int timelineCalls = 0;
   int undatedCalls = 0;
 
+  /// Thrown by [timeline] once [timelineCalls] reaches this, so a test can let
+  /// the first page succeed and fail a later one — the shape that matters for
+  /// "a failed prefetch keeps the cursor and the content".
+  Failure? failTimelineFrom;
+  int failTimelineFromCall = 0;
+
+  /// Mutable counterpart of [gate] for the keyset endpoints: a test needs to
+  /// arm it AFTER the first page has landed, which a final field cannot do.
+  Future<void>? timelineGate;
+
   final Map<String?, int> _callsByStatus = {};
 
   int listCalls = 0;
@@ -181,7 +191,11 @@ class FakeTaskRepository implements TaskRepository {
     final n = timelineCalls;
     timelineCalls++;
     if (gate != null) await gate;
+    if (timelineGate != null) await timelineGate;
     if (failListWith != null) throw failListWith!;
+    if (failTimelineFrom != null && n >= failTimelineFromCall) {
+      throw failTimelineFrom!;
+    }
     return n < keysetTimelinePages.length
         ? keysetTimelinePages[n]
         : const PaginatedResponse.empty();
@@ -197,6 +211,7 @@ class FakeTaskRepository implements TaskRepository {
     final n = undatedCalls;
     undatedCalls++;
     if (gate != null) await gate;
+    if (timelineGate != null) await timelineGate;
     if (failListWith != null) throw failListWith!;
     return n < undatedPages.length ? undatedPages[n] : const PaginatedResponse.empty();
   }

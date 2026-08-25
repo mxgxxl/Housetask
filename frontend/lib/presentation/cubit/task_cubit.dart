@@ -10,6 +10,7 @@ import '../../data/repositories/task_repository.dart';
 import '../../services/connectivity_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/sentry_service.dart';
+import 'timeline_grouping.dart';
 
 /// Shown once (via BlocListener) after a mutation the repository could only
 /// perform optimistically, offline (TD-003).
@@ -548,13 +549,13 @@ class TaskCubit extends Cubit<TaskState> {
   Future<void> loadTimeline(String householdId) async {
     _householdId = householdId;
     final now = DateTime.now();
-    final from = _startOfLocalDay(now.subtract(const Duration(days: _timelineLookbackDays)));
-    final to = _endOfLocalDay(now.add(const Duration(days: _timelineInitialForwardDays)));
+    final from = startOfLocalDay(now.subtract(const Duration(days: _timelineLookbackDays)));
+    final to = endOfLocalDay(now.add(const Duration(days: _timelineInitialForwardDays)));
 
     emit(state.copyWith(timelineLoading: true, clearTimelineError: true));
     try {
       final result = await _repo.list(householdId, from: from, to: to);
-      final grouped = _groupTasksByLocalDay(result.items);
+      final grouped = groupTasksByLocalDay(result.items);
       emit(state.copyWith(
         timelineLoading: false,
         timelineDays: grouped.days,
@@ -591,7 +592,7 @@ class TaskCubit extends Cubit<TaskState> {
     final continuingWithinWindow = state.timelineHasMore && state.timelineCursor != null;
     final cursor = continuingWithinWindow ? state.timelineCursor : null;
     if (!continuingWithinWindow) {
-      to = _endOfLocalDay(to.add(const Duration(days: _timelineExtendDays)));
+      to = endOfLocalDay(to.add(const Duration(days: _timelineExtendDays)));
     }
 
     emit(state.copyWith(timelineLoadingMore: true));
@@ -1196,7 +1197,7 @@ class TaskCubit extends Cubit<TaskState> {
   /// Va aquí y no en una llamada aparte para que el intercambio siga siendo UN
   /// solo emit — dos dejarían un frame sin la fila y provocarían el parpadeo
   /// que TD-060 existe para evitar.
-  _TimelineGroups? _timelineAfterUpsert(
+  TimelineGroups? _timelineAfterUpsert(
     TaskState state,
     Task task, {
     String? replacing,
@@ -1218,12 +1219,12 @@ class TaskCubit extends Cubit<TaskState> {
     } else {
       byId.remove(task.id);
     }
-    return _groupTasksByLocalDay(byId.values.toList());
+    return groupTasksByLocalDay(byId.values.toList());
   }
 
   /// Companion to [_timelineAfterUpsert] for a hard delete/removal by [id].
   /// Same null-means-no-op rule before the first [loadTimeline] call.
-  _TimelineGroups? _timelineAfterRemove(TaskState state, String id) {
+  TimelineGroups? _timelineAfterRemove(TaskState state, String id) {
     if (state.timelineWindowFrom == null || state.timelineWindowTo == null) {
       return null;
     }
@@ -1233,7 +1234,7 @@ class TaskCubit extends Cubit<TaskState> {
       for (final t in state.timelineUndated) t.id: t,
     };
     if (byId.remove(id) == null) return null; // wasn't in the timeline anyway.
-    return _groupTasksByLocalDay(byId.values.toList());
+    return groupTasksByLocalDay(byId.values.toList());
   }
 
   /// [bucket.total] shifted by [delta], but only once the bucket has actually
@@ -1248,7 +1249,7 @@ class TaskCubit extends Cubit<TaskState> {
   }
 
   /// Pending first, then by due date ascending (nulls last).
-  List<Task> _sorted(List<Task> tasks) => _sortTasksForDisplay(tasks);
+  List<Task> _sorted(List<Task> tasks) => sortTasksForDisplay(tasks);
 }
 
 /// Timeline window (PDR-003): starts at "yesterday" so a task due yesterday
@@ -1262,58 +1263,17 @@ const _timelineInitialForwardDays = 6;
 /// runs out of pages within the current one.
 const _timelineExtendDays = 7;
 
-DateTime _startOfLocalDay(DateTime d) => DateTime(d.year, d.month, d.day);
 
-DateTime _endOfLocalDay(DateTime d) =>
-    DateTime(d.year, d.month, d.day, 23, 59, 59, 999);
 
 /// Grouped items for the timeline: dated tasks keyed by local midnight, plus
 /// the undated ones the backend always includes alongside a from/to window.
-class _TimelineGroups {
-  final Map<DateTime, List<Task>> days;
-  final List<Task> undated;
-  const _TimelineGroups(this.days, this.undated);
-}
 
-_TimelineGroups _groupTasksByLocalDay(List<Task> tasks) {
-  final days = <DateTime, List<Task>>{};
-  final undated = <Task>[];
-  for (final task in tasks) {
-    final due = task.dueDate;
-    if (due == null) {
-      undated.add(task);
-      continue;
-    }
-    final key = _startOfLocalDay(due.toLocal());
-    (days[key] ??= []).add(task);
-  }
-  for (final key in days.keys) {
-    days[key] = _sortTasksForDisplay(days[key]!);
-  }
-  return _TimelineGroups(days, undated);
-}
 
-/// Pending first, then by due date ascending — same ordering rule as
-/// TaskCubit._sorted, kept as a top-level function since the merge helper
-/// below needs it too and does not have a TaskCubit instance to call it on.
-List<Task> _sortTasksForDisplay(List<Task> tasks) {
-  final copy = List<Task>.from(tasks);
-  copy.sort((a, b) {
-    if (a.isCompleted != b.isCompleted) return a.isCompleted ? 1 : -1;
-    final ad = a.dueDate;
-    final bd = b.dueDate;
-    if (ad == null && bd == null) return 0;
-    if (ad == null) return 1;
-    if (bd == null) return -1;
-    return ad.compareTo(bd);
-  });
-  return copy;
-}
 
 /// Merge a newly-fetched page into the existing timeline buckets, keyed by
 /// task id so a widened window's superset re-fetch overwrites rather than
 /// duplicates already-bucketed items.
-_TimelineGroups _mergeTimelineItems(
+TimelineGroups _mergeTimelineItems(
   Map<DateTime, List<Task>> existingDays,
   List<Task> existingUndated,
   List<Task> newItems,
@@ -1325,7 +1285,7 @@ _TimelineGroups _mergeTimelineItems(
   for (final t in newItems) {
     byId[t.id] = t;
   }
-  return _groupTasksByLocalDay(byId.values.toList());
+  return groupTasksByLocalDay(byId.values.toList());
 }
 
 /// One row per recurring series (grouped by parentTaskId, or the task's own
