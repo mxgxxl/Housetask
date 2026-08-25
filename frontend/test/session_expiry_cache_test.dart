@@ -10,6 +10,7 @@ import 'package:homesync/data/models/household.dart';
 import 'package:homesync/data/models/pending_operation.dart';
 import 'package:homesync/data/models/shopping_item.dart';
 import 'package:homesync/data/models/task.dart';
+import 'package:homesync/data/models/timeline_session.dart';
 import 'package:homesync/presentation/cubit/auth_cubit.dart';
 import 'package:homesync/services/cache_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -69,6 +70,10 @@ void main() {
       households: FakeBox<Household>(),
       pendingOperations: pending,
       cacheOwner: FakeBox<CacheOwner>(),
+      // TD-064: clearAll() wipes this too, so a test exercising it has to
+      // provide it — the strict accessor is deliberate (a box that silently
+      // failed to open must not silently skip being cleared, TD-062).
+      timelineSessions: FakeBox<TimelineSession>(),
     );
 
     SharedPreferences.setMockInitialValues({});

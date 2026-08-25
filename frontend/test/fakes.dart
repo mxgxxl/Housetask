@@ -119,6 +119,21 @@ class FakeTaskRepository implements TaskRepository {
 
   int timelineListCalls = 0;
 
+  /// TD-064: pages replayed for the dedicated `timeline`/`undated` endpoints,
+  /// kept separate from [timelinePages] (which scripts the legacy
+  /// `list(from:, to:)` walk) so a test can drive the old and the new path
+  /// independently while both exist.
+  final List<PaginatedResponse<Task>> keysetTimelinePages;
+  final List<PaginatedResponse<Task>> undatedPages;
+
+  /// Cursors and `from` received by [timeline]/[undatedTasks], in order.
+  final List<String?> receivedTimelineCursors = [];
+  final List<DateTime> receivedTimelineFrom = [];
+  final List<String?> receivedUndatedCursors = [];
+
+  int timelineCalls = 0;
+  int undatedCalls = 0;
+
   final Map<String?, int> _callsByStatus = {};
 
   int listCalls = 0;
@@ -145,12 +160,46 @@ class FakeTaskRepository implements TaskRepository {
     this.failRestoreWith,
     this.failPurgeWith,
     this.purgeResult = 0,
+    this.keysetTimelinePages = const [],
+    this.undatedPages = const [],
   });
 
   /// `includeDeleted` received by [list], in order — lets a test assert the
   /// trash view (TD-009) asks for deleted rows instead of relying on the
   /// default (excluded) list.
   final List<bool> receivedIncludeDeleted = [];
+
+  @override
+  Future<PaginatedResponse<Task>> timeline(
+    String householdId, {
+    required DateTime from,
+    String? cursor,
+    int limit = 50,
+  }) async {
+    receivedTimelineFrom.add(from);
+    receivedTimelineCursors.add(cursor);
+    final n = timelineCalls;
+    timelineCalls++;
+    if (gate != null) await gate;
+    if (failListWith != null) throw failListWith!;
+    return n < keysetTimelinePages.length
+        ? keysetTimelinePages[n]
+        : const PaginatedResponse.empty();
+  }
+
+  @override
+  Future<PaginatedResponse<Task>> undatedTasks(
+    String householdId, {
+    String? cursor,
+    int limit = 50,
+  }) async {
+    receivedUndatedCursors.add(cursor);
+    final n = undatedCalls;
+    undatedCalls++;
+    if (gate != null) await gate;
+    if (failListWith != null) throw failListWith!;
+    return n < undatedPages.length ? undatedPages[n] : const PaginatedResponse.empty();
+  }
 
   @override
   Future<PaginatedResponse<Task>> list(

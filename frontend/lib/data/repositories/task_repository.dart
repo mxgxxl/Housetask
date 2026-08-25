@@ -9,6 +9,7 @@ import '../models/paginated_response.dart';
 import '../models/pending_operation.dart';
 import '../models/task.dart';
 import '../models/task_adapter.dart';
+import '../models/timeline_session.dart';
 
 /// CRUD for household tasks — cache-first reads, offline-queued writes
 /// (TD-003).
@@ -122,6 +123,171 @@ class TaskRepository {
     if (status != null) {
       cached = cached.where((t) => t.status == status).toList();
     }
+    return PaginatedResponse<Task>(
+      items: cached,
+      nextCursor: null,
+      hasMore: false,
+      total: cached.length,
+    );
+  }
+
+  // ---- Timeline (TD-064) ----
+
+  /// One page of the household's ACTIVE, DATED tasks from [from] onwards.
+  ///
+  /// The bug this replaces is not visible on screen, which is why it survived:
+  /// the old timeline load called [list] with a `from`/`to` window and no
+  /// status, which took the "full snapshot" branch and called
+  /// `CacheService.saveTasks` — a whole-household REPLACE. Every task outside
+  /// the window was evicted, so the next offline read showed one slice of
+  /// dates and nothing else, having quietly discarded the rest.
+  ///
+  /// Here a page is what it actually is: a slice. It upserts by id via
+  /// `mergeTasks` and makes no claim about tasks it does not contain.
+  ///
+  /// The walk position is stored separately, keyed by household, so the
+  /// caller can resume without re-deriving it — and so clearing a position
+  /// never touches the tasks it pointed into.
+  Future<PaginatedResponse<Task>> timeline(
+    String householdId, {
+    required DateTime from,
+    String? cursor,
+    int limit = 50,
+  }) async {
+    try {
+      final data = await _api.get(
+        '/households/$householdId/tasks/timeline',
+        query: {
+          'from': from.toUtc().toIso8601String(),
+          'limit': limit,
+          if (cursor != null) 'cursor': cursor,
+        },
+      );
+      final page = PaginatedResponse<Task>.fromJson(
+        Map<String, dynamic>.from(data as Map),
+        Task.fromJson,
+      );
+
+      // Never saveTasks: see above.
+      await _cacheBestEffort(_cache.mergeTasks(page.items), 'mergeTasks(timeline)');
+      await _cacheBestEffort(
+        _persistTimelineSession(householdId, from: from, page: page, isFirstPage: cursor == null),
+        'saveTimelineSession',
+      );
+
+      lastListWasFromCache = false;
+      return page;
+    } on Failure catch (f) {
+      if (!isOfflineWorthy(f)) rethrow;
+      lastListWasFromCache = true;
+      return _timelineFromCache(householdId, from: from);
+    }
+  }
+
+  /// One page of the household's ACTIVE, UNDATED tasks.
+  ///
+  /// Separate from [timeline] for the same reason the backend separates them:
+  /// undated tasks used to be returned inside every dated window, so a growing
+  /// backlog of them made every page of every week more expensive.
+  Future<PaginatedResponse<Task>> undatedTasks(
+    String householdId, {
+    String? cursor,
+    int limit = 50,
+  }) async {
+    try {
+      final data = await _api.get(
+        '/households/$householdId/tasks/undated',
+        query: {
+          'limit': limit,
+          if (cursor != null) 'cursor': cursor,
+        },
+      );
+      final page = PaginatedResponse<Task>.fromJson(
+        Map<String, dynamic>.from(data as Map),
+        Task.fromJson,
+      );
+
+      await _cacheBestEffort(_cache.mergeTasks(page.items), 'mergeTasks(undated)');
+      final session = _cache.timelineSession(householdId);
+      if (session != null) {
+        await _cacheBestEffort(
+          _cache.saveTimelineSession(
+            householdId,
+            session.copyWith(
+              undatedCursor: page.nextCursor,
+              clearUndatedCursor: page.nextCursor == null,
+              undatedHasMore: page.hasMore,
+            ),
+          ),
+          'saveTimelineSession(undated)',
+        );
+      }
+
+      lastListWasFromCache = false;
+      return page;
+    } on Failure catch (f) {
+      if (!isOfflineWorthy(f)) rethrow;
+      lastListWasFromCache = true;
+      return _undatedFromCache(householdId);
+    }
+  }
+
+  Future<void> _persistTimelineSession(
+    String householdId, {
+    required DateTime from,
+    required PaginatedResponse<Task> page,
+    required bool isFirstPage,
+  }) {
+    final existing = isFirstPage ? null : _cache.timelineSession(householdId);
+    // A session whose `from` no longer matches is not this walk: the backend
+    // rejects such a cursor, so carrying its state forward would only preserve
+    // something already invalid.
+    final base = (existing != null && existing.from.isAtSameMomentAs(from))
+        ? existing
+        : TimelineSession(from: from, fetchedAt: DateTime.now());
+
+    return _cache.saveTimelineSession(
+      householdId,
+      base.copyWith(
+        cursor: page.nextCursor,
+        clearCursor: page.nextCursor == null,
+        hasMore: page.hasMore,
+        pagesLoaded: base.pagesLoaded + 1,
+      ),
+    );
+  }
+
+  /// Offline timeline: whatever dated tasks are cached from [from] onwards.
+  ///
+  /// `hasMore: false` and `nextCursor: null` are deliberate and are NOT a
+  /// claim that the server has nothing else. They say this device cannot
+  /// fetch more right now. Reporting `hasMore: true` offline would make the
+  /// UI advertise a page it has no way to load and retry forever.
+  PaginatedResponse<Task> _timelineFromCache(String householdId, {required DateTime from}) {
+    final cached = _cache
+        .getTasks(householdId)
+        .where((t) => !t.isDeleted && t.dueDate != null && !t.dueDate!.isBefore(from))
+        .toList()
+      ..sort((a, b) {
+        final byDate = a.dueDate!.compareTo(b.dueDate!);
+        return byDate != 0 ? byDate : a.id.compareTo(b.id);
+      });
+
+    return PaginatedResponse<Task>(
+      items: cached,
+      nextCursor: null,
+      hasMore: false,
+      total: cached.length,
+    );
+  }
+
+  PaginatedResponse<Task> _undatedFromCache(String householdId) {
+    final cached = _cache
+        .getTasks(householdId)
+        .where((t) => !t.isDeleted && t.dueDate == null)
+        .toList()
+      ..sort((a, b) => b.id.compareTo(a.id));
+
     return PaginatedResponse<Task>(
       items: cached,
       nextCursor: null,

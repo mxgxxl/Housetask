@@ -10,6 +10,7 @@ import 'package:homesync/data/models/household.dart';
 import 'package:homesync/data/models/pending_operation.dart';
 import 'package:homesync/data/models/shopping_item.dart';
 import 'package:homesync/data/models/task.dart';
+import 'package:homesync/data/models/timeline_session.dart';
 import 'package:homesync/data/repositories/task_repository.dart';
 import 'package:homesync/presentation/cubit/task_cubit.dart';
 import 'package:homesync/services/cache_service.dart';
@@ -438,6 +439,10 @@ void cacheOwnerTests() {
       households: FakeBox<Household>(),
       pendingOperations: FakeBox<PendingOperation>(),
       cacheOwner: FakeBox<CacheOwner>(),
+      // TD-064: clearAll() wipes this too, and the accessor is deliberately
+      // strict — a box that never opened must not silently skip being
+      // cleared (the TD-062 failure mode).
+      timelineSessions: FakeBox<TimelineSession>(),
     );
   });
 

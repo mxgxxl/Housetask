@@ -11,6 +11,7 @@ import '../data/models/shopping_item.dart';
 import '../data/models/shopping_item_adapter.dart';
 import '../data/models/task.dart';
 import '../data/models/task_adapter.dart';
+import '../data/models/timeline_session.dart';
 
 /// Local persistence for offline-first reads and the pending-write queue
 /// (TD-003).
@@ -30,12 +31,14 @@ class CacheService {
   static const _householdsBoxName = 'households';
   static const _pendingOperationsBoxName = 'pending_operations';
   static const _cacheOwnerBoxName = 'cache_owner';
+  static const _timelineSessionsBoxName = 'timeline_sessions';
 
   Box<Task>? _tasksBox;
   Box<ShoppingItem>? _shoppingBox;
   Box<Household>? _householdsBox;
   Box<PendingOperation>? _pendingOperationsBox;
   Box<CacheOwner>? _cacheOwnerBox;
+  Box<TimelineSession>? _timelineSessionsBox;
 
   bool _initialized = false;
 
@@ -66,6 +69,9 @@ class CacheService {
       Hive.registerAdapter(PendingOperationAdapter());
     }
     if (!Hive.isAdapterRegistered(4)) Hive.registerAdapter(CacheOwnerAdapter());
+    if (!Hive.isAdapterRegistered(5)) {
+      Hive.registerAdapter(TimelineSessionAdapter());
+    }
 
     _tasksBox = await Hive.openBox<Task>(_tasksBoxName);
     _shoppingBox = await Hive.openBox<ShoppingItem>(_shoppingBoxName);
@@ -73,6 +79,8 @@ class CacheService {
     _pendingOperationsBox =
         await Hive.openBox<PendingOperation>(_pendingOperationsBoxName);
     _cacheOwnerBox = await Hive.openBox<CacheOwner>(_cacheOwnerBoxName);
+    _timelineSessionsBox =
+        await Hive.openBox<TimelineSession>(_timelineSessionsBoxName);
 
     _initialized = true;
   }
@@ -94,12 +102,14 @@ class CacheService {
     Box<Household>? households,
     Box<PendingOperation>? pendingOperations,
     Box<CacheOwner>? cacheOwner,
+    Box<TimelineSession>? timelineSessions,
   }) {
     if (tasks != null) _tasksBox = tasks;
     if (shopping != null) _shoppingBox = shopping;
     if (households != null) _householdsBox = households;
     if (pendingOperations != null) _pendingOperationsBox = pendingOperations;
     if (cacheOwner != null) _cacheOwnerBox = cacheOwner;
+    if (timelineSessions != null) _timelineSessionsBox = timelineSessions;
     _initialized = true;
   }
 
@@ -114,6 +124,7 @@ class CacheService {
     _householdsBox = null;
     _pendingOperationsBox = null;
     _cacheOwnerBox = null;
+    _timelineSessionsBox = null;
     _initialized = false;
   }
 
@@ -337,6 +348,36 @@ class CacheService {
   /// it — either because it was never claimed or because [clearAll] wiped it.
   CacheOwner? get cacheOwner => _cacheOwner.get(_ownerKey);
 
+  Box<TimelineSession> get _timelineSessions {
+    final box = _timelineSessionsBox;
+    if (box == null) {
+      throw StateError('CacheService.init() must be awaited before use');
+    }
+    return box;
+  }
+
+  // ---- Timeline sessions (TD-064) ----
+
+  /// The stored walk position for [householdId], or null if none.
+  ///
+  /// Kept per household, not globally: switching households must not resume a
+  /// cursor issued for a different one, and leaving a household has to be able
+  /// to drop only its own session.
+  TimelineSession? timelineSession(String householdId) =>
+      _timelineSessions.get(householdId);
+
+  Future<void> saveTimelineSession(String householdId, TimelineSession session) =>
+      _timelineSessions.put(householdId, session);
+
+  /// Forget the walk without touching the tasks it walked over.
+  ///
+  /// The separation is the point: a pull-to-refresh or an invalidated cursor
+  /// discards the POSITION, while the tasks already cached stay readable
+  /// offline. Conflating the two is what made a timeline load evict the rest
+  /// of the household.
+  Future<void> clearTimelineSession(String householdId) =>
+      _timelineSessions.delete(householdId);
+
   /// Whether the cache must be wiped before [userId] can use it.
   ///
   /// True when it belongs to someone else AND, deliberately, when there is no
@@ -371,6 +412,9 @@ class CacheService {
       _pendingOperations.clear(),
       // The marker describes the boxes above, so it must not outlive them.
       _cacheOwner.clear(),
+      // Same reasoning: a timeline session is a position over cached tasks,
+      // so it cannot outlive the tasks it points into.
+      _timelineSessions.clear(),
     ]);
   }
 }
