@@ -29,7 +29,14 @@ class Household extends Equatable {
           ? DateTime.tryParse(json['createdAt'].toString())
           : null,
       members: (json['members'] as List<dynamic>?)
-              ?.map((e) => Member.fromJson(e as Map<String, dynamic>))
+              // `Map.from`, not a cast — same root cause as Task's
+              // recurrenceRule and User.fromRef. HouseholdAdapter retypes only
+              // the top level of what Hive returns, so each member is still a
+              // _Map<dynamic, dynamic> here. The hard cast made
+              // `Hive.openBox<Household>` throw for any cached household with
+              // members — which is all of them — taking down startup before
+              // runApp, one box after the Task crash.
+              ?.map((e) => Member.fromJson(Map<String, dynamic>.from(e as Map)))
               .toList() ??
           const [],
     );

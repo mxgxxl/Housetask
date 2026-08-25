@@ -99,7 +99,16 @@ class Task extends Equatable {
           json['completedBy'] != null ? User.fromRef(json['completedBy']) : null,
       isRecurring: (json['isRecurring'] ?? false) as bool,
       recurrenceRule: json['recurrenceRule'] != null
-          ? RecurrenceRule.fromJson(json['recurrenceRule'] as Map<String, dynamic>)
+          // `Map.from`, not a cast. This map arrives from two places: an HTTP
+          // response, where it really is a Map<String, dynamic>, and the Hive
+          // cache, where NESTED maps come back as _Map<dynamic, dynamic> — the
+          // adapter's `Map<String, dynamic>.from` only retypes the top level.
+          // The hard cast that used to be here meant one cached recurring task
+          // made `Hive.openBox<Task>` throw, which killed CacheService.init()
+          // before runApp and left the app on a blank screen. Permanently: the
+          // row stays on disk, so every relaunch failed the same way.
+          ? RecurrenceRule.fromJson(
+              Map<String, dynamic>.from(json['recurrenceRule'] as Map))
           : null,
       parentTaskId: json['parentTaskId']?.toString(),
       isSynced: (json['isSynced'] ?? true) as bool,

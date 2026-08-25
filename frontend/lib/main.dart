@@ -28,6 +28,11 @@ Future<void> main() async {
       // rather than only rethrown, so they reach Sentry the same way a caught
       // exception would.
       FlutterError.onError = (FlutterErrorDetails details) {
+        // Without this, framework errors are INVISIBLE: overriding the default
+        // handler removes its console dump, and captureException is a silent
+        // no-op when no DSN was passed at build time. The two together turn any
+        // build/layout failure into a blank screen with no output at all.
+        FlutterError.presentError(details);
         SentryService.captureException(details.exception, stackTrace: details.stack);
       };
 
@@ -62,6 +67,11 @@ Future<void> main() async {
       runApp(const HomeSyncApp());
     },
     (error, stackTrace) {
+      // Same reason: with no DSN this would be a startup failure with not one
+      // line of output — which is exactly how a blank screen becomes
+      // undiagnosable. Anything escaping the bootstrap's async gaps lands here,
+      // and runApp never runs, so this print is the only evidence there is.
+      debugPrint('[bootstrap] FATAL: $error\n$stackTrace');
       SentryService.captureException(error, stackTrace: stackTrace);
     },
   );

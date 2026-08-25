@@ -33,7 +33,14 @@ class User extends Equatable {
 
   /// Build a user from a value that may be a Map (populated) or a String id.
   static User fromRef(dynamic value) {
-    if (value is Map<String, dynamic>) return User.fromJson(value);
+    // `is Map`, not `is Map<String, dynamic>`: a populated ref read back from
+    // the Hive cache is a _Map<dynamic, dynamic>, so the narrow test was false
+    // for it and execution fell through to the bare-id branch below — which
+    // does not throw, it just stringifies the WHOLE map into the id. Cached
+    // assignees came back as `{id: u1, email: ..., name: ...}` with no name and
+    // no email, quietly breaking avatars and the "Ex-miembro" check offline
+    // (Hard Rule 16). Same root cause as the recurrenceRule cast in Task.
+    if (value is Map) return User.fromJson(Map<String, dynamic>.from(value));
     return User(id: value?.toString() ?? '', email: '', name: '');
   }
 
