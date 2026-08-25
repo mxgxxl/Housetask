@@ -759,7 +759,11 @@ class TaskCubit extends Cubit<TaskState> {
       buckets: _bucketsAfterRemove(state, tempId),
       pendingIds: state.pendingIds.difference({tempId}),
     );
-    final timeline = _timelineAfterUpsert(withoutTemp, confirmed);
+    // `replacing:` es la mitad que faltaba. El intercambio de id es un REMOVE
+    // del temporal más un UPSERT del real, y el timeline está indexado por id
+    // igual que los buckets: quitarlo solo de éstos dejaba la fila optimista
+    // y su reemplazo confirmado conviviendo en la misma vista.
+    final timeline = _timelineAfterUpsert(withoutTemp, confirmed, replacing: tempId);
     emit(withoutTemp.copyWith(
       status: TaskStatusUi.loaded,
       buckets: _bucketsAfterUpsert(withoutTemp, confirmed),
@@ -1186,7 +1190,17 @@ class TaskCubit extends Cubit<TaskState> {
   /// [TaskState.timelineWindowFrom]..[TaskState.timelineWindowTo] — e.g. a
   /// task just rescheduled past the loaded window. Returns null (no-op) until
   /// the first [loadTimeline] call establishes those window bounds.
-  _TimelineGroups? _timelineAfterUpsert(TaskState state, Task task) {
+  ///
+  /// [replacing], cuando se pasa, es un id que SALE del timeline en la misma
+  /// operación: el id temporal de un create optimista al que [task] sustituye.
+  /// Va aquí y no en una llamada aparte para que el intercambio siga siendo UN
+  /// solo emit — dos dejarían un frame sin la fila y provocarían el parpadeo
+  /// que TD-060 existe para evitar.
+  _TimelineGroups? _timelineAfterUpsert(
+    TaskState state,
+    Task task, {
+    String? replacing,
+  }) {
     final from = state.timelineWindowFrom;
     final to = state.timelineWindowTo;
     if (from == null || to == null) return null;
@@ -1195,6 +1209,7 @@ class TaskCubit extends Cubit<TaskState> {
       for (final t in state.timelineDays.values.expand((l) => l)) t.id: t,
       for (final t in state.timelineUndated) t.id: t,
     };
+    if (replacing != null) byId.remove(replacing);
 
     final due = task.dueDate?.toLocal();
     final withinWindow = due == null || (!due.isBefore(from) && !due.isAfter(to));
