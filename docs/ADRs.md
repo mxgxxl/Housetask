@@ -27,10 +27,14 @@ Document key architectural decisions here. Format: Context → Decision → Cons
 - **Consequences:** More complex auth flow, but better security. Refresh tokens stored in DB and invalidated on use. Refresh tokens are stored SHA-256 hashed (not raw) so a database leak does not yield usable sessions; SHA-256 chosen over bcrypt because JWTs are already high-entropy and bcrypt would add latency to every refresh.
 
 <a id="adr-005"></a>
-### ADR-005: Embedded members in Household (TO BE MIGRATED)
+### ADR-005: Embedded members in Household — SUPERSEDED (2026-08-25)
+- **Status:** **Superseded by the `HouseholdMember` collection.** TD-001 completed the migration on 2026-08-25; this record is kept for the history of why the embedded form existed, not as current design.
 - **Context:** Initial MVP embedded members array in Household document for simplicity.
-- **Decision:** Keep embedded for MVP, but plan migration to separate `HouseholdMember` collection.
-- **Consequences:** Simple reads for MVP, but will hit MongoDB 16MB document limit with large households. Migration planned in Phase 2.
+- **Decision (original):** Keep embedded for MVP, but plan migration to separate `HouseholdMember` collection.
+- **Consequences (original):** Simple reads for MVP, but will hit MongoDB 16MB document limit with large households.
+- **What replaced it:** membership is a document in `householdmembers` (`{householdId, userId, role, joinedAt}`), unique on `{householdId, userId}`. The API contract did NOT change — `serializeHousehold` composes the same `members: [{user, role, joinedAt}]` array from the collection, sorted by `joinedAt` so member lists do not reshuffle — which is what let the Flutter client stay a complete no-op through a migration it could not have been rolled back for.
+- **The part worth remembering:** the embedded array was not the only copy. `User.households` held the same edge from the other side and fed the socket handshake's room resolution, so the migration had to remove TWO denormalizations, not one; and `User.households` also shipped in the auth response, where the client picks its active household — a dependency the design had not recorded and which nearly broke released apps. Both fields were `$unset` from stored documents on 2026-08-25 (see docs/TECH_DEBT.md).
+- **The other lesson:** the embedded array was incidentally providing a write conflict that serialized concurrent removals, which is what kept Hard Rule 9 atomic. Removing it silently removed that protection; `removeMemberInTransaction` now writes the household document on purpose to keep it.
 
 <a id="adr-006"></a>
 ### ADR-006: Timezone strategy for dates and recurrence

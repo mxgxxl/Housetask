@@ -167,24 +167,43 @@ RefreshToken spread `jsonSchemaOptions` from `utils/toJSON.ts`, which exposes a 
 | password | String | required, minlength 6, `select: false` (bcrypt hash, never returned) |
 | name | String | required, trim |
 | avatarUrl | String | optional |
-| households | ObjectId[] | ref Household |
 | createdAt / updatedAt | Date | from `timestamps: true` |
+
+A user's households are **not** stored here. The denormalized `households`
+array was removed by TD-001 (commit 7, `$unset` applied 2026-08-25); "which
+households does this user belong to" is `HouseholdMember.find({ userId })`,
+covered by that collection's `{userId: 1}` index. The API response still
+carries a `households` list — `toPublicUser` derives it from that query — because
+the Flutter client picks the active household from it.
 
 ### Household (`households`)
 | Field | Type | Notes |
 |-------|------|-------|
 | name | String | required, trim |
 | inviteCode | String | required, unique, uppercase, exactly 8 chars (min/maxlength 8), indexed |
-| members | IHouseholdMember[] | embedded subdocument array, default `[]` |
 | createdBy | ObjectId | ref User, required |
 | createdAt / updatedAt | Date | from `timestamps: true` |
 
-**Embedded `IHouseholdMember`** (`_id: false`):
+A household does **not** carry its members. The embedded `members` array was
+removed by TD-001 (commit 7, `$unset` applied 2026-08-25) — see the
+HouseholdMember collection below, which is the single source of membership.
+`updatedAt` is deliberately touched on every removal: that write is the
+serialization point Hard Rule 9 relies on (see `removeMemberInTransaction`).
+
+### HouseholdMember (`householdmembers`)
 | Field | Type | Notes |
 |-------|------|-------|
-| user | ObjectId | ref User, required |
+| householdId | ObjectId | ref Household, required |
+| userId | ObjectId | ref User, required |
 | role | Enum | `admin` / `member`, default `member` |
-| joinedAt | Date | default `Date.now` |
+| joinedAt | Date | default `Date.now` — carried over on backfill, not derived from `createdAt` |
+| createdAt / updatedAt | Date | from `timestamps: true` |
+
+**Indexes:** `{ householdId: 1, userId: 1 }` **unique** (the membership check on
+every household-scoped request, and it makes a duplicate membership impossible
+by construction), `{ userId: 1 }` ("my households", including the socket
+handshake's room resolution), `{ householdId: 1, role: 1 }` (counting admins
+for Hard Rule 9).
 
 ### Task (`tasks`)
 | Field | Type | Notes |

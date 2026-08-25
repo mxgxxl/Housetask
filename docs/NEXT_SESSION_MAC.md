@@ -27,6 +27,7 @@
 - 2026-08-19: TD-061 cerrado (aviso al cerrar sesión con cola pendiente); TD-062 abierto. Acciones de CI a Node 24 (PR #36).
 - 2026-08-19: TD-062 cerrado (marcador de propietario de la caché; otra cuenta ya no hereda la cola offline). Se abrió TD-063 (un fallo de red en el refresh se trata como sesión muerta).
 - 2026-08-19: TD-063 cerrado (solo un 401 mata la sesión; una desconexión ya no expulsa al login ni pierde la escritura en vuelo). Check de enlaces de docs extendido a CLAUDE.md.
+- 2026-08-25: **TD-001 cerrado.** Cutover completo a `HouseholdMember`; ADR-005 marcado como superseded.
 - 2026-08-17: PR #32 config fallback (Codex); PR #33 integración legacy
   (Claude); PR #34 sync (Codex, cerrado como superseded sin merge). Plan free de Codex activo y validado.
   gh instalado; Codex CLI instalado y autenticado.
@@ -35,23 +36,54 @@
 
 - ~~TD-040: CI se cuelga en `offline_banner_test.dart`~~ — Resolved 2026-08-17 (ver "Fase 1" abajo).
 - TD-010: verificar backups en el dashboard de MongoDB Atlas/Railway.
-- Top-3 Mac (reordenado por PDR-009): ~~TD-059~~ (Resolved 2026-08-17), ~~TD-007~~ (parcial 2026-08-18) y TD-001 — el único que queda.
+- Top-3 Mac (reordenado por PDR-009): ~~TD-059~~ (Resolved 2026-08-17), ~~TD-007~~ (parcial 2026-08-18) y ~~TD-001~~ (Resolved 2026-08-25). Los tres cerrados.
 
 ## Siguiente tarea
 
-**1. Cutover de TD-001.** La fase 2 (lectura dual) se desplegó el 2026-08-18
-(commit `631031d`). **La ventana de observación se cerró el 2026-08-21 con cero
-divergencias**; el siguiente paso técnico es el cutover.
+**1. TD-001 CERRADO (2026-08-25).** El cutover está completo: la membresía vive
+en la colección `HouseholdMember` y las dos copias desnormalizadas
+—`Household.members` y `User.households`— salieron del esquema y de los datos.
+Detalle completo, incluido el respaldo de lo eliminado, en
+[TECH_DEBT.md](TECH_DEBT.md).
 
-- **Criterio:** cero divergencias en Sentry (categoría `td001_dual_read`) o en
-  los logs de Railway (`dual-read divergence`).
-- **Una sola divergencia = investigar antes de seguir.** No es un umbral
-  estadístico: significa que la escritura dual tiene un hueco, y el cutover
-  haría autoridad a una colección incompleta.
+**Siguiente paso técnico: TD-064** (paginación del timeline por sesiones keyset),
+con **TD-067** (roles y administración) en paralelo — ambos son P0 y no dependen
+entre sí. Después **TD-066** (economía P1), cuyo único bloqueo era este cutover.
+Orden completo en [ROADMAP.md](ROADMAP.md).
 
-El 2026-08-18 se generaron 30 lecturas household-scoped con
-`scripts/td001-sample-traffic.ts` sobre un hogar dedicado ("Muestras TD-001"),
-para que la ventana no dependa de que alguien abra la app.
+**Lo único de TD-001 que quedó sin verificar:** la entrega real por socket. Los
+14 tests de `td001-commit7-single-source.test.ts` prueban que el handshake
+resuelve las salas correctas desde la colección —incluida la desaparición de la
+sala al expulsar a un miembro—, pero ninguno prueba el transporte. Exige dos
+clientes reales. No es bloqueante para seguir, pero conviene hacerlo la próxima
+vez que haya dos dispositivos a mano.
+
+### Historia del cutover (2026-08-21 → 2026-08-25)
+
+| Paso | Fecha | Resultado |
+|---|---|---|
+| Cierre de ventana de fase 2 | 2026-08-21 | Cero divergencias; la muestra de escritura reservada se regeneró y consumió |
+| Commit 5 — colección como autoridad | 2026-08-21 | 130/130 checks HTTP; `households.test.ts` sin modificar |
+| Commit 6 — fin de la escritura dual | 2026-08-22 | 130/130; se conserva a propósito el punto de serialización de Hard Rule 9 |
+| Atomicidad (fuera del plan) | 2026-08-22 | `createHousehold`/`joinHousehold` transaccionales; cierra el hueco de hogares huérfanos |
+| Commit 7 — `$unset` + socket | 2026-08-24 | Ambos esquemas limpios; handshake por `HouseholdMember` |
+| `$unset` de datos | 2026-08-25 | `Household.members` 14:43:02Z (6/6) y `User.households` 14:49:38Z (6/6), 0 saltados |
+
+**Tres cosas que este round enseñó y conviene no reaprender:**
+
+- **El silencio en los logs no es evidencia de nada.** La API no tiene logging
+  de peticiones y `errorHandler` solo registra 5xx, así que una operación
+  correcta escribe cero líneas. La ausencia de un WARN concreto sí es
+  concluyente; la ausencia de rastro no.
+- **`strictQuery: true` elimina en silencio un filtro sobre un campo que el
+  esquema ya no declara.** Al retirar `members`, una consulta
+  `find({'members.user': …})` se convirtió en `find({})` y marcó todo como
+  derivado. Al quitar un campo, las consultas que lo filtran dejan de filtrar en
+  vez de fallar.
+- **Una desnormalización puede estar sosteniendo algo que nadie escribió a
+  propósito.** El array embebido provocaba un conflicto de escritura que
+  serializaba las expulsiones concurrentes, y era eso lo que mantenía atómica la
+  Hard Rule 9. Retirarlo se la habría llevado por delante en silencio.
 
 ### Cierre de la ventana — ejecutado el 2026-08-21
 
@@ -122,9 +154,8 @@ solo se pueden ejercitar con red y cuentas reales:
   simplemente porque la app dejó de cerrar sesión nunca. Guiones en
   `docs/TD-063-DESIGN.md` §6.
 
-Después del cutover: limpieza de TD-001 y refactor de economía según
-[UX-P1-SPEC.md](UX-P1-SPEC.md) y sus PDRs en
-[PRODUCT_DECISIONS.md](PRODUCT_DECISIONS.md).
+El refactor de economía P1 queda desbloqueado: ver [UX-P1-SPEC.md](UX-P1-SPEC.md)
+y sus PDRs en [PRODUCT_DECISIONS.md](PRODUCT_DECISIONS.md).
 
 ### Fase 7 — cerrada (TD-063, 2026-08-19)
 

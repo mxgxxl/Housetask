@@ -1,11 +1,12 @@
 # Roadmap HomeSync
 
-> Última actualización: 2026-08-20
+> Última actualización: 2026-08-25
 
 ## Recién Completado (últimas 2 semanas)
 
 | Fecha | PR/Commit | Descripción | Impacto |
 |-------|-----------|-------------|---------|
+| 2026-08-25 | TD-001 | **Resolved**: cutover completo de la membresía a la colección `HouseholdMember`. Cinco fases con seis paradas, ventana de observación cerrada con cero divergencias, y las DOS copias desnormalizadas retiradas —`Household.members` y `User.households`— del esquema y de los datos (`$unset` aplicados el 2026-08-25). El handshake de socket lee ya la misma fuente que el HTTP. El contrato de la API no se movió en ningún despliegue: 130/130 checks idénticos en los seis runs de validación. Se cerró de paso un hueco de atomicidad que podía dejar hogares sin ninguna membresía. 359 tests | Arquitectura — desaparece la última fuente de verdad duplicada del dominio, y con ella el límite de 16MB por documento y el riesgo de divergencia que motivó ADR-005 |
 | 2026-08-19 | TD-063 | **Resolved**: `_refreshToken` devuelve tres desenlaces (rotado / rechazado / inalcanzable) en vez de `String?`, que era el root cause. Solo un 401 mata la sesión; sin respuesta, 5xx, 429, 403 y portal cautivo la conservan. Sin reintento, porque la rotación no es idempotente y un reintento dispara la detección de replay del backend. Se arregla además la otra mitad del daño: la escritura en vuelo se encola en vez de perderse. 11 tests | UX + corrección de datos — una desconexión pasajera dejaba al usuario en el login y le borraba la tarea que acababa de crear |
 | 2026-08-19 | TD-062 | **Resolved**: la caché de Hive lleva un marcador de propietario (`CacheOwner`, box propia) y `AuthCubit` lo comprueba en toda entrada a sesión —login, register y las dos ramas de `checkAuth`—, vaciándola antes de reclamarla si el usuario cambió (o si no hay marcador). Siempre ANTES de emitir `authenticated`: el orden es el arreglo, como en TD-057. Sin migración; `PendingOperation` intacto. 11 tests, 6 fallan sin el fix | Corrección de datos — la cola offline de una cuenta ya no se reproduce con el token de otra tras una expiración de sesión |
 | 2026-08-19 | TD-061 | **Resolved**: el logout sigue vaciando la cola pendiente, pero ya no en silencio — intenta drenarla (tope de 5 s) y, si quedan cambios, avisa nombrando el número y cambia el botón a "Cerrar sesión y descartar". El aviso solo aparece cuando hay algo que perder. 11 tests | UX — deja de perderse trabajo offline sin que el usuario lo sepa; el descarte pasa a ser una decisión suya |
@@ -37,14 +38,24 @@
 
 ## Próximas Prioridades (ordenado)
 
+Con TD-001 cerrado, el orden de implementación de P0/P1/P2 queda desbloqueado:
+**TD-064 → TD-066 → TD-068/069 → TD-070 → TD-071/072**. TD-067 (roles y
+administración) puede ir en paralelo a TD-064: ambos son P0 y no dependen entre
+sí, y TD-067 construye sobre la autoridad que TD-001 acaba de dejar fijada.
+
 | # | ID | Descripción | Esfuerzo | Bloqueante |
 |---|----|-------------|----------|------------|
-| 1 | TD-001 | Migrar `members` embebido a una colección `HouseholdMember` separada. El siguiente paso técnico es el cutover tras la ventana de observación, cerrada el 2026-08-20 con cero divergencias. Mantiene su orden de despliegue obligatorio (ver «Deployment order» en CLAUDE.md). | Alto | Verificación de cero divergencias |
-| 2 | Validación PR #24 | Probar fix white screen en iPhone físico + limpiar debugPrints de diagnóstico | Bajo | Dispositivo físico |
-| 3 | Micro-pendientes | Ninguno bloquea nada y todos son de bajo esfuerzo; ver la lista de abajo. El más sustancioso es homogeneizar el contrato de `copyWith` de Task/Shopping antes de evaluar el mixin del overlay optimista | Bajo | Ninguno |
-| 4 | TD-054 | Ventana de token de acceso post-logout (bajo impacto, solo si el modelo de amenaza lo requiere) | Bajo | Ninguno |
+| 1 | TD-064 | Paginación del timeline: sesiones keyset y caché normalizada en lugar de refetch de ventanas crecientes | Alto | Ninguno |
+| 1b | TD-067 | Roles y administración: promoción/degradación, transferencia, salida voluntaria, destrucción del hogar | Alto | Ninguno (paralelo a TD-064) |
+| 2 | TD-066 | Refactor de economía P1: wallets personales, XP dual, presupuesto, rachas y hucha. **Desbloqueado**: su única dependencia era el cutover de TD-001 | Alto | Ninguno |
+| 3 | TD-068 / TD-069 | Recomendaciones por reglas y reparto inteligente de carga | Medio / Alto | TD-066 |
+| 4 | TD-070 | Dashboard de salud del hogar | Alto | TD-066, TD-068, TD-069 |
+| 5 | TD-071 / TD-072 | Reconocimiento entre miembros y deep-link de notificación | Medio / Alto | TD-070 (071) · TD-049 (072, push real) |
+| 6 | Validación PR #24 | Probar fix white screen en iPhone físico + limpiar debugPrints de diagnóstico | Bajo | Dispositivo físico |
+| 7 | Micro-pendientes | Ninguno bloquea nada; ver la lista de abajo | Bajo | Ninguno |
+| 8 | TD-054 | Ventana de token de acceso post-logout (bajo impacto, solo si el modelo de amenaza lo requiere) | Bajo | Ninguno |
 
-## Producto — P1 (después del cutover de TD-001)
+## Producto — P1 (el cutover de TD-001 ya no lo bloquea)
 
 P1 y los bloques P2/P3 están en scope, pero P1 se cierra antes de decidir los posteriores. La especificación de producto y UX vive en [UX-P1-SPEC.md](UX-P1-SPEC.md); sus decisiones normativas son PDR-010 a PDR-019 en [PRODUCT_DECISIONS.md](PRODUCT_DECISIONS.md).
 
@@ -88,6 +99,7 @@ Documentadas en sus entradas de TECH_DEBT.md para que no se persigan como defect
 - TD-007: ~~optimistic updates en frontend~~ — Partially resolved 2026-08-18 (updates y deletes); creates cerrados vía TD-060.
 - TD-010: backups de MongoDB Atlas.
 - TD-013: recurrencia con timezone por hogar.
+- **Pendiente manual de TD-001:** la entrega real por socket con dos clientes. Los tests cubren que el handshake resuelve las salas correctas desde la colección; ninguno cubre el transporte.
 - TD-024: verificar si la migración SHA-256 de refresh tokens ya se ejecutó en producción (status ambiguo, ver `docs/NEXT_SESSION_MAC.md`).
 - TD-034: versioned API health check / deploy-order safety net.
 - TD-039: offline conflict resolution (CRDT/OT) si se reportan ediciones perdidas.

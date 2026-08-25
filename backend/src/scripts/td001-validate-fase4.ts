@@ -1,6 +1,5 @@
 import 'dotenv/config';
 import { randomUUID } from 'crypto';
-import { Types } from 'mongoose';
 import { connectDatabase, disconnectDatabase } from '../config/database';
 import { HouseholdMemberModel } from '../models/HouseholdMember';
 import { HouseholdModel } from '../models/Household';
@@ -60,7 +59,7 @@ import { logger } from '../utils/logger';
  *   npx ts-node src/scripts/td001-validate-fase4.ts                 # dry run (default)
  *   npx ts-node src/scripts/td001-validate-fase4.ts --execute
  *   npx ts-node src/scripts/td001-validate-fase4.ts --execute --iterations=5
- *   npx ts-node src/scripts/td001-validate-fase4.ts --check-socket-source   # read-only DB audit, no traffic
+ *   npx ts-node src/scripts/td001-validate-fase4.ts --check-socket-source   # read-only: membership lives in one place
  *   npx ts-node src/scripts/td001-validate-fase4.ts --check-orphan-households # read-only, households with no members
  *   npx ts-node src/scripts/td001-validate-fase4.ts --execute --check-socket-source
  *   API_BASE_URL=http://localhost:3000 npx ts-node src/scripts/td001-validate-fase4.ts --execute
@@ -391,10 +390,11 @@ function printSummary(iterations: number, executed: boolean): void {
   logger.info('-'.repeat(72));
   logger.info('These are NOT validated above, and a green run says nothing about them:');
   logger.info('');
-  logger.info('  1. Socket rooms. The handshake still resolves rooms from User.households');
-  logger.info('     (config/socket.ts), NOT from HouseholdMember — that moves in commit 7.');
-  logger.info('     So HTTP reads and realtime delivery currently use DIFFERENT sources.');
-  logger.info('     A room-joining regression would be invisible to every check above.');
+  logger.info('  1. Socket DELIVERY. Since commit 7 the handshake resolves rooms from');
+  logger.info('     HouseholdMember, the same source HTTP reads, and');
+  logger.info('     --check-socket-source verifies that input. What no check here can');
+  logger.info('     verify is the transport: that Socket.io actually delivers the event');
+  logger.info('     to a device.');
   logger.info('     Manual: two logged-in devices in one household; change a task on A and');
   logger.info('     confirm B updates live without a refresh.');
   logger.info('');
@@ -411,9 +411,9 @@ function printSummary(iterations: number, executed: boolean): void {
   logger.info('     not change; this script verifies the SHAPE the API returns, not that');
   logger.info('     the app parses it. Manual: open Perfil and the assignee selector.');
   logger.info('');
-  logger.info('Also note: searching Sentry for `td001_dual_read` will now find nothing,');
-  logger.info('because commit 5 removed the comparison that emitted it. That silence is');
-  logger.info('expected and is NOT evidence of health — the checks above are.');
+  logger.info('Also note: searching Sentry for `td001_dual_read` finds nothing — commit 5');
+  logger.info('removed the comparison that emitted it. That silence is expected and is NOT');
+  logger.info('evidence of health; the checks above are.');
 }
 
 export async function validate(iterations: number, execute: boolean): Promise<void> {
@@ -467,284 +467,142 @@ export async function validate(iterations: number, execute: boolean): Promise<vo
 }
 
 /**
- * The membership sources a single user is described by, right now.
+ * `--check-socket-source`: verify that membership still lives in exactly one
+ * place.
  *
- * Three, not two: the dual write still maintains all of them, and they answer
- * three different questions. `collection` is the authority for every HTTP read
- * since the cutover. `userHouseholds` is what the SOCKET handshake resolves
- * rooms from (`config/socket.ts` does `UserModel.findById(...).select('households')`)
- * and does not move to the collection until commit 7. `embedded` is the
- * rollback net that commit 6 stops writing.
+ * This flag was born to compare TWO sources. Between commits 5 and 7 the HTTP
+ * surface read HouseholdMember while the socket handshake still resolved rooms
+ * from the denormalized `User.households`, so they could drift apart without
+ * any endpoint answering wrongly — and the failure mode was the quiet one:
+ * data that loads correctly and then never updates live.
+ *
+ * Commit 7 removed that second source and the closing cleanup deleted the
+ * stored leftovers, so there is nothing left to compare. Rather than leave a
+ * check that can only pass, it now guards what actually remains true — and
+ * what a future change could still break:
+ *
+ *   1. Neither retired field has come back, in the schemas or in the stored
+ *      documents. A reintroduced writer would be invisible to every other
+ *      check here.
+ *   2. No membership points at a household that does not exist. With one
+ *      source, a dangling row is the only shape an inconsistency can still
+ *      take.
+ *   3. Every account's rooms are listed, so the handshake's input is legible
+ *      without attaching a debugger.
+ *
+ * Read-only, and it needs MONGODB_URI: none of this has an HTTP surface.
  */
-interface MembershipSources {
+interface AccountRooms {
   email: string;
   userId: string;
-  collection: Set<string>;
-  userHouseholds: Set<string>;
-  embedded: Set<string>;
+  rooms: string[];
 }
 
-function sortedIds(set: Set<string>): string {
-  return [...set].sort().join(', ') || '(none)';
-}
-
-function difference(a: Set<string>, b: Set<string>): string[] {
-  return [...a].filter((id) => !b.has(id)).sort();
-}
-
-/**
- * Read every membership representation for one user. Strictly read-only: this
- * function issues nothing but `find`/`findOne`, because an audit that repairs
- * what it measures destroys the evidence it was run to collect.
- */
-async function readSources(email: string): Promise<MembershipSources | null> {
-  const user = await UserModel.findOne({ email }).select('_id').lean();
-  if (!user) return null;
-
-  const userId = user._id.toString();
-
-  // `households` was removed from the User schema in commit 7, so a typed query
-  // can no longer see it — but the field is still PRESENT in documents written
-  // before then, because dropping it from the schema does not delete stored
-  // data. Read it through the raw collection: that leftover is exactly what
-  // this check is here to compare against.
-  const legacy = (await UserModel.collection.findOne(
-    { _id: user._id },
-    { projection: { households: 1 } },
-  )) as { households?: unknown[] } | null;
-
-  const [rows, embeddedHouseholds] = await Promise.all([
-    HouseholdMemberModel.find({ userId: new Types.ObjectId(userId) })
-      .select('householdId')
-      .lean(),
-    // RAW, and not a typed query: `members` left the schema in commit 7, and
-    // `strictQuery: true` (config/database.ts) silently DROPS a condition on a
-    // path the schema does not know — turning this filter into `find({})` and
-    // reporting every household as drifted for every user. The false positive
-    // is louder than the real signal, so the query has to bypass the schema.
-    HouseholdModel.collection
-      .find({ 'members.user': new Types.ObjectId(userId) }, { projection: { _id: 1 } })
-      .toArray(),
-  ]);
-
-  return {
-    email,
-    userId,
-    collection: new Set(rows.map((r) => r.householdId.toString())),
-    userHouseholds: new Set((legacy?.households ?? []).map((h) => String(h))),
-    embedded: new Set(embeddedHouseholds.map((h) => h._id.toString())),
-  };
-}
-
-/**
- * Compare one user's sources and report. Returns true when they agree.
- *
- * The two divergence directions are NOT symmetric in consequence, so they are
- * named rather than merged into one "mismatch" count:
- *
- *   - In the collection but NOT in User.households: HTTP works, the socket
- *     never joins the room. The user loads correct data that then never
- *     updates live — the silent one, indistinguishable from "nothing is
- *     happening" unless someone watches two clients at once.
- *   - In User.households but NOT in the collection: the socket joins a room
- *     for a household every HTTP read answers 403 for. Noisy, and it also
- *     means realtime events are being delivered to someone the authority says
- *     is not a member.
- */
-function compareSources(s: MembershipSources): boolean {
-  const onlyCollection = difference(s.collection, s.userHouseholds);
-  const onlyUser = difference(s.userHouseholds, s.collection);
-  const embeddedDrift = [
-    ...difference(s.collection, s.embedded).map((id) => `${id} (missing from embedded array)`),
-    ...difference(s.embedded, s.collection).map((id) => `${id} (stale in embedded array)`),
-  ];
-
-  const agreed = onlyCollection.length === 0 && onlyUser.length === 0;
-
-  logger.info(`  ${s.email}  (${s.userId})`);
-  logger.info(`    HouseholdMember.find({userId}) : ${sortedIds(s.collection)}`);
-  logger.info(`    User.households                : ${sortedIds(s.userHouseholds)}`);
-
-  if (agreed) {
-    logger.info('    -> sources agree');
-  } else {
-    logger.warn('    -> CRITICAL FAILURE: the two sources disagree');
-    for (const id of onlyCollection) {
-      logger.warn(
-        `       ${id}: in the COLLECTION but NOT in User.households — ` +
-          'HTTP reads work, the socket never joins the room (silent: data loads, never updates live)',
-      );
-    }
-    for (const id of onlyUser) {
-      logger.warn(
-        `       ${id}: in User.households but NOT in the COLLECTION — ` +
-          'the socket joins a room for a household every HTTP read answers 403 for',
-      );
-    }
-  }
-
-  // Beyond the requested scope, but free while connected and it is what
-  // commit 6 removes: if the rollback net has drifted, rolling back would
-  // restore a wrong member list.
-  if (embeddedDrift.length > 0) {
-    logger.warn(`    -> note: the embedded rollback array has drifted: ${embeddedDrift.join('; ')}`);
-  }
-
-  return agreed;
-}
-
-/**
- * `--check-socket-source`: audit the one risk the HTTP checks are blind to.
- *
- * Between commits 5 and 7 two sources of truth are live at once — HTTP reads
- * the collection, the socket handshake reads `User.households` — so they can
- * drift apart without any endpoint answering wrongly. This reads both
- * directly from MongoDB rather than probing over HTTP, because the collection
- * side cannot be enumerated through the API: there is no "my households"
- * endpoint, only per-household membership answers, so an HTTP-only version
- * could never see a household it had not already been told about.
- *
- * Read-only, and it needs MONGODB_URI (the other td001 scripts deliberately do
- * not; this one cannot answer the question without it).
- */
-/**
- * HTTP-only fallback, used when MongoDB is unreachable (no credentials, or a
- * network that cannot resolve the SRV record).
- *
- * `User.households` comes back on the login response (`toPublicUser` includes
- * it). The collection side has no enumeration endpoint, but it does have an
- * oracle: `requireMembership` reads the collection, so `GET /households/:id`
- * answering 200 means the collection holds the membership and 403 means it
- * does not.
- *
- * The limitation is real and worth stating plainly: this can only ask about
- * households it already knows of — the union of `User.households` and the
- * sample household. For these two fixture accounts that union is exhaustive,
- * because they have never belonged to anything else, so the answer is complete
- * FOR THEM. It cannot sweep other accounts, which is where a drift would
- * actually matter. That is why this is a fallback and not the design.
- */
-async function httpSocketSourceProbe(): Promise<boolean> {
-  logger.info('Falling back to an HTTP-only probe of the sample accounts.');
-  logger.info('');
-
-  let allAgreed = true;
-
-  for (const email of [ADMIN_EMAIL, MEMBER_EMAIL]) {
-    const session = await signIn(email);
-    const userHouseholds = new Set(session.households);
-    const candidates = new Set([...session.households, HOUSEHOLD_ID]);
-    const collection = new Set<string>();
-
-    for (const id of candidates) {
-      const res = await call('GET', `/households/${id}`, { token: session.token });
-      if (res.status === 200) collection.add(id);
-    }
-
-    const onlyCollection = difference(collection, userHouseholds);
-    const onlyUser = difference(userHouseholds, collection);
-
-    logger.info(`  ${email}  (${session.userId})`);
-    logger.info(`    collection (via GET /households/:id) : ${sortedIds(collection)}`);
-    logger.info(`    User.households (via login response) : ${sortedIds(userHouseholds)}`);
-
-    if (onlyCollection.length === 0 && onlyUser.length === 0) {
-      logger.info('    -> sources agree');
-    } else {
-      allAgreed = false;
-      logger.warn('    -> CRITICAL FAILURE: the two sources disagree');
-      for (const id of onlyCollection) {
-        logger.warn(
-          `       ${id}: in the COLLECTION but NOT in User.households — ` +
-            'HTTP reads work, the socket never joins the room (silent: data loads, never updates live)',
-        );
-      }
-      for (const id of onlyUser) {
-        logger.warn(
-          `       ${id}: in User.households but NOT in the COLLECTION — ` +
-            'the socket joins a room for a household every HTTP read answers 403 for',
-        );
-      }
-    }
-  }
-
-  logger.info('');
-  if (allAgreed) {
-    logger.info('Socket source check: PASS (PARTIAL) — the 2 sample accounts are synchronized.');
-    logger.warn('Coverage is PARTIAL: other accounts were not audited. Re-run with a working');
-    logger.warn('MONGODB_URI for the full sweep, which is where a real drift would show.');
-  } else {
-    logger.warn('Socket source check: FAIL — see the divergences above.');
-  }
-  return allAgreed;
+function sortedIds(ids: string[]): string {
+  return [...ids].sort().join(', ') || '(none)';
 }
 
 async function checkSocketSource(): Promise<boolean> {
   logger.info('');
   logger.info('='.repeat(72));
-  logger.info('SOCKET SOURCE CHECK — HouseholdMember vs User.households');
+  logger.info('SINGLE SOURCE CHECK — membership lives only in HouseholdMember');
   logger.info('='.repeat(72));
-  logger.info('Read-only. Connecting to MongoDB directly: the collection side has no');
-  logger.info('HTTP surface that can enumerate it.');
+  logger.info('Read-only. Connecting to MongoDB directly: none of this is reachable');
+  logger.info('over HTTP.');
   logger.info('');
 
+  await connectDatabase();
   try {
-    await connectDatabase();
-  } catch (err) {
-    // Degrade rather than abort. A missing or stale MONGODB_URI is an
-    // operator problem, not a finding about the cutover, and answering for
-    // the sample accounts is worth more than answering for nothing.
-    logger.warn(`MongoDB is unreachable: ${(err as Error).message}`);
-    logger.warn('');
-    return httpSocketSourceProbe();
-  }
+    let ok = true;
 
-  try {
-    logger.info('Sample accounts:');
-    let allAgreed = true;
-    let audited = 0;
+    // 1. The retired fields must be gone from the schemas AND from the data.
+    //    Mongoose does not delete stored values when a path leaves a schema,
+    //    so the documents have to be asked directly.
+    const schemaLeftovers: string[] = [];
+    if (UserModel.schema.path('households')) schemaLeftovers.push('User.households');
+    if (HouseholdModel.schema.path('members')) schemaLeftovers.push('Household.members');
 
-    for (const email of [ADMIN_EMAIL, MEMBER_EMAIL]) {
-      const sources = await readSources(email);
-      if (!sources) {
-        logger.warn(`  ${email}: no such user — create it with td001-sample-traffic.ts --yes`);
-        allAgreed = false;
-        continue;
-      }
-      audited += 1;
-      if (!compareSources(sources)) allAgreed = false;
+    const usersWithField = await UserModel.collection.countDocuments({
+      households: { $exists: true },
+    });
+    const householdsWithField = await HouseholdModel.collection.countDocuments({
+      members: { $exists: true },
+    });
+
+    logger.info('Retired denormalizations:');
+    logger.info(
+      `  User.households      : schema ${UserModel.schema.path('households') ? 'PRESENT' : 'absent'}` +
+        `, documents holding it: ${usersWithField}`,
+    );
+    logger.info(
+      `  Household.members    : schema ${HouseholdModel.schema.path('members') ? 'PRESENT' : 'absent'}` +
+        `, documents holding it: ${householdsWithField}`,
+    );
+
+    if (schemaLeftovers.length > 0) {
+      ok = false;
+      logger.warn(`  -> FAIL: back on the schema: ${schemaLeftovers.join(', ')}`);
+    }
+    if (usersWithField > 0 || householdsWithField > 0) {
+      ok = false;
+      logger.warn('  -> FAIL: stored documents still carry a retired field.');
+      logger.warn('     Run scripts/unset-user-households.ts / unset-household-members.ts,');
+      logger.warn('     but first find out what wrote it: nothing should.');
+    } else if (ok) {
+      logger.info('  -> both gone, from the schema and from the data');
     }
 
-    // The sample accounts are a fixture; they have only ever belonged to the
-    // sample household. A drift that mattered would be on a REAL account, so
-    // auditing only the fixture would answer a question nobody asked.
-    logger.info('');
-    logger.info('Every other account in the database:');
-    const others = await UserModel.find({ email: { $nin: [ADMIN_EMAIL, MEMBER_EMAIL] } })
-      .select('email')
+    // 2. Dangling memberships. With a single source this is the only shape an
+    //    inconsistency can still take, and it is invisible over HTTP: the
+    //    household simply 404s for someone the collection calls a member.
+    const memberships = await HouseholdMemberModel.find({})
+      .select('householdId userId')
       .lean();
+    const householdIds = new Set(
+      (await HouseholdModel.find({}).select('_id').lean()).map((h) => h._id.toString()),
+    );
+    const dangling = memberships.filter((m) => !householdIds.has(m.householdId.toString()));
 
-    if (others.length === 0) {
-      logger.info('  (none)');
+    logger.info('');
+    logger.info(`Memberships: ${memberships.length} across ${householdIds.size} household(s)`);
+    if (dangling.length > 0) {
+      ok = false;
+      logger.warn(`  -> FAIL: ${dangling.length} membership(s) point at a household that does not exist:`);
+      for (const m of dangling) {
+        logger.warn(`     user ${m.userId.toString()} -> household ${m.householdId.toString()}`);
+      }
+    } else {
+      logger.info('  -> every membership points at an existing household');
     }
-    for (const other of others) {
-      const sources = await readSources(other.email);
-      if (!sources) continue;
-      audited += 1;
-      if (!compareSources(sources)) allAgreed = false;
+
+    // 3. The handshake's input, per account.
+    logger.info('');
+    logger.info('Rooms each account resolves (config/socket.ts reads exactly this):');
+    const users = await UserModel.find({}).select('email').sort({ email: 1 }).lean();
+    const rooms: AccountRooms[] = [];
+    for (const user of users) {
+      const owned = memberships
+        .filter((m) => m.userId.toString() === user._id.toString())
+        .map((m) => m.householdId.toString());
+      rooms.push({ email: user.email, userId: user._id.toString(), rooms: owned });
+      logger.info(`  ${user.email}  (${user._id.toString()})`);
+      logger.info(`    ${sortedIds(owned)}`);
     }
 
     logger.info('');
-    if (allAgreed) {
-      logger.info(`Socket source check: PASS  (${audited} account(s), both sources synchronized)`);
+    if (ok) {
+      logger.info(
+        `Single source check: PASS  (${rooms.length} account(s), one source of membership)`,
+      );
     } else {
-      logger.warn(`Socket source check: FAIL  (${audited} account(s) audited, see above)`);
+      logger.warn('Single source check: FAIL — see above.');
     }
-    return allAgreed;
+    return ok;
   } finally {
     await disconnectDatabase();
   }
 }
+
 
 /**
  * `--check-orphan-households`: look for households with no membership at all.

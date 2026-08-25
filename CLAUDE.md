@@ -106,7 +106,7 @@ Detailed ADRs live in docs/ADRs.md. Index:
 - [ADR-002: Socket.io with Redis adapter](docs/ADRs.md#adr-002)
 - [ADR-003: Cubits over Blocs in Flutter](docs/ADRs.md#adr-003)
 - [ADR-004: JWT with refresh token rotation](docs/ADRs.md#adr-004)
-- [ADR-005: Embedded members in Household (TO BE MIGRATED)](docs/ADRs.md#adr-005)
+- [ADR-005: Embedded members in Household — SUPERSEDED by the HouseholdMember collection (TD-001, 2026-08-25)](docs/ADRs.md#adr-005)
 - [ADR-006: Timezone strategy for dates and recurrence](docs/ADRs.md#adr-006)
 - [ADR-007: Idempotency-Key semantics](docs/ADRs.md#adr-007)
 - [ADR-008: Forward-only cursor pagination](docs/ADRs.md#adr-008)
@@ -264,24 +264,43 @@ RefreshToken spread `jsonSchemaOptions` from `utils/toJSON.ts`, which exposes a 
 | password | String | required, minlength 6, `select: false` (bcrypt hash, never returned) |
 | name | String | required, trim |
 | avatarUrl | String | optional |
-| households | ObjectId[] | ref Household |
 | createdAt / updatedAt | Date | from `timestamps: true` |
+
+A user's households are **not** stored here. The denormalized `households`
+array was removed by TD-001 (commit 7, `$unset` applied 2026-08-25); "which
+households does this user belong to" is `HouseholdMember.find({ userId })`,
+covered by that collection's `{userId: 1}` index. The API response still
+carries a `households` list — `toPublicUser` derives it from that query — because
+the Flutter client picks the active household from it.
 
 ### Household (`households`)
 | Field | Type | Notes |
 |-------|------|-------|
 | name | String | required, trim |
 | inviteCode | String | required, unique, uppercase, exactly 8 chars (min/maxlength 8), indexed |
-| members | IHouseholdMember[] | embedded subdocument array, default `[]` |
 | createdBy | ObjectId | ref User, required |
 | createdAt / updatedAt | Date | from `timestamps: true` |
 
-**Embedded `IHouseholdMember`** (`_id: false`):
+A household does **not** carry its members. The embedded `members` array was
+removed by TD-001 (commit 7, `$unset` applied 2026-08-25) — see the
+HouseholdMember collection below, which is the single source of membership.
+`updatedAt` is deliberately touched on every removal: that write is the
+serialization point Hard Rule 9 relies on (see `removeMemberInTransaction`).
+
+### HouseholdMember (`householdmembers`)
 | Field | Type | Notes |
 |-------|------|-------|
-| user | ObjectId | ref User, required |
+| householdId | ObjectId | ref Household, required |
+| userId | ObjectId | ref User, required |
 | role | Enum | `admin` / `member`, default `member` |
-| joinedAt | Date | default `Date.now` |
+| joinedAt | Date | default `Date.now` — carried over on backfill, not derived from `createdAt` |
+| createdAt / updatedAt | Date | from `timestamps: true` |
+
+**Indexes:** `{ householdId: 1, userId: 1 }` **unique** (the membership check on
+every household-scoped request, and it makes a duplicate membership impossible
+by construction), `{ userId: 1 }` ("my households", including the socket
+handshake's room resolution), `{ householdId: 1, role: 1 }` (counting admins
+for Hard Rule 9).
 
 ### Task (`tasks`)
 | Field | Type | Notes |
@@ -446,7 +465,6 @@ The full registry (~47 entries, all history) lives in [Full Technical Debt Regis
 
 | ID | Description | Severity | Status |
 |----|-------------|----------|--------|
-| TD-001 | Members embedded in Household document | High | En curso (fases 0-2 desplegadas; ventana cerrada el 2026-08-21, cutover autorizado y pendiente de ejecución) |
 | TD-007 | No optimistic updates in frontend | Medium | **Partially resolved (2026-08-18): updates y deletes optimistic; creates aplazados al round de TD-057** |
 | TD-010 | No database backups | Medium | Planned (Phase 3) |
 | TD-064 | Paginación del timeline: sesiones keyset y caché normalizada en lugar de refetch de ventanas crecientes | High | Open (2026-08-20; diseño de paginación pendiente de implementación) |
@@ -687,7 +705,7 @@ Two separate systems, deliberately not coupled by a branch-protection gate (see 
 - [ ] Optimistic updates (TD-007)
 - [x] ~~Global rate limiting (TD-006)~~
 - [x] ~~CI/CD with GitHub Actions (TD-008)~~
-- [ ] Refactor members to separate collection (TD-001)
+- [x] ~~Refactor members to separate collection (TD-001)~~ — cutover completo 2026-08-25
 - [x] ~~Granular task permissions (TD-011)~~
 - [x] ~~ESLint + Prettier + no-console (TD-012)~~
 - [ ] Household-timezone-aware recurrence (TD-013)
