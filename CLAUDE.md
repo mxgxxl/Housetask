@@ -314,6 +314,8 @@ for Hard Rule 9).
 | priority | Enum | `low` / `medium` / `high`, default `medium` |
 | category | Enum | `cleaning` / `cooking` / `shopping` / `maintenance` / `other`, default `other` |
 | dueDate | Date | optional |
+| startsAt | Date | optional — optional duration (PDR-004); absent means an instantaneous task, retrocompatible with every task created before the feature |
+| endsAt | Date | optional — when both bounds are given, `assertValidDuration` requires `endsAt > startsAt` (400 otherwise); a single bound alone is valid. A recurring task never carries either: duration + recurrence was left out of scope that round |
 | completedAt | Date | set on completion |
 | completedBy | ObjectId | ref User, set on completion |
 | isRecurring | Boolean | default false |
@@ -394,7 +396,7 @@ to clients.
 <!-- sync-start: testing-standards -->
 ## 🧪 Testing Standards
 
-Testing stack installed: Jest + Supertest + mongodb-memory-server (backend); flutter_test + bloc_test (frontend). CI runs the full suite on every PR — 298 backend tests (20 suites) and 249 frontend tests, all in ONE blocking step: the `test/widgets/offline_banner_test.dart` allow-failure carve-out was removed on 2026-08-17 once TD-040 was root-caused and fixed.
+Testing stack installed: Jest + Supertest + mongodb-memory-server (backend); flutter_test + bloc_test (frontend). CI runs the full suite on every PR — 374 backend tests (27 suites) and 365 frontend tests as of 2026-08-25 (the previously documented 298/20 and 249 were stale; both counts re-measured against a green local run, not estimated), all in ONE blocking step: the `test/widgets/offline_banner_test.dart` allow-failure carve-out was removed on 2026-08-17 once TD-040 was root-caused and fixed.
 
 - **Backend:** Jest + Supertest for integration tests
 - **Frontend:** `flutter_test` for widget tests, `bloc_test` for Cubit tests
@@ -467,7 +469,7 @@ The full registry (~47 entries, all history) lives in [Full Technical Debt Regis
 |----|-------------|----------|--------|
 | TD-007 | No optimistic updates in frontend | Medium | **Partially resolved (2026-08-18): updates y deletes optimistic; creates aplazados al round de TD-057** |
 | TD-010 | No database backups | Medium | Planned (Phase 3) |
-| TD-064 | Paginación del timeline: sesiones keyset y caché normalizada en lugar de refetch de ventanas crecientes | High | Open (2026-08-20; diseño de paginación pendiente de implementación) |
+| TD-064 | Paginación del timeline: sesiones keyset y caché normalizada en lugar de refetch de ventanas crecientes | High | **Resolved (2026-08-25)** — cuatro commits desplegados; ver docs/TECH_DEBT.md |
 | TD-065 | Auditoría Fase 0 de loading/error/retry en Flutter; candidatos estáticos pendientes de verificación | High | Open (2026-08-20; candidatos de análisis estático, pendiente de verificación por Claude/dueño) |
 | TD-066 | Diseño técnico del refactor de economía P1: wallets personales, XP dual, presupuesto, rachas y hucha; bloqueado por el cutover de TD-001 | High | Open (2026-08-20; diseño técnico pendiente de implementación tras el cutover de TD-001) |
 | TD-067 | Gestión de roles y administración: promoción/degradación, transferencia, confirmaciones sensibles y protección contra hogares sin admin | High | Open (2026-08-20; decisiones de gobernanza aprobadas, pendiente de implementación) |
@@ -778,7 +780,7 @@ Las decisiones de producto (monetización, gamificación, UX de alto nivel) vive
 | `backend/src/middleware/validate.ts` | Generic Zod validate(schema) middleware (TD-028) — safeParse's req.body, 400 with `{ error, details }` on failure, replaces req.body with parsed/coerced output on success |
 | `backend/src/schemas/` | Zod request-validation schemas, one file per domain (task/household/auth.schema.ts), applied to routes via validate() (TD-028) |
 | `backend/src/utils/response.ts` | `sendSuccess` / `sendError` helpers |
-| `backend/src/services/task.service.ts` | Task business logic + recurrence |
+| `backend/src/services/task.service.ts` | Task business logic + recurrence; also `listTimeline` / `listUndatedTasks`, the two keyset reads behind `GET .../tasks/timeline?from=&limit=&cursor=` and `GET .../tasks/undated?limit=&cursor=` (TD-064). Dated and undated tasks paginate separately on purpose — the old combined window ORed `dueDate: null` into every page and re-scanned the undated ones each time. Cursors are bound to the query shape: one from a different query answers 400, not a silently wrong page |
 | `backend/src/services/household-stats.service.ts` | `GET /households/:householdId/stats?period=` load/completion stats (any member, PDR-007) |
 | `backend/src/config/economy.ts` | Tunable economy constants (coin amounts, cooldowns, cosmetics catalog) — PDR-001 |
 | `backend/src/config/swagger.ts` | OpenAPI spec served at `/api/docs` |
@@ -796,6 +798,7 @@ Las decisiones de producto (monetización, gamificación, UX de alto nivel) vive
 | `frontend/lib/services/notification_service.dart` | Local task reminders + FCM push registration/foreground display (PDR-008) |
 | `frontend/lib/presentation/widgets/session_listeners.dart` | App-wide `AuthCubit` reactions (push registration on login; socket teardown + domain-cubit resets + routing to login on logout/session-expiry, TD-055/TD-058) — wraps `MaterialApp` in `app.dart` |
 | `frontend/lib/presentation/cubit/task_cubit.dart` | Task state management |
+| `frontend/lib/presentation/cubit/timeline_cubit.dart` | Timeline state (TD-064): normalized store keyed by task id, coalesced prefetch (concurrent requests for the same page collapse into one), and offline handling. Its per-session cache metadata lives in its own Hive box via `data/models/timeline_session.dart`, so a first page no longer overwrites the whole task cache when it only holds one window |
 | `frontend/lib/presentation/cubit/pet_cubit.dart` | Pet/adoption/economy state management |
 | `frontend/lib/presentation/pages/pet_page.dart` | Pet tab: adoption flow, care view (feed/play) |
 | `frontend/lib/presentation/pages/pet_shop_page.dart` | Cosmetics shop UI |
