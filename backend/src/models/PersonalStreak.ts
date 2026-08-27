@@ -25,6 +25,20 @@ export interface IPersonalStreak extends Document {
   scopeId?: Types.ObjectId | null;
   /** Consecutive qualifying days; reset to 0 by an uncovered miss. */
   currentCount: number;
+  /**
+   * The highest `currentCount` ever reached, which a reset never lowers.
+   *
+   * NOT part of TD-066-DESIGN §3, which lists only `currentCount`: added in B6
+   * because the read contract exposes a "longest" figure and the alternative
+   * was deriving it by walking every `StreakDay` on every read. It also gives
+   * the ice milestones (7/14/30/50/100, PDR-019) a monotonic number to be
+   * judged against — judging them against `currentCount` would make an
+   * already-earned milestone disappear the moment a streak breaks, which is
+   * exactly the punitive tone PDR-019 rejects.
+   *
+   * Nothing writes it until B9; it stays 0 until then.
+   */
+  longestCount: number;
   /** Ices held, always within [0, MAX_ICE_RESERVE] (PDR-019). */
   iceReserve: number;
   /**
@@ -48,6 +62,7 @@ const personalStreakSchema = new Schema<IPersonalStreak>(
     // streak per user" enforceable.
     scopeId: { type: Schema.Types.ObjectId, default: null },
     currentCount: { type: Number, required: true, default: 0, min: 0 },
+    longestCount: { type: Number, required: true, default: 0, min: 0 },
     /**
      * Bounded in the SCHEMA, not only in the service that spends and refunds
      * it. The cap is a product rule (PDR-019: "tope de dos en reserva") and

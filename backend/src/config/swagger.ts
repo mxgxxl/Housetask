@@ -1112,6 +1112,64 @@ export const swaggerSpec: Record<string, unknown> = {
         },
       },
     },
+    '/households/{householdId}/economy/p1/me': {
+      get: {
+        tags: ['Economy'],
+        summary: "The caller's own P1 economy: wallet, personal XP, streak and weekly budget",
+        description:
+          'TD-066 B6. Identifies the member from the access token, never from a ' +
+          'path param, so there is no id to tamper with — this endpoint can only ' +
+          'ever return the caller\'s own money. While P1 is disabled for the ' +
+          'household (every household today) it answers a complete, ZEROED ' +
+          'structure with `enabled: false` rather than 404, so a client can ship ' +
+          'before its household is migrated. `remaining` is what is still ' +
+          'claimable this week and `dailyReleased` is what today added on its ' +
+          'own — on Sunday the second is 0 while the first usually is not, ' +
+          'because the week\'s unspent remainder stays claimable (PDR-013).',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+          {
+            name: 'timeZone',
+            in: 'query',
+            required: false,
+            schema: { type: 'string', example: 'Europe/Madrid' },
+            description:
+              'IANA zone used to derive the budget week and day. Defaults to UTC; ' +
+              'an unknown zone is a 400 rather than a silent fallback. Once a ' +
+              "budget row exists, its snapshotted zone wins over this value.",
+          },
+        ],
+        responses: {
+          '200': { description: 'OK' },
+          '400': { description: 'timeZone is not a valid IANA timezone' },
+          '403': { description: 'Not a member of this household' },
+          '404': { description: 'Household not found' },
+        },
+      },
+    },
+    '/households/{householdId}/economy/p1/household': {
+      get: {
+        tags: ['Economy'],
+        summary: 'Shared household XP, the active savings goal, and member levels',
+        description:
+          'TD-066 B6. Carries shared progress only: household XP and level, the ' +
+          'active joint savings goal with its per-member contribution breakdown ' +
+          '(public by UX-P1-SPEC §6), and each member\'s personal level and XP. ' +
+          'NEVER any member\'s wallet balance, weekly budget or streak. Members ' +
+          'come back in join order, never sorted by XP — the product rules out a ' +
+          'leaderboard. Same `enabled: false` zeroed shape while P1 is off.',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          '200': { description: 'OK' },
+          '403': { description: 'Not a member of this household' },
+          '404': { description: 'Household not found' },
+        },
+      },
+    },
     '/households/{householdId}/economy': {
       get: {
         tags: ['Economy'],

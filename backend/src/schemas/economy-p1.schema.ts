@@ -49,3 +49,26 @@ export const completeTaskP1Schema = z.object({
 });
 
 export type CompleteTaskP1Body = z.infer<typeof completeTaskP1Schema>;
+
+/**
+ * Query of `GET /households/:householdId/economy/p1/me` (B6).
+ *
+ * The read side has the same timezone problem as the write side and solves it
+ * the same way: nothing persists a member's zone yet, so it travels per
+ * request. It matters here because the endpoint reports what today released
+ * and what is left — both of which depend on which day "today" is, and a
+ * member in Madrid asking at 00:30 on Monday must not be told about Sunday.
+ *
+ * Applied with `validateQuery`, not `validate`: Express 5 makes `req.query` a
+ * getter, so the parsed result lands on `res.locals.query`.
+ */
+export const personalEconomyQuerySchema = z.object({
+  timeZone: z
+    .string()
+    .trim()
+    .min(1)
+    .refine(isValidTimeZone, { error: 'timeZone must be a valid IANA timezone' })
+    .optional(),
+});
+
+export type PersonalEconomyQuery = z.infer<typeof personalEconomyQuerySchema>;

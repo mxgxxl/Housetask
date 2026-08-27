@@ -38,3 +38,33 @@ export function validate<T>(schema: ZodType<T>): RequestHandler {
     next();
   };
 }
+
+/**
+ * The same contract as {@link validate}, applied to `req.query` (TD-066 B6).
+ *
+ * A separate function rather than a `source` parameter on `validate`: every
+ * existing call site is a body validation, and adding an argument they would
+ * all have to ignore is worse than one more named export.
+ *
+ * The parsed output is NOT written back over `req.query`. Express 5 makes it
+ * a getter with no setter, so assigning throws; handlers read the validated
+ * values from `res.locals.query` instead, which is also where they cannot be
+ * confused with the raw, still-untrusted strings.
+ */
+export function validateQuery<T>(schema: ZodType<T>): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const result = schema.safeParse(req.query);
+
+    if (!result.success) {
+      res.status(400).json({
+        success: false,
+        error: result.error.issues[0]?.message ?? 'Validation failed',
+        details: z.flattenError(result.error),
+      });
+      return;
+    }
+
+    res.locals.query = result.data;
+    next();
+  };
+}
