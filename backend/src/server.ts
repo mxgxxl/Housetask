@@ -7,6 +7,7 @@ import { initSocket } from './config/socket';
 import { disconnectRedis } from './config/redis';
 import { logger } from './utils/logger';
 import { validateProductionEnv } from './utils/env';
+import { useMigrationBackedFlag } from './services/feature-flag.service';
 import { RedisIdempotencyStore } from './services/idempotency.store';
 import { initSentry } from './utils/sentry';
 
@@ -50,6 +51,13 @@ export async function start(): Promise<void> {
     validateProductionEnv();
 
     await connectDatabase();
+
+    // TD-066 B11: from here on, `isP1Enabled` answers from
+    // HouseholdEconomyMigration instead of the shipped always-false default.
+    // Registered after the database is up, because the resolver reads it —
+    // and before anything can serve a request, so no completion is ever
+    // judged by a resolver that has not been wired yet.
+    useMigrationBackedFlag();
 
     // Redis-backed so idempotency holds across horizontally scaled instances.
     // The store resolves its client lazily, so it may be built before initSocket

@@ -27,6 +27,7 @@
  *     resolver itself is what has gone wrong.
  */
 
+import { HouseholdEconomyMigrationModel } from '../models/HouseholdEconomyMigration';
 import { logger } from '../utils/logger';
 
 /**
@@ -77,6 +78,35 @@ export function setP1EnabledResolver(next: P1EnabledResolver): void {
  */
 export function resetP1EnabledResolver(): void {
   resolver = disabledResolver;
+}
+
+/**
+ * The real source of truth, backed by `HouseholdEconomyMigration` (B11).
+ *
+ * A household has P1 only once the activation script has written its row with
+ * `phase: 'active'` — which it refuses to do without a snapshot and a named
+ * `legacyWalletUserId`. So "migrated" and "enabled" cannot drift apart: there
+ * is one record, and it is the same one the runbook inspects.
+ *
+ * One indexed `findOne` on a tiny collection, per call. Deliberately NOT
+ * cached: this gates money, and a cache would put a staleness window between
+ * flipping a household off and it actually being off. The emergency stop does
+ * not depend on it either — `isKillSwitchOn` short-circuits before the
+ * resolver runs, so an incident can be halted instantly regardless.
+ */
+export const migrationBackedResolver: P1EnabledResolver = async (householdId) => {
+  const record = await HouseholdEconomyMigrationModel.findOne({ householdId })
+    .select('phase')
+    .lean();
+  return record?.phase === 'active';
+};
+
+/**
+ * Wire the migration-backed resolver. Called once from `server.ts`; tests
+ * register their own instead.
+ */
+export function useMigrationBackedFlag(): void {
+  setP1EnabledResolver(migrationBackedResolver);
 }
 
 /**
