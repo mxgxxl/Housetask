@@ -115,6 +115,11 @@ class HomePage extends StatelessWidget {
         ),
       ),
       floatingActionButton: FloatingActionButton(
+        // Every tab lives in MainScaffold's IndexedStack, so all three FABs
+        // are in the tree at once and would otherwise share Flutter's single
+        // default hero tag — which logs a duplicate-hero warning on every
+        // route push and would mask a real Hero conflict if one appeared.
+        heroTag: 'home-fab',
         onPressed: () => _quickAdd(context),
         child: const Icon(Icons.add),
       ),

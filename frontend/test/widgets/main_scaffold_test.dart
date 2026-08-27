@@ -206,4 +206,85 @@ void main() {
 
     expect(taskRepo.listCalls, greaterThan(callsAfterInitialLoad));
   });
+
+  testWidgets(
+      'tapping Mascota refetches the economy — the coin balance is only ever '
+      'fetched by PetCubit, and completing a task credits coins through '
+      'grantCoins, which emits no socket event', (tester) async {
+    tester.view.physicalSize = const Size(800, 3000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    // A household WITH a pet: PetCubit.load only reaches getEconomy once
+    // getPet returns one, and the balance is the number this test exists for.
+    final petRepo = FakePetRepository(pet: buildPet('p1', name: 'Michi'));
+    petCubit = PetCubit(petRepo);
+
+    // Primed the way the real app does it: MainScaffold's _loadForHousehold
+    // reads the user id from AuthCubit, which is unauthenticated in this
+    // harness, so its PetCubit.load would be skipped. That precondition
+    // matters — PetCubit.refresh() no-ops until load() has recorded a
+    // household — so the test establishes it explicitly rather than
+    // measuring a delta from a cubit that was never loaded at all.
+    await petCubit.load('h1', 'u1');
+
+    await tester.pumpWidget(_host(
+      householdCubit: householdCubit,
+      taskCubit: taskCubit,
+      shoppingCubit: shoppingCubit,
+      petCubit: petCubit,
+      authCubit: authCubit,
+      socketCubit: socketCubit,
+    ));
+    await tester.pump();
+    await tester.pump();
+    // Exactly one fetch so far — and before this fix, that single fetch was
+    // the ONLY economy read of the entire session.
+    final callsAfterInitialLoad = petRepo.getEconomyCalls;
+    expect(callsAfterInitialLoad, 1);
+
+    await tester.tap(find.widgetWithText(NavigationDestination, 'Mascota'));
+    await tester.pump();
+    await tester.pump();
+
+    expect(petRepo.getEconomyCalls, greaterThan(callsAfterInitialLoad));
+  });
+
+  testWidgets(
+      'pushing a route raises no duplicate-Hero exception — the IndexedStack '
+      'keeps Home, Tareas and Compras all mounted, so their FABs are in the '
+      'tree at once and must not share the default hero tag', (tester) async {
+    tester.view.physicalSize = const Size(800, 3000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(_host(
+      householdCubit: householdCubit,
+      taskCubit: taskCubit,
+      shoppingCubit: shoppingCubit,
+      petCubit: petCubit,
+      authCubit: authCubit,
+      socketCubit: socketCubit,
+    ));
+    await tester.pump();
+    await tester.pump();
+
+    // The warning only fires when a route transition makes Flutter collect
+    // the heroes in the subtree, which is why the rest of this suite never
+    // surfaced it: nothing here had ever pushed a route.
+    final navigator = tester.state<NavigatorState>(find.byType(Navigator));
+    navigator.push(MaterialPageRoute<void>(
+      builder: (_) => const Scaffold(body: Text('destino')),
+    ));
+    // Not pumpAndSettle: the offstage Mascota tab renders an indeterminate
+    // CircularProgressIndicator that never settles (see the tab-switch test
+    // above). Pumping through the transition is enough for the Hero
+    // controller to run.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(tester.takeException(), isNull);
+  });
 }

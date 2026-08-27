@@ -35,6 +35,10 @@ class _MainScaffoldState extends State<MainScaffold> {
   /// below — used by [_onDestinationSelected] to refresh it on entry.
   static const _recurringTabIndex = 2;
 
+  /// Index of [PetPage] in [_pages]/the NavigationBar destinations below —
+  /// refreshed on entry for the same reason, see [_onDestinationSelected].
+  static const _petTabIndex = 5;
+
   final _pages = const [
     HomePage(),
     TasksPage(),
@@ -93,10 +97,23 @@ class _MainScaffoldState extends State<MainScaffold> {
   /// re-derives it by refetching each time the user lands on the tab instead.
   void _onDestinationSelected(int index) {
     setState(() => _index = index);
-    if (index != _recurringTabIndex) return;
     final householdId = _loadedHouseholdId;
-    if (householdId != null) {
+    if (householdId == null) return;
+
+    if (index == _recurringTabIndex) {
       context.read<TaskCubit>().loadRecurringTasks(householdId);
+      return;
+    }
+
+    if (index == _petTabIndex) {
+      // Same IndexedStack staleness the Recurrentes tab works around, for a
+      // different reason: the coin balance and the pet's hunger/mood are both
+      // computed server-side and only ever fetched by PetCubit.load/refresh.
+      // Completing a task credits coins through grantCoins, which emits no
+      // socket event, and SocketCubit routes task:* only to Task/Timeline —
+      // so without this the numbers stay at whatever they were when the app
+      // started, however many tasks have been completed since.
+      context.read<PetCubit>().refresh();
     }
   }
 

@@ -136,6 +136,9 @@ class _ShoppingPageState extends State<ShoppingPage> {
         },
       ),
       floatingActionButton: FloatingActionButton.extended(
+        // See home_page.dart's FAB: distinct tags because the IndexedStack
+        // keeps all three alive simultaneously.
+        heroTag: 'shopping-fab',
         onPressed: () => Navigator.of(context)
             .push(MaterialPageRoute(builder: (_) => const ShoppingFormPage())),
         icon: const Icon(Icons.add),

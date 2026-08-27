@@ -170,6 +170,9 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
         },
       ),
       floatingActionButton: FloatingActionButton.extended(
+        // See home_page.dart's FAB: distinct tags because the IndexedStack
+        // keeps all three alive simultaneously.
+        heroTag: 'tasks-fab',
         onPressed: () => Navigator.of(context).push(
           MaterialPageRoute(builder: (_) => const TaskFormPage()),
         ),
