@@ -8,3 +8,4 @@ export * from './household.schema';
 export * from './auth.schema';
 export * from './pet.schema';
 export * from './device.schema';
+export * from './economy-p1.schema';

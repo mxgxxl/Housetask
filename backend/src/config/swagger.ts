@@ -573,6 +573,56 @@ export const swaggerSpec: Record<string, unknown> = {
         responses: { '200': { description: 'Completed' } },
       },
     },
+    '/households/{householdId}/tasks/{taskId}/completions': {
+      post: {
+        tags: ['Tasks'],
+        summary: 'Complete a task and return its P1 reward receipt (TD-066)',
+        description:
+          'Server-authoritative completion command. Accepts an optional offline ' +
+          '`occurredAt` (bounded to 7 days in the past / 5 minutes in the future) ' +
+          'and the member IANA `timeZone` used to derive the budget week and day. ' +
+          'The `Idempotency-Key` header doubles as the completion operation id: a ' +
+          'retry carrying the same key replays the original amounts, while any ' +
+          'other caller finding the reward already claimed receives `reward: null`. ' +
+          'While P1 is disabled for the household — the default — this behaves ' +
+          'exactly like PATCH .../complete and always answers `reward: null`.',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'taskId', in: 'path', required: true, schema: { type: 'string' } },
+          {
+            name: 'Idempotency-Key',
+            in: 'header',
+            required: false,
+            schema: { type: 'string' },
+            description: 'Stable per logical completion; survives retries (ADR-007).',
+          },
+        ],
+        requestBody: {
+          required: false,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  occurredAt: { type: 'string', format: 'date-time' },
+                  timeZone: { type: 'string', example: 'Europe/Madrid' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': {
+            description:
+              'Completed. `data` is `{ task, reward: { coins, personalXp, householdXp } | null, receiptId }`.',
+          },
+          '400': { description: 'occurredAt outside the accepted window, or invalid timeZone' },
+          '404': { description: 'Task not found' },
+          '409': { description: 'A request with this Idempotency-Key is still in progress' },
+        },
+      },
+    },
     '/households/{householdId}/tasks/{taskId}/restore': {
       post: {
         tags: ['Tasks'],

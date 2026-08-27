@@ -1,0 +1,505 @@
+import mongoose, { ClientSession, Types } from 'mongoose';
+
+import { AppError } from '../middleware/error.middleware';
+import { HouseholdProgressModel } from '../models/HouseholdProgress';
+import { HouseholdXpLedgerModel } from '../models/HouseholdXpLedger';
+import { IRewardGrant, RewardGrantModel } from '../models/RewardGrant';
+import { ITask, TaskModel } from '../models/Task';
+import { PersonalCoinLedgerModel } from '../models/PersonalCoinLedger';
+import { PersonalXpLedgerModel } from '../models/PersonalXpLedger';
+import { UserProgressModel } from '../models/UserProgress';
+import { WeeklyPersonalBudgetModel } from '../models/WeeklyPersonalBudget';
+import {
+  DEFAULT_TASK_COINS,
+  HOUSEHOLD_LEVEL_CURVE_FACTOR,
+  PERSONAL_LEVEL_CURVE_FACTOR,
+  TASK_HOUSEHOLD_XP,
+  TASK_PERSONAL_XP,
+  WEEKLY_CAP_COINS,
+  levelForXp,
+} from '../config/economy-p1';
+import { TASK_COINS } from '../config/economy';
+import {
+  availableCoins,
+  dayIndexIn,
+  effectiveDayKey,
+  releasedThroughDay,
+  resolveTimeZone,
+  validateOccurredAt,
+  weekKey,
+} from '../utils/economy-period';
+import { emitToHousehold } from '../config/socket';
+import { grantCoins } from './economy.service';
+import { isP1Enabled } from './feature-flag.service';
+import { logger } from '../utils/logger';
+import * as taskService from './task.service';
+
+/** What one completion paid out. Zero coins is a real outcome, not "nothing". */
+export interface RewardSummary {
+  coins: number;
+  personalXp: number;
+  householdXp: number;
+}
+
+export interface CompleteTaskP1Result {
+  task: ITask;
+  /**
+   * `null` when no reward was produced BY THIS REQUEST: P1 is off for the
+   * household, or the task's reward already belongs to a different member or
+   * a different client operation. A genuine retry of the same operation gets
+   * its original amounts back instead.
+   */
+  reward: RewardSummary | null;
+  /** The receipt this completion is recorded under, when there is one. */
+  receiptId: string | null;
+}
+
+export interface CompleteTaskP1Input {
+  householdId: string;
+  userId: string;
+  taskId: string;
+  /**
+   * Client-claimed completion instant. Optional: the legacy PATCH paths have
+   * no trustworthy offline timestamp to offer (owner decision P7), so they
+   * pass nothing and the server uses its own clock.
+   */
+  occurredAt?: Date;
+  /**
+   * IANA zone the member's day and week boundaries are computed in.
+   *
+   * Comes from the request today because NOTHING PERSISTS IT YET: neither
+   * `User` nor `HouseholdMember` has a timezone field, and inventing one is a
+   * schema decision beyond this stop. Once a week's budget exists, ITS
+   * snapshotted `periodTimeZone` wins over whatever the request claims — that
+   * is what the snapshot is for (TD-066-DESIGN §3).
+   */
+  timeZone?: string;
+  /**
+   * The client's stable id for this logical completion, surviving retries.
+   *
+   * Sourced from the `Idempotency-Key` header, which is exactly that by Hard
+   * Rule 13. Deliberately not a second body field saying the same thing.
+   */
+  operationId: string;
+}
+
+function isDuplicateKeyError(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: number }).code === 11000;
+}
+
+/**
+ * Complete a task and pay for it, server-authoritative (TD-066-DESIGN §4).
+ *
+ * ── The claim is the design ──────────────────────────────────────────────
+ * The transaction opens by INSERTING a `RewardGrant`. Its unique index
+ * `{householdId, taskId, kind}` is what makes the completion exclusive: a
+ * retry, a replayed offline operation, or two devices racing all collide on
+ * it instead of paying twice. Everything after the claim is written knowing
+ * it is already the only writer for this task.
+ *
+ * That ordering matters. Checking "is it already completed?" and then writing
+ * would be a read-then-write race that a transaction alone does not close,
+ * because the two requests touch different documents and Mongo has nothing to
+ * serialize them on. The unique index is the serialization point.
+ *
+ * ── What is NOT best-effort here ─────────────────────────────────────────
+ * Fase A's `grantCoins` swallows every failure so a coin problem can never
+ * break a completion. P1 inverts that for its own writes (§4): a task must
+ * not be declared complete without leaving its economic receipt, so a
+ * transient failure rolls the whole thing back and the `Idempotency-Key`
+ * makes the retry safe. The user-visible consequence — a completion can now
+ * fail where it used to half-succeed — is the intended trade.
+ */
+export async function completeTaskWithReward(
+  input: CompleteTaskP1Input,
+): Promise<CompleteTaskP1Result> {
+  const { householdId, userId, taskId } = input;
+
+  // Flag OFF is the shipped state of every household until B11 activates it,
+  // so this is the hot path today. It delegates to the untouched Fase A
+  // service: same writes, same events, same response, no P1 document created.
+  if (!(await isP1Enabled(householdId))) {
+    const task = await taskService.completeTask(householdId, userId, taskId);
+    return { task, reward: null, receiptId: null };
+  }
+
+  const now = new Date();
+  const occurredAt = input.occurredAt ?? now;
+
+  // The server decides the week and the day; the client only proposes when it
+  // happened, and only within a bounded window (§9: a manipulated or ancient
+  // offline timestamp must be refused outright, not quietly honoured).
+  const rejection = validateOccurredAt(occurredAt, now);
+  if (rejection) {
+    throw new AppError(
+      rejection === 'too_old'
+        ? 'occurredAt is outside the accepted window'
+        : rejection === 'too_far_future'
+          ? 'occurredAt is in the future'
+          : 'occurredAt is not a valid date',
+      400,
+    );
+  }
+
+  const session = await mongoose.startSession();
+  let outcome: TransactionOutcome | null = null;
+
+  try {
+    await session.withTransaction(async () => {
+      // withTransaction may re-run this callback on a transient error, so it
+      // re-reads and recomputes everything on each attempt rather than
+      // closing over a previous attempt's state.
+      outcome = await runRewardTransaction(input, occurredAt, session);
+    });
+  } catch (err) {
+    if (isDuplicateKeyError(err)) {
+      // The claim was already taken. Not an error: it is the idempotency
+      // guarantee doing its job, so answer from the existing receipt.
+      return replayExistingGrant(input);
+    }
+    throw err;
+  } finally {
+    await session.endSession();
+  }
+
+  if (!outcome) {
+    // withTransaction resolved without running the callback to completion,
+    // which should be impossible. Failing loudly beats returning a task the
+    // caller would read as "completed and paid".
+    throw new AppError('Completion transaction produced no result', 500);
+  }
+
+  return afterCommit(input, outcome);
+}
+
+interface TransactionOutcome {
+  task: ITask;
+  reward: RewardSummary;
+  receiptId: string;
+}
+
+async function runRewardTransaction(
+  input: CompleteTaskP1Input,
+  occurredAt: Date,
+  session: ClientSession,
+): Promise<TransactionOutcome> {
+  const { householdId, userId, taskId, operationId } = input;
+
+  const task = await TaskModel.findOne({
+    _id: taskId,
+    householdId,
+    isDeleted: { $ne: true },
+  }).session(session);
+
+  if (!task) {
+    throw new AppError('Task not found', 404);
+  }
+
+  // ── 1. Claim the completion. Everything else depends on winning this. ──
+  const requestedZone = resolveTimeZone(input.timeZone);
+  const provisionalWeekKey = weekKey(occurredAt, requestedZone);
+
+  const budget = await resolveWeeklyBudget(
+    userId,
+    householdId,
+    provisionalWeekKey,
+    requestedZone,
+    session,
+  );
+
+  // The budget's stored zone wins: it was snapshotted when the week opened,
+  // and a device that changed zone mid-week must not re-slice a week that is
+  // already being settled under another one.
+  const effectiveZone = budget.periodTimeZone;
+  const dayIndex = dayIndexIn(occurredAt, effectiveZone);
+  const dayKey = effectiveDayKey(occurredAt, effectiveZone);
+
+  const released = releasedThroughDay(budget.weeklyCap, dayIndex);
+  const available = availableCoins(budget.weeklyCap, dayIndex, budget.grantedCoins);
+  // Never pay more than the day has released. XP is untouched by this: PDR-013
+  // makes Sunday and an exhausted budget stop the coins, not the progress.
+  const coinAward = Math.min(DEFAULT_TASK_COINS, available);
+
+  const [grant] = await RewardGrantModel.create(
+    [
+      {
+        householdId: new Types.ObjectId(householdId),
+        userId: new Types.ObjectId(userId),
+        taskId: new Types.ObjectId(taskId),
+        kind: 'task_first_completion' as const,
+        completionOperationId: operationId,
+        effectiveAt: occurredAt,
+        effectiveDayKey: dayKey,
+        coinAwarded: coinAward,
+        personalXpAwarded: TASK_PERSONAL_XP,
+        householdXpAwarded: TASK_HOUSEHOLD_XP,
+        weeklyBudgetId: budget._id,
+        status: 'granted' as const,
+      },
+    ],
+    { session },
+  );
+
+  // ── 2. Money and progress, all inside the same transaction. ──
+  if (coinAward > 0) {
+    // A zero-coin completion writes no entry at all: an amount-zero row would
+    // be noise in a wallet history that people read. The receipt above still
+    // records that the payout was zero, so the two are distinguishable.
+    await PersonalCoinLedgerModel.create(
+      [
+        {
+          userId: new Types.ObjectId(userId),
+          householdId: new Types.ObjectId(householdId),
+          amount: coinAward,
+          reason: 'task_first_completion' as const,
+          refType: 'task' as const,
+          refId: taskId,
+          weekKey: budget.weekKey,
+          effectiveAt: occurredAt,
+        },
+      ],
+      { session },
+    );
+  }
+
+  await PersonalXpLedgerModel.create(
+    [
+      {
+        userId: new Types.ObjectId(userId),
+        amount: TASK_PERSONAL_XP,
+        reason: 'task_first_completion' as const,
+        refType: 'task' as const,
+        refId: taskId,
+      },
+    ],
+    { session },
+  );
+
+  await HouseholdXpLedgerModel.create(
+    [
+      {
+        householdId: new Types.ObjectId(householdId),
+        amount: TASK_HOUSEHOLD_XP,
+        reason: 'task_first_completion' as const,
+        refType: 'task' as const,
+        refId: taskId,
+      },
+    ],
+    { session },
+  );
+
+  await WeeklyPersonalBudgetModel.updateOne(
+    { _id: budget._id },
+    { $inc: { grantedCoins: coinAward }, $set: { releasedCoins: released } },
+    { session },
+  );
+
+  await bumpProgress(
+    UserProgressModel,
+    { userId: new Types.ObjectId(userId) },
+    TASK_PERSONAL_XP,
+    PERSONAL_LEVEL_CURVE_FACTOR,
+    session,
+  );
+  await bumpProgress(
+    HouseholdProgressModel,
+    { householdId: new Types.ObjectId(householdId) },
+    TASK_HOUSEHOLD_XP,
+    HOUSEHOLD_LEVEL_CURVE_FACTOR,
+    session,
+  );
+
+  // ── 3. Only now is the task itself completed. ──
+  task.status = 'completed';
+  // The instant it actually happened, not the instant it reached us: for an
+  // offline completion those differ, and the truthful one is what the receipt
+  // and the streak already agree on.
+  task.completedAt = occurredAt;
+  task.completedBy = new Types.ObjectId(userId);
+  await task.save({ session });
+
+  return {
+    task,
+    reward: {
+      coins: coinAward,
+      personalXp: TASK_PERSONAL_XP,
+      householdXp: TASK_HOUSEHOLD_XP,
+    },
+    receiptId: grant._id.toString(),
+  };
+}
+
+/**
+ * Find or open this member's budget for the week.
+ *
+ * `upsert` rather than find-then-create: two first-completions racing at the
+ * start of a fresh week would otherwise both create one, and the unique index
+ * would abort one whole reward transaction over a document neither of them
+ * actually disagreed about. The upsert makes the loser read the winner's row.
+ */
+async function resolveWeeklyBudget(
+  userId: string,
+  householdId: string,
+  key: string,
+  timeZone: string,
+  session: ClientSession,
+): Promise<{
+  _id: Types.ObjectId;
+  weekKey: string;
+  weeklyCap: number;
+  grantedCoins: number;
+  periodTimeZone: string;
+}> {
+  const budget = await WeeklyPersonalBudgetModel.findOneAndUpdate(
+    {
+      userId: new Types.ObjectId(userId),
+      householdId: new Types.ObjectId(householdId),
+      weekKey: key,
+    },
+    {
+      $setOnInsert: {
+        periodTimeZone: timeZone,
+        weeklyCap: WEEKLY_CAP_COINS,
+        releasedCoins: 0,
+        grantedCoins: 0,
+        planVersion: 1,
+        allocations: [],
+      },
+    },
+    { upsert: true, new: true, session },
+  );
+
+  if (!budget) {
+    throw new AppError('Could not resolve the weekly budget', 500);
+  }
+  return budget;
+}
+
+/**
+ * Add XP to a projection and recompute its level, creating it if absent.
+ *
+ * Read-modify-write on one document inside a transaction is safe: a
+ * concurrent write to the same document raises a WriteConflict that
+ * `withTransaction` retries, rather than silently interleaving. The `$inc` is
+ * still used for the XP itself so the retry converges instead of replaying a
+ * stale total.
+ */
+async function bumpProgress<T extends { xp: number }>(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  projection: mongoose.Model<any>,
+  filter: Record<string, unknown>,
+  xpDelta: number,
+  curveFactor: number,
+  session: ClientSession,
+): Promise<void> {
+  const updated = (await projection.findOneAndUpdate(
+    filter,
+    { $inc: { xp: xpDelta } },
+    { upsert: true, new: true, session, setDefaultsOnInsert: true },
+  )) as T | null;
+
+  if (!updated) {
+    throw new AppError('Could not update progress projection', 500);
+  }
+
+  // Level is derived, never accumulated: recomputing from the authoritative
+  // total means a replayed or out-of-order grant cannot drift it.
+  const level = levelForXp(updated.xp, curveFactor);
+  await projection.updateOne(filter, { $set: { level } }, { session });
+}
+
+/**
+ * Answer a request whose claim was already taken.
+ *
+ * A genuine retry — same member, same client operation — gets its original
+ * amounts back, which is what makes the endpoint safe to call twice. Anyone
+ * else gets `reward: null`: the task is complete, but this request earned
+ * nothing and must not be shown someone else's payout.
+ */
+async function replayExistingGrant(input: CompleteTaskP1Input): Promise<CompleteTaskP1Result> {
+  const { householdId, taskId, userId, operationId } = input;
+
+  const [grant, task] = await Promise.all([
+    RewardGrantModel.findOne({
+      householdId,
+      taskId,
+      kind: 'task_first_completion',
+    }),
+    TaskModel.findOne({ _id: taskId, householdId, isDeleted: { $ne: true } }),
+  ]);
+
+  if (!task) {
+    throw new AppError('Task not found', 404);
+  }
+  await populateTask(task);
+
+  const isSameOperation =
+    !!grant && grant.userId.toString() === userId && grant.completionOperationId === operationId;
+
+  if (!grant || !isSameOperation) {
+    return { task, reward: null, receiptId: grant ? grant._id.toString() : null };
+  }
+
+  return {
+    task,
+    reward: summarize(grant),
+    receiptId: grant._id.toString(),
+  };
+}
+
+function summarize(grant: IRewardGrant): RewardSummary {
+  return {
+    coins: grant.coinAwarded,
+    personalXp: grant.personalXpAwarded,
+    householdXp: grant.householdXpAwarded,
+  };
+}
+
+async function populateTask(task: ITask): Promise<ITask> {
+  return task.populate([
+    { path: 'assignedTo', select: 'name email avatarUrl' },
+    { path: 'createdBy', select: 'name email avatarUrl' },
+    { path: 'completedBy', select: 'name email avatarUrl' },
+  ]);
+}
+
+/**
+ * Everything that must NOT be inside the transaction, in the order it has to
+ * happen after the commit.
+ *
+ * Recurrence, push and socket emission are all best-effort by existing
+ * contract, and none of them can be rolled back — a socket event cannot be
+ * un-emitted. Running them inside the transaction would mean a late abort
+ * broadcasting a completion that never happened.
+ */
+async function afterCommit(
+  input: CompleteTaskP1Input,
+  outcome: TransactionOutcome,
+): Promise<CompleteTaskP1Result> {
+  const { householdId, userId, taskId } = input;
+  const { task } = outcome;
+
+  try {
+    await taskService.generateNextInstance(task);
+  } catch (err) {
+    logger.error('Error generating next recurrence', (err as Error).message);
+  }
+
+  // Owner decision P2(b), 2026-08-26: the Fase A household grant keeps
+  // running IN PARALLEL with the personal one during the migration. Without
+  // it the household ledger would stop growing the moment P1 switches on,
+  // and the pet shop — which still spends that balance (§6.5) — would become
+  // unaffordable. Still best-effort, exactly as it is on the Fase A path: it
+  // funds a coexisting economy, not this one's receipt.
+  try {
+    await grantCoins(householdId, TASK_COINS, 'task_complete', taskId);
+  } catch (err) {
+    logger.error('Error granting Fase A task-complete coins', (err as Error).message);
+  }
+
+  await populateTask(task);
+  taskService.notifyTaskCompleted(task, userId);
+  emitToHousehold(householdId, 'task:completed', task.toJSON());
+
+  return { task, reward: outcome.reward, receiptId: outcome.receiptId };
+}

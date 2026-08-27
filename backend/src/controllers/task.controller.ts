@@ -1,8 +1,12 @@
 import { Response } from 'express';
+import { Types } from 'mongoose';
 import * as taskService from '../services/task.service';
+import * as economyP1Service from '../services/economy-p1.service';
 import { AppError } from '../middleware/error.middleware';
+import { IDEMPOTENCY_HEADER } from '../middleware/idempotency.middleware';
 import { sendSuccess } from '../utils/response';
 import { parseCursorParam, parseDateParam, parseLimit } from '../utils/pagination';
+import { CompleteTaskP1Body } from '../schemas/economy-p1.schema';
 import { AuthenticatedRequest, TaskStatus } from '../types';
 
 const VALID_STATUS: TaskStatus[] = ['pending', 'completed'];
@@ -131,6 +135,46 @@ export async function complete(req: AuthenticatedRequest, res: Response): Promis
     req.params.taskId,
   );
   sendSuccess(res, task);
+}
+
+/**
+ * POST /api/households/:householdId/tasks/:taskId/completions
+ *
+ * The P1 completion command (TD-066-DESIGN §5). Unlike the PATCH above it
+ * carries an optional `occurredAt`/`timeZone` and returns what the completion
+ * paid, so an offline client can reconcile its pending state against a
+ * server-authoritative receipt instead of trusting an optimistic wallet.
+ *
+ * A POST rather than another PATCH because it CREATES something — the
+ * receipt — which is also what makes `Idempotency-Key` apply to it under
+ * Hard Rule 13.
+ *
+ * With P1 off for the household (every household today) this behaves exactly
+ * like the PATCH and answers `reward: null`.
+ */
+export async function completions(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const body = (req.body ?? {}) as CompleteTaskP1Body;
+
+  const result = await economyP1Service.completeTaskWithReward({
+    householdId: req.params.householdId,
+    userId: req.user!.userId,
+    taskId: req.params.taskId,
+    occurredAt: body.occurredAt,
+    timeZone: body.timeZone,
+    // The Idempotency-Key IS the client's stable operation id (Hard Rule 13),
+    // so the receipt reuses it rather than asking for the same value twice
+    // under a second name. Absent, the server mints one: the task-scoped
+    // unique index still prevents a double payout, but a retry without the
+    // header cannot be recognised as the SAME operation and so answers
+    // `reward: null` instead of replaying the original amounts.
+    operationId: req.get(IDEMPOTENCY_HEADER) ?? new Types.ObjectId().toString(),
+  });
+
+  sendSuccess(res, {
+    task: result.task,
+    reward: result.reward,
+    receiptId: result.receiptId,
+  });
 }
 
 /**

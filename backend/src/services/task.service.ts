@@ -142,7 +142,7 @@ function notifyTaskAssigned(task: ITask, creatorId: string): void {
  * they completed it themselves. Same fire-and-forget contract as
  * notifyTaskAssigned above.
  */
-function notifyTaskCompleted(task: ITask, completerId: string): void {
+export function notifyTaskCompleted(task: ITask, completerId: string): void {
   const creatorId = populatedId(task.createdBy);
   if (creatorId === completerId) return;
 
@@ -213,7 +213,7 @@ async function createNextOccurrence(source: ITask, nextDueDate: Date): Promise<I
  * (unless one already exists) and broadcast `task:created`. Called with the
  * source task BEFORE it is populated so its refs remain ObjectIds.
  */
-async function generateNextInstance(task: ITask): Promise<void> {
+export async function generateNextInstance(task: ITask): Promise<void> {
   if (!task.isRecurring || !task.recurrenceRule || !task.recurrenceRule.type || !task.dueDate) {
     return;
   }

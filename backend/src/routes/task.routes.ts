@@ -5,6 +5,7 @@ import { requireMembership } from '../middleware/membership.middleware';
 import { idempotency } from '../middleware/idempotency.middleware';
 import { validate } from '../middleware/validate';
 import { createTaskSchema, updateTaskSchema } from '../schemas/task.schema';
+import { completeTaskP1Schema } from '../schemas/economy-p1.schema';
 import { asyncHandler } from '../utils/asyncHandler';
 
 // mergeParams lets us read :householdId from the parent mount path.
@@ -29,6 +30,14 @@ router.post('/generate-instances', asyncHandler(taskController.generateRecurring
 router.post('/purge', asyncHandler(taskController.purge));
 router.patch('/:taskId', validate(updateTaskSchema), asyncHandler(taskController.update));
 router.patch('/:taskId/complete', asyncHandler(taskController.complete));
+// TD-066 B3: the P1 completion command. Same validate()-before-idempotency
+// order as POST '/' — a malformed body must not burn the client's key.
+router.post(
+  '/:taskId/completions',
+  validate(completeTaskP1Schema),
+  idempotency,
+  asyncHandler(taskController.completions),
+);
 router.delete('/:taskId', asyncHandler(taskController.remove));
 router.post('/:taskId/restore', asyncHandler(taskController.restore));
 
