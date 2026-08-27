@@ -49,6 +49,32 @@ export function canModifyTask(task: ITask, userId: string, memberRole: Role): bo
   return memberRole === 'admin' || task.createdBy.toString() === userId;
 }
 
+/**
+ * The 404-then-403 guard `updateTask` runs, as a standalone check (TD-066 B4).
+ *
+ * Extracted so the generic PATCH can keep enforcing exactly the same
+ * authorization when its status transition is handed to the P1 reward
+ * service instead of being applied here. Duplicating the rule at the call
+ * site would be a security bug waiting to happen: `PATCH .../complete`
+ * requires no such permission (any member may complete a task, Hard Rule 17)
+ * while a status-only generic PATCH has always required creator-or-admin,
+ * and quietly dropping that distinction would LOOSEN an existing check.
+ */
+export async function assertCanModifyTask(
+  householdId: string,
+  userId: string,
+  taskId: string,
+  memberRole: Role,
+): Promise<void> {
+  const task = await TaskModel.findOne({ _id: taskId, householdId, isDeleted: { $ne: true } });
+  if (!task) {
+    throw new AppError('Task not found', 404);
+  }
+  if (!canModifyTask(task, userId, memberRole)) {
+    throw new AppError('You do not have permission to modify this task', 403);
+  }
+}
+
 export interface CreateTaskInput {
   title: string;
   description?: string;

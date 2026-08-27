@@ -29,7 +29,13 @@ router.post('/', validate(createTaskSchema), idempotency, asyncHandler(taskContr
 router.post('/generate-instances', asyncHandler(taskController.generateRecurringInstances));
 router.post('/purge', asyncHandler(taskController.purge));
 router.patch('/:taskId', validate(updateTaskSchema), asyncHandler(taskController.update));
-router.patch('/:taskId/complete', asyncHandler(taskController.complete));
+// TD-066 B4: the header is OPTIONAL (idempotency.middleware passes straight
+// through without it), so mounting it here changes nothing for the published
+// client, which never sends it on a PATCH. What it adds is a safe retry for
+// the caller that DOES send one — which matters now that this path can fail
+// where it used to half-succeed: with P1 on, a reward failure rolls back the
+// completion instead of leaving it completed-but-unpaid.
+router.patch('/:taskId/complete', idempotency, asyncHandler(taskController.complete));
 // TD-066 B3: the P1 completion command. Same validate()-before-idempotency
 // order as POST '/' — a malformed body must not burn the client's key.
 router.post(

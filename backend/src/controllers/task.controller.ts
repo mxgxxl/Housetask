@@ -7,9 +7,25 @@ import { IDEMPOTENCY_HEADER } from '../middleware/idempotency.middleware';
 import { sendSuccess } from '../utils/response';
 import { parseCursorParam, parseDateParam, parseLimit } from '../utils/pagination';
 import { CompleteTaskP1Body } from '../schemas/economy-p1.schema';
+import { isP1Enabled } from '../services/feature-flag.service';
 import { AuthenticatedRequest, TaskStatus } from '../types';
 
 const VALID_STATUS: TaskStatus[] = ['pending', 'completed'];
+
+/**
+ * The stable id this completion is recorded under (TD-066 B3/B4).
+ *
+ * The `Idempotency-Key` header IS the client's per-operation id by Hard Rule
+ * 13, so the receipt reuses it rather than asking for the same value twice
+ * under a second name. When it is absent — every request from the published
+ * client, which sends the header only on POSTs — the server mints one. The
+ * task-scoped unique index still prevents a double payout; what is lost is
+ * only the ability to recognise a retry as the SAME operation, so such a
+ * retry answers `reward: null` instead of replaying the original amounts.
+ */
+function completionOperationId(req: AuthenticatedRequest): string {
+  return req.get(IDEMPOTENCY_HEADER) ?? new Types.ObjectId().toString();
+}
 
 /**
  * Parse the `days` query param for the purge endpoint. Absent falls back to
@@ -113,11 +129,63 @@ export async function create(req: AuthenticatedRequest, res: Response): Promise<
  * Partial update; broadcasts task:updated.
  */
 export async function update(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const householdId = req.params.householdId;
+  const taskId = req.params.taskId;
+  const userId = req.user!.userId;
+  const body = (req.body ?? {}) as Record<string, unknown> & { status?: TaskStatus };
+
+  // TD-066 B4: a generic PATCH that transitions a task to 'completed' is one
+  // of the three ways to complete a task, so with P1 on it must produce the
+  // same receipt the other two do — never a second, quieter reward path
+  // (TD-066-DESIGN §5: "nunca deben coexistir dos caminos que concedan
+  // recompensas distintas para la misma tarea").
+  //
+  // The flag is read ONCE, before anything is applied, so a transition cannot
+  // be half-decided by one economy and half by the other.
+  if (body.status === 'completed' && (await isP1Enabled(householdId))) {
+    // Everything except the status transition, which the P1 service owns.
+    const rest = Object.fromEntries(Object.entries(body).filter(([key]) => key !== 'status'));
+
+    // Authorization first, and by exactly the same rule as before. The two
+    // branches differ only in whether there is anything else to write:
+    // updateTask already performs the check, so re-running it would be a
+    // second query for nothing.
+    if (Object.keys(rest).length > 0) {
+      await taskService.updateTask(
+        householdId,
+        userId,
+        taskId,
+        rest,
+        req.member!.memberIds,
+        req.member!.role,
+      );
+    } else {
+      await taskService.assertCanModifyTask(householdId, userId, taskId, req.member!.role);
+    }
+
+    // The completion and its receipt land atomically here. If this throws,
+    // the task is NOT completed — the other fields above may already be
+    // saved, which is the safe direction to fail in: money stays consistent
+    // and the client gets a 500 it can retry with the same key.
+    const result = await economyP1Service.completeTaskWithReward({
+      householdId,
+      userId,
+      taskId,
+      operationId: completionOperationId(req),
+    });
+
+    // Deliberately the bare task, exactly as this endpoint has always
+    // answered. The reward is invisible on the legacy contract; a client that
+    // wants it calls POST .../completions.
+    sendSuccess(res, result.task);
+    return;
+  }
+
   const task = await taskService.updateTask(
-    req.params.householdId,
-    req.user!.userId,
-    req.params.taskId,
-    req.body ?? {},
+    householdId,
+    userId,
+    taskId,
+    body,
     req.member!.memberIds,
     req.member!.role,
   );
@@ -129,12 +197,25 @@ export async function update(req: AuthenticatedRequest, res: Response): Promise<
  * Marks the task complete; broadcasts task:completed.
  */
 export async function complete(req: AuthenticatedRequest, res: Response): Promise<void> {
-  const task = await taskService.completeTask(
-    req.params.householdId,
-    req.user!.userId,
-    req.params.taskId,
-  );
-  sendSuccess(res, task);
+  // TD-066 B4: routed through the P1 service so this and POST .../completions
+  // can never grant different rewards for the same task. With P1 off — every
+  // household today — the service delegates straight back to
+  // taskService.completeTask, so this path is byte-for-byte what it was.
+  //
+  // `occurredAt` is deliberately omitted: the legacy contract carries no
+  // offline timestamp, and fabricating one retroactively would be inventing
+  // evidence (owner decision P7). The service falls back to its own clock.
+  const result = await economyP1Service.completeTaskWithReward({
+    householdId: req.params.householdId,
+    userId: req.user!.userId,
+    taskId: req.params.taskId,
+    operationId: completionOperationId(req),
+  });
+
+  // The response stays the bare task. Adding `reward` here would change a
+  // contract the published iOS build already depends on, for a field it has
+  // no code to read.
+  sendSuccess(res, result.task);
 }
 
 /**
@@ -167,7 +248,7 @@ export async function completions(req: AuthenticatedRequest, res: Response): Pro
     // unique index still prevents a double payout, but a retry without the
     // header cannot be recognised as the SAME operation and so answers
     // `reward: null` instead of replaying the original amounts.
-    operationId: req.get(IDEMPOTENCY_HEADER) ?? new Types.ObjectId().toString(),
+    operationId: completionOperationId(req),
   });
 
   sendSuccess(res, {

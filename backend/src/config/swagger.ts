@@ -565,12 +565,32 @@ export const swaggerSpec: Record<string, unknown> = {
       patch: {
         tags: ['Tasks'],
         summary: 'Mark a task complete (auto-generates next recurring occurrence)',
+        description:
+          'Routed through the P1 reward service since TD-066 B4, so this and ' +
+          'POST .../completions can never grant different rewards for the same ' +
+          'task. The response is unchanged — `data` is the bare task, with no ' +
+          'reward fields. While P1 is enabled for the household a reward failure ' +
+          'rolls the completion back (500) instead of leaving it completed but ' +
+          'unpaid; retry with the same Idempotency-Key.',
         security: bearerAuth,
         parameters: [
           { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
           { name: 'taskId', in: 'path', required: true, schema: { type: 'string' } },
+          {
+            name: 'Idempotency-Key',
+            in: 'header',
+            required: false,
+            schema: { type: 'string' },
+            description:
+              'Optional. Absent, the endpoint behaves exactly as before; present, ' +
+              'a repeat replays the stored response (ADR-007).',
+          },
         ],
-        responses: { '200': { description: 'Completed' } },
+        responses: {
+          '200': { description: 'Completed' },
+          '404': { description: 'Task not found' },
+          '500': { description: 'Reward transaction failed; the task was NOT completed' },
+        },
       },
     },
     '/households/{householdId}/tasks/{taskId}/completions': {
