@@ -118,6 +118,9 @@ describe('GET .../economy/p1/me — flag OFF', () => {
       // socket is forgotten on the next app launch. Empty at level 1, since
       // the first personal unlock is at level 2.
       unlocks: [],
+      // F1: surfaced so the client can show the number a task-count milestone
+      // celebrated.
+      tasksCompleted: 0,
       xpIntoLevel: 0,
       xpForNextLevel: xpRequiredForLevel(2, PERSONAL_LEVEL_CURVE_FACTOR),
       xpToNextLevel: xpRequiredForLevel(2, PERSONAL_LEVEL_CURVE_FACTOR),

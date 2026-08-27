@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:hive_flutter/hive_flutter.dart';
 
 import '../data/models/cache_owner.dart';
+import '../data/models/economy_p1/economy_p1_snapshot.dart';
 import '../data/models/household.dart';
 import '../data/models/household_adapter.dart';
 import '../data/models/pending_operation.dart';
@@ -32,6 +33,7 @@ class CacheService {
   static const _pendingOperationsBoxName = 'pending_operations';
   static const _cacheOwnerBoxName = 'cache_owner';
   static const _timelineSessionsBoxName = 'timeline_sessions';
+  static const _economyP1BoxName = 'economy_p1';
 
   Box<Task>? _tasksBox;
   Box<ShoppingItem>? _shoppingBox;
@@ -39,6 +41,7 @@ class CacheService {
   Box<PendingOperation>? _pendingOperationsBox;
   Box<CacheOwner>? _cacheOwnerBox;
   Box<TimelineSession>? _timelineSessionsBox;
+  Box<EconomyP1Snapshot>? _economyP1Box;
 
   bool _initialized = false;
 
@@ -72,6 +75,9 @@ class CacheService {
     if (!Hive.isAdapterRegistered(5)) {
       Hive.registerAdapter(TimelineSessionAdapter());
     }
+    if (!Hive.isAdapterRegistered(6)) {
+      Hive.registerAdapter(EconomyP1SnapshotAdapter());
+    }
 
     _tasksBox = await Hive.openBox<Task>(_tasksBoxName);
     _shoppingBox = await Hive.openBox<ShoppingItem>(_shoppingBoxName);
@@ -81,6 +87,7 @@ class CacheService {
     _cacheOwnerBox = await Hive.openBox<CacheOwner>(_cacheOwnerBoxName);
     _timelineSessionsBox =
         await Hive.openBox<TimelineSession>(_timelineSessionsBoxName);
+    _economyP1Box = await Hive.openBox<EconomyP1Snapshot>(_economyP1BoxName);
 
     _initialized = true;
   }
@@ -103,6 +110,7 @@ class CacheService {
     Box<PendingOperation>? pendingOperations,
     Box<CacheOwner>? cacheOwner,
     Box<TimelineSession>? timelineSessions,
+    Box<EconomyP1Snapshot>? economyP1,
   }) {
     if (tasks != null) _tasksBox = tasks;
     if (shopping != null) _shoppingBox = shopping;
@@ -110,6 +118,7 @@ class CacheService {
     if (pendingOperations != null) _pendingOperationsBox = pendingOperations;
     if (cacheOwner != null) _cacheOwnerBox = cacheOwner;
     if (timelineSessions != null) _timelineSessionsBox = timelineSessions;
+    if (economyP1 != null) _economyP1Box = economyP1;
     _initialized = true;
   }
 
@@ -399,22 +408,70 @@ class CacheService {
 
   static const _ownerKey = 'owner';
 
+  // ---- P1 economy (TD-066 F1) ----
+
+  Box<EconomyP1Snapshot> get _economyP1 {
+    final box = _economyP1Box;
+    if (box == null) throw StateError('CacheService.init() has not been called');
+    return box;
+  }
+
+  /// The cached P1 economy for [householdId], or null when there is none the
+  /// running build can read.
+  ///
+  /// A record written by a different schema version is DISCARDED rather than
+  /// coerced: a half-understood wallet is worse than no wallet, and the app
+  /// already makes the same call for a cache whose owner cannot be proven
+  /// (TD-062). Deleting it here rather than leaving it means the stale bytes
+  /// do not linger for the next reader to trip over.
+  EconomyP1Snapshot? economyP1(String householdId) {
+    final stored = _economyP1.get(householdId);
+    if (stored == null) return null;
+    if (!stored.isReadable) {
+      unawaited(_economyP1.delete(householdId));
+      return null;
+    }
+    return stored;
+  }
+
+  /// Replace the cached economy wholesale.
+  ///
+  /// Wholesale, never merged: the economy is one coherent reading, and
+  /// splicing halves of two readings would produce a state that never existed
+  /// on the server — a balance from one moment beside a budget from another.
+  Future<void> saveEconomyP1(String householdId, EconomyP1Snapshot snapshot) =>
+      _economyP1.put(householdId, snapshot);
+
+  Future<void> clearEconomyP1(String householdId) => _economyP1.delete(householdId);
+
   // ---- Logout ----
 
   /// Wipe every box. Called on logout so a subsequent login on the same
   /// device never surfaces the previous account's tasks, shopping items or
   /// queued writes.
   Future<void> clearAll() async {
+    // Reads the nullable fields rather than the asserting getters, so this
+    // clears whatever is actually open instead of demanding that every box
+    // be. That matters for tests, which inject only the boxes they exercise
+    // (`debugInjectBoxes`): before this, adding a box to the app broke every
+    // unrelated suite that had not been updated to inject it — a test failing
+    // for a reason that has nothing to do with what it asserts.
+    //
+    // It gives up nothing in production, where `init()` opens all of them, and
+    // the "init was never called" guard still fires on the first real read.
     await Future.wait([
-      _tasks.clear(),
-      _shopping.clear(),
-      _households.clear(),
-      _pendingOperations.clear(),
+      _tasksBox?.clear(),
+      _shoppingBox?.clear(),
+      _householdsBox?.clear(),
+      _pendingOperationsBox?.clear(),
       // The marker describes the boxes above, so it must not outlive them.
-      _cacheOwner.clear(),
+      _cacheOwnerBox?.clear(),
       // Same reasoning: a timeline session is a position over cached tasks,
       // so it cannot outlive the tasks it points into.
-      _timelineSessions.clear(),
-    ]);
+      _timelineSessionsBox?.clear(),
+      // A wallet balance is the last thing that may survive a change of
+      // account on a shared device (TD-062).
+      _economyP1Box?.clear(),
+    ].whereType<Future<int>>());
   }
 }

@@ -63,6 +63,15 @@ export interface ProgressView {
    * disagree and a retuned table applies retroactively.
    */
   unlocks: string[];
+  /**
+   * First completions this track has been rewarded for (B7's projection
+   * counter, surfaced in F1).
+   *
+   * Exposed because the client shows it — a task-count milestone is
+   * celebrated over a socket, and a member who reopens the app afterwards
+   * would otherwise have no way to see the number that was celebrated.
+   */
+  tasksCompleted: number;
   /** XP accumulated since reaching `level`. */
   xpIntoLevel: number;
   /** XP the whole of `level` is worth, i.e. what reaching `level + 1` costs. */
@@ -119,6 +128,7 @@ export function toProgressView(
   xp: number,
   factor: number,
   unlockTable: Readonly<Record<number, readonly string[]>>,
+  tasksCompleted = 0,
 ): ProgressView {
   const level = levelForXp(xp, factor);
   const floor = xpRequiredForLevel(level, factor);
@@ -127,6 +137,7 @@ export function toProgressView(
     xp,
     level,
     unlocks: unlocksUpToLevel(level, unlockTable),
+    tasksCompleted,
     xpIntoLevel: xp - floor,
     xpForNextLevel: ceiling - floor,
     xpToNextLevel: ceiling - xp,
@@ -252,6 +263,7 @@ export async function getPersonalEconomy(
       progress?.xp ?? 0,
       PERSONAL_LEVEL_CURVE_FACTOR,
       PERSONAL_LEVEL_UNLOCKS,
+      progress?.tasksCompleted ?? 0,
     ),
     streak: {
       current: streak?.currentCount ?? 0,
@@ -427,6 +439,7 @@ export async function getHouseholdEconomy(householdId: string): Promise<Househol
       householdProgress?.xp ?? 0,
       HOUSEHOLD_LEVEL_CURVE_FACTOR,
       HOUSEHOLD_LEVEL_UNLOCKS,
+      householdProgress?.tasksCompleted ?? 0,
     ),
     activeSavingsGoal,
     members: memberships.map((m) => {
