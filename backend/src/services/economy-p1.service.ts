@@ -12,11 +12,17 @@ import { WeeklyPersonalBudgetModel } from '../models/WeeklyPersonalBudget';
 import {
   DEFAULT_TASK_COINS,
   HOUSEHOLD_LEVEL_CURVE_FACTOR,
+  HOUSEHOLD_LEVEL_UNLOCKS,
+  HOUSEHOLD_TASK_MILESTONES,
   PERSONAL_LEVEL_CURVE_FACTOR,
+  PERSONAL_LEVEL_UNLOCKS,
+  PERSONAL_TASK_MILESTONES,
   TASK_HOUSEHOLD_XP,
   TASK_PERSONAL_XP,
   WEEKLY_CAP_COINS,
   levelForXp,
+  milestoneCrossed,
+  unlocksForLevel,
 } from '../config/economy-p1';
 import { TASK_COINS } from '../config/economy';
 import {
@@ -200,6 +206,9 @@ interface TransactionOutcome {
    */
   budget: BudgetSummary;
   householdProgress: HouseholdProgressSummary;
+  /** Before/after figures for both tracks, so B7 can spot what was crossed. */
+  personalDelta: ProgressDelta;
+  householdDelta: ProgressDelta;
 }
 
 async function runRewardTransaction(
@@ -318,7 +327,7 @@ async function runRewardTransaction(
     { session },
   );
 
-  await bumpProgress(
+  const personalProgress = await bumpProgress(
     UserProgressModel,
     { userId: new Types.ObjectId(userId) },
     TASK_PERSONAL_XP,
@@ -365,6 +374,8 @@ async function runRewardTransaction(
       householdXp: householdProgress.xp,
       level: householdProgress.level,
     },
+    personalDelta: personalProgress,
+    householdDelta: householdProgress,
   };
 }
 
@@ -423,6 +434,16 @@ async function resolveWeeklyBudget(
  * still used for the XP itself so the retry converges instead of replaying a
  * stale total.
  */
+/** What one projection looked like before and after a grant (B7). */
+export interface ProgressDelta {
+  xp: number;
+  level: number;
+  /** The level held BEFORE this grant; equal to `level` when it did not rise. */
+  previousLevel: number;
+  tasksCompleted: number;
+  previousTasksCompleted: number;
+}
+
 async function bumpProgress(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   projection: mongoose.Model<any>,
@@ -430,12 +451,12 @@ async function bumpProgress(
   xpDelta: number,
   curveFactor: number,
   session: ClientSession,
-): Promise<{ xp: number; level: number }> {
+): Promise<ProgressDelta> {
   const updated = (await projection.findOneAndUpdate(
     filter,
-    { $inc: { xp: xpDelta } },
+    { $inc: { xp: xpDelta, tasksCompleted: 1 } },
     { upsert: true, new: true, session, setDefaultsOnInsert: true },
-  )) as { xp: number } | null;
+  )) as { xp: number; tasksCompleted: number } | null;
 
   if (!updated) {
     throw new AppError('Could not update progress projection', 500);
@@ -444,8 +465,23 @@ async function bumpProgress(
   // Level is derived, never accumulated: recomputing from the authoritative
   // total means a replayed or out-of-order grant cannot drift it.
   const level = levelForXp(updated.xp, curveFactor);
+
+  // The BEFORE values are reconstructed by subtracting this grant's own
+  // deltas rather than read in a separate query. One `$inc` with `new: true`
+  // is atomic; a read-then-write pair around it would leave a window in which
+  // a concurrent grant could make two requests both believe they crossed the
+  // same threshold, and announce the same level-up twice.
+  const previousLevel = levelForXp(Math.max(0, updated.xp - xpDelta), curveFactor);
+
   await projection.updateOne(filter, { $set: { level } }, { session });
-  return { xp: updated.xp, level };
+
+  return {
+    xp: updated.xp,
+    level,
+    previousLevel,
+    tasksCompleted: updated.tasksCompleted,
+    previousTasksCompleted: updated.tasksCompleted - 1,
+  };
 }
 
 /**
@@ -559,5 +595,81 @@ async function afterCommit(
   emitToUser(userId, 'economy:budget_updated', outcome.budget);
   emitToHousehold(householdId, 'household:xp_updated', outcome.householdProgress);
 
+  emitProgressEvents(householdId, userId, outcome);
+
   return { task, reward: outcome.reward, receiptId: outcome.receiptId };
+}
+
+/**
+ * Announce a level or a milestone, but only when this completion is the one
+ * that crossed it (TD-066 B7).
+ *
+ * ── Why nothing records "already announced" ─────────────────────────────
+ * Both tracks are monotonic counters that the reward transaction advances
+ * exactly once per task — the `RewardGrant` unique index is what guarantees
+ * the "once". So "was below, is now at or above" is true for exactly one
+ * completion per threshold, and a separate "levels already granted" table
+ * would be a second source of truth that could disagree with the first.
+ *
+ * A retry never reaches here: it returns through `replayExistingGrant`, which
+ * increments nothing.
+ *
+ * The two tracks are split by audience, like the wallet events above.
+ * A personal level is the member's own (PDR-017: titles and badges), so it
+ * goes to their room alone; a household level belongs to everyone and unlocks
+ * shared cosmetics, so it goes to the household room and reads as
+ * "lo habéis conseguido juntos" (UX-P1-SPEC §3).
+ */
+function emitProgressEvents(
+  householdId: string,
+  userId: string,
+  outcome: TransactionOutcome,
+): void {
+  const { personalDelta, householdDelta } = outcome;
+
+  if (personalDelta.level > personalDelta.previousLevel) {
+    emitToUser(userId, 'economy:level_up', {
+      track: 'personal',
+      level: personalDelta.level,
+      previousLevel: personalDelta.previousLevel,
+      xp: personalDelta.xp,
+      unlocks: unlocksForLevel(personalDelta.level, PERSONAL_LEVEL_UNLOCKS),
+    });
+  }
+
+  if (householdDelta.level > householdDelta.previousLevel) {
+    emitToHousehold(householdId, 'household:level_up', {
+      track: 'household',
+      level: householdDelta.level,
+      previousLevel: householdDelta.previousLevel,
+      xp: householdDelta.xp,
+      unlocks: unlocksForLevel(householdDelta.level, HOUSEHOLD_LEVEL_UNLOCKS),
+    });
+  }
+
+  const personalMilestone = milestoneCrossed(
+    personalDelta.previousTasksCompleted,
+    personalDelta.tasksCompleted,
+    PERSONAL_TASK_MILESTONES,
+  );
+  if (personalMilestone !== null) {
+    emitToUser(userId, 'economy:milestone', {
+      kind: 'tasks_completed',
+      value: personalMilestone,
+      total: personalDelta.tasksCompleted,
+    });
+  }
+
+  const householdMilestone = milestoneCrossed(
+    householdDelta.previousTasksCompleted,
+    householdDelta.tasksCompleted,
+    HOUSEHOLD_TASK_MILESTONES,
+  );
+  if (householdMilestone !== null) {
+    emitToHousehold(householdId, 'household:milestone', {
+      kind: 'tasks_completed',
+      value: householdMilestone,
+      total: householdDelta.tasksCompleted,
+    });
+  }
 }

@@ -17,6 +17,12 @@ export interface IHouseholdProgress extends Document {
   xp: number;
   /** Derived from `xp` via `levelForXp` with the household curve factor. */
   level: number;
+  /**
+   * First completions the household has been rewarded for, pooled across
+   * every member. Same rationale and the same reconstructibility as
+   * `UserProgress.tasksCompleted` (B7, not in design §3).
+   */
+  tasksCompleted: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -31,6 +37,7 @@ const householdProgressSchema = new Schema<IHouseholdProgress>(
     },
     xp: { type: Number, required: true, default: 0, min: 0 },
     level: { type: Number, required: true, default: 1, min: 1 },
+    tasksCompleted: { type: Number, required: true, default: 0, min: 0 },
   },
   { timestamps: true, ...jsonSchemaOptions },
 );

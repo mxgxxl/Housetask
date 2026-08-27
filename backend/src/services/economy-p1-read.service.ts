@@ -11,10 +11,13 @@ import { UserProgressModel } from '../models/UserProgress';
 import { WeeklyPersonalBudgetModel } from '../models/WeeklyPersonalBudget';
 import {
   HOUSEHOLD_LEVEL_CURVE_FACTOR,
+  HOUSEHOLD_LEVEL_UNLOCKS,
   PERSONAL_LEVEL_CURVE_FACTOR,
+  PERSONAL_LEVEL_UNLOCKS,
   STREAK_ICE_MILESTONES,
   WEEKLY_CAP_COINS,
   levelForXp,
+  unlocksUpToLevel,
   xpRequiredForLevel,
 } from '../config/economy-p1';
 import {
@@ -48,6 +51,16 @@ import { isP1Enabled } from './feature-flag.service';
 export interface ProgressView {
   xp: number;
   level: number;
+  /**
+   * Every unlock earned up to and including `level` (B7).
+   *
+   * Present on the READ, not only on the level-up socket event: an unlock
+   * announced only over a socket is forgotten the next time the app launches,
+   * which would make a title or a shared cosmetic look like it was never
+   * granted. Derived from the level rather than stored, so the two cannot
+   * disagree and a retuned table applies retroactively.
+   */
+  unlocks: string[];
   /** XP accumulated since reaching `level`. */
   xpIntoLevel: number;
   /** XP the whole of `level` is worth, i.e. what reaching `level + 1` costs. */
@@ -100,21 +113,29 @@ export interface PersonalEconomyView {
 }
 
 /** Compute level and the distance to the next one from a raw XP total. */
-export function toProgressView(xp: number, factor: number): ProgressView {
+export function toProgressView(
+  xp: number,
+  factor: number,
+  unlockTable: Readonly<Record<number, readonly string[]>>,
+): ProgressView {
   const level = levelForXp(xp, factor);
   const floor = xpRequiredForLevel(level, factor);
   const ceiling = xpRequiredForLevel(level + 1, factor);
   return {
     xp,
     level,
+    unlocks: unlocksUpToLevel(level, unlockTable),
     xpIntoLevel: xp - floor,
     xpForNextLevel: ceiling - floor,
     xpToNextLevel: ceiling - xp,
   };
 }
 
-function emptyProgress(factor: number): ProgressView {
-  return toProgressView(0, factor);
+function emptyProgress(
+  factor: number,
+  unlockTable: Readonly<Record<number, readonly string[]>>,
+): ProgressView {
+  return toProgressView(0, factor, unlockTable);
 }
 
 /**
@@ -128,7 +149,7 @@ function emptyPersonalView(timeZone: string, at: Date): PersonalEconomyView {
   return {
     enabled: false,
     wallet: { balance: 0, dailyReleased: 0, remaining: 0 },
-    personalProgress: emptyProgress(PERSONAL_LEVEL_CURVE_FACTOR),
+    personalProgress: emptyProgress(PERSONAL_LEVEL_CURVE_FACTOR, PERSONAL_LEVEL_UNLOCKS),
     streak: { current: 0, longest: 0, iceReserve: 0, iceMilestonesReached: [] },
     weeklyBudget: {
       weekKey: weekKey(at, timeZone),
@@ -214,7 +235,11 @@ export async function getPersonalEconomy(
       dailyReleased: releasedOnDay(weeklyCap, dayIndex),
       remaining: availableCoins(weeklyCap, dayIndex, grantedCoins),
     },
-    personalProgress: toProgressView(progress?.xp ?? 0, PERSONAL_LEVEL_CURVE_FACTOR),
+    personalProgress: toProgressView(
+      progress?.xp ?? 0,
+      PERSONAL_LEVEL_CURVE_FACTOR,
+      PERSONAL_LEVEL_UNLOCKS,
+    ),
     streak: {
       current: streak?.currentCount ?? 0,
       longest,
@@ -326,7 +351,7 @@ export async function getHouseholdEconomy(householdId: string): Promise<Househol
   if (!(await isP1Enabled(householdId))) {
     return {
       enabled: false,
-      householdProgress: emptyProgress(HOUSEHOLD_LEVEL_CURVE_FACTOR),
+      householdProgress: emptyProgress(HOUSEHOLD_LEVEL_CURVE_FACTOR, HOUSEHOLD_LEVEL_UNLOCKS),
       activeSavingsGoal: null,
       // The roster is still real with the flag off — it is not economy data,
       // and returning an empty list would make the client show an empty
@@ -385,7 +410,11 @@ export async function getHouseholdEconomy(householdId: string): Promise<Househol
 
   return {
     enabled: true,
-    householdProgress: toProgressView(householdProgress?.xp ?? 0, HOUSEHOLD_LEVEL_CURVE_FACTOR),
+    householdProgress: toProgressView(
+      householdProgress?.xp ?? 0,
+      HOUSEHOLD_LEVEL_CURVE_FACTOR,
+      HOUSEHOLD_LEVEL_UNLOCKS,
+    ),
     activeSavingsGoal,
     members: memberships.map((m) => {
       const key = m.userId.toString();

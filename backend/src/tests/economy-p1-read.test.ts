@@ -111,6 +111,10 @@ describe('GET .../economy/p1/me — flag OFF', () => {
     expect(res.body.data.personalProgress).toEqual({
       xp: 0,
       level: 1,
+      // B7 added this to the read contract: an unlock announced only over a
+      // socket is forgotten on the next app launch. Empty at level 1, since
+      // the first personal unlock is at level 2.
+      unlocks: [],
       xpIntoLevel: 0,
       xpForNextLevel: xpRequiredForLevel(2, PERSONAL_LEVEL_CURVE_FACTOR),
       xpToNextLevel: xpRequiredForLevel(2, PERSONAL_LEVEL_CURVE_FACTOR),

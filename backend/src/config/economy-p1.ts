@@ -16,11 +16,13 @@
  *
  *   [PDR]      Fixed by an accepted product decision or by UX-P1-SPEC.md.
  *              Changing it needs a product decision, not a code review.
- *   [APROBADA] No PDR fixes it: proposed in B1 with the reasoning below and
- *              approved by the owner on 2026-08-26. Same standing as a [PDR]
- *              from here on — the tag records that the number came from a
- *              design proposal rather than a product decision, which is what
- *              tells a future reader where to go to revisit it.
+ *   [APROBADA] No PDR fixes it: proposed here with the reasoning below and
+ *              approved by the owner on the date each one carries (the budget
+ *              and XP numbers on 2026-08-26, the unlock tables and milestones
+ *              on 2026-08-27). Same standing as a [PDR] from here on — the tag
+ *              records that the number came from a design proposal rather than
+ *              a product decision, which is what tells a future reader where
+ *              to go to revisit it.
  *
  * The XP constants and the two level curves are NOT independent: the curves
  * are calibrated against TASK_PERSONAL_XP = 10. Changing that value means
@@ -201,6 +203,141 @@ export function levelForXp(xp: number, factor: number): number {
     level++;
   }
   return level;
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+ * Level unlocks and milestones (TD-066 B7)
+ * ──────────────────────────────────────────────────────────────────────── */
+
+/**
+ * What reaching a personal level grants.
+ *
+ * [APROBADA] Aprobada por el dueño el 2026-08-27. The shape is settled by PDR-017
+ * ("títulos y badges" for the personal track), but no PDR names a single one
+ * of them, so every string below is a placeholder chosen to be renameable.
+ *
+ * Ids, not display strings: the UI is Spanish (see CLAUDE.md's Frontend
+ * Theme) and a label baked into an unlock record would be untranslatable and
+ * unchangeable after it has been granted. The client maps id → label.
+ *
+ * Sparse on purpose. A level with no entry grants nothing, which is what
+ * makes an unlock feel like an event; rewarding every single level turns the
+ * unlock into the level number itself.
+ */
+export const PERSONAL_LEVEL_UNLOCKS: Readonly<Record<number, readonly string[]>> = {
+  2: ['title:aprendiz'],
+  3: ['badge:constante'],
+  5: ['title:veterano'],
+  8: ['badge:incansable'],
+  10: ['title:maestro-del-hogar'],
+  15: ['badge:leyenda'],
+};
+
+/**
+ * What reaching a household level grants.
+ *
+ * [APROBADA] Aprobada por el dueño el 2026-08-27. PDR-017 assigns "cosméticos
+ * compartidos, incluida la mascota" to this track, and the three ids below
+ * deliberately reuse the Fase A catalog already in `COSMETICS` rather than
+ * inventing assets the art track has not produced (PDR-015). Anything beyond
+ * those three needs art before it can be a real unlock.
+ */
+export const HOUSEHOLD_LEVEL_UNLOCKS: Readonly<Record<number, readonly string[]>> = {
+  2: ['cosmetic:hat'],
+  3: ['cosmetic:scarf'],
+  5: ['cosmetic:glasses'],
+};
+
+/**
+ * Personal task-count milestones, celebrated once each.
+ *
+ * [APROBADA] Aprobada por el dueño el 2026-08-27. Distinct from levels on purpose:
+ * a level is a function of XP, which the weekly budget never caps, whereas
+ * these count actual completions. They are the "hito" tier of UX-P1-SPEC §3's
+ * celebration hierarchy — rarer than a level, hence a stronger celebration.
+ *
+ * Reasoning for 10/50/100/365: the first arrives within days so the mechanic
+ * announces itself early; 365 reads as "a year's worth" without requiring a
+ * year. They are NOT ice milestones — those are PDR-019's 7/14/30/50/100 and
+ * count consecutive DAYS, not completions.
+ */
+export const PERSONAL_TASK_MILESTONES: readonly number[] = [10, 50, 100, 365];
+
+/**
+ * Household task-count milestones, celebrated once each by the whole home.
+ *
+ * [APROBADA] Aprobada por el dueño el 2026-08-27. Roughly the personal thresholds
+ * doubled, because a household pools every member's completions and the modal
+ * home has two people (PDR-001): the intent is that a household hits these at
+ * about the pace one person hits theirs, so the two tracks feel comparable
+ * rather than one drowning the other.
+ *
+ * NOT a coins-saved milestone, though that is the more evocative example: a
+ * joint savings goal does not exist until B10, so a threshold on it could not
+ * be measured today and would ship as dead code.
+ */
+export const HOUSEHOLD_TASK_MILESTONES: readonly number[] = [25, 100, 250, 750];
+
+/**
+ * The unlocks a given level grants, or an empty array for a level that grants
+ * nothing.
+ *
+ * Frozen empty array rather than a fresh `[]` per miss: this runs on the
+ * reward path, most levels grant nothing, and a shared immutable is both
+ * cheaper and impossible to mutate by accident.
+ */
+const NO_UNLOCKS: readonly string[] = Object.freeze([]);
+
+export function unlocksForLevel(
+  level: number,
+  table: Readonly<Record<number, readonly string[]>>,
+): readonly string[] {
+  return table[level] ?? NO_UNLOCKS;
+}
+
+/**
+ * Every unlock earned up to and including `level`.
+ *
+ * The read side needs this, not just the level-up event: an unlock announced
+ * only over a socket is forgotten on the next app launch. Computed from the
+ * level rather than stored, so the two can never disagree and a retuned table
+ * applies retroactively instead of leaving old accounts holding ids that no
+ * longer exist.
+ */
+export function unlocksUpToLevel(
+  level: number,
+  table: Readonly<Record<number, readonly string[]>>,
+): string[] {
+  const earned: string[] = [];
+  for (const key of Object.keys(table)) {
+    const at = Number(key);
+    if (at <= level) {
+      earned.push(...table[at]);
+    }
+  }
+  return earned;
+}
+
+/**
+ * The milestone a counter just crossed, or `null` if it crossed none.
+ *
+ * Takes the value BEFORE and AFTER so crossing is detected exactly once,
+ * without storing which milestones have already fired: the counter only ever
+ * increases, and the reward transaction increments it a single time per task
+ * (the `RewardGrant` claim guarantees that), so "was below, is now at or
+ * above" happens once per threshold by construction.
+ */
+export function milestoneCrossed(
+  previous: number,
+  current: number,
+  milestones: readonly number[],
+): number | null {
+  for (const milestone of milestones) {
+    if (previous < milestone && current >= milestone) {
+      return milestone;
+    }
+  }
+  return null;
 }
 
 /* ────────────────────────────────────────────────────────────────────────

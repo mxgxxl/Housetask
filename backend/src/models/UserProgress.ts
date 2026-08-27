@@ -27,6 +27,17 @@ export interface IUserProgress extends Document {
   xp: number;
   /** Derived from `xp` via `levelForXp`; stored so reads need no math. */
   level: number;
+  /**
+   * First completions this member has been rewarded for, ever.
+   *
+   * NOT in TD-066-DESIGN §3: added in B7 so a task-count milestone can be
+   * detected by comparing the value before and after one `$inc`, instead of
+   * counting `RewardGrant` documents on every completion — a scan that grows
+   * without bound for a number needed on the hot write path.
+   *
+   * Reconstructible like `xp` is: it equals the member's `RewardGrant` count.
+   */
+  tasksCompleted: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -38,6 +49,7 @@ const userProgressSchema = new Schema<IUserProgress>(
     // Level 1 is the floor: everyone starts there with 0 XP, and nothing in
     // P1 can demote (PDR-019: "nivel, XP y monedas permanecen intactos").
     level: { type: Number, required: true, default: 1, min: 1 },
+    tasksCompleted: { type: Number, required: true, default: 0, min: 0 },
   },
   { timestamps: true, ...jsonSchemaOptions },
 );
