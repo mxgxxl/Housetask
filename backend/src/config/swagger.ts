@@ -1261,6 +1261,106 @@ export const swaggerSpec: Record<string, unknown> = {
         },
       },
     },
+    '/households/{householdId}/economy/p1/savings-goals': {
+      post: {
+        tags: ['Economy'],
+        summary: "Open the household's one active joint savings goal",
+        description:
+          'TD-066 B10 (PDR-018). The client names the ITEM, never the price: the ' +
+          'target comes from the server-side catalog, because a request that ' +
+          'could name its own `targetAmount` would unlock a 40-coin cosmetic by ' +
+          'declaring the target to be 1. Only one goal may be active per ' +
+          'household — a second answers 409, including when two members tap ' +
+          '"create" at the same moment.',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+          idempotencyKeyHeader,
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['itemType', 'itemId'],
+                properties: {
+                  itemType: { type: 'string', enum: ['cosmetic'] },
+                  itemId: { type: 'string', enum: cosmeticIds },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '201': { description: 'Created' },
+          '400': { description: 'Unknown item type or item' },
+          '409': { description: 'A goal is already active, or P1 is not enabled' },
+        },
+      },
+    },
+    '/households/{householdId}/economy/p1/savings-goals/{goalId}/contributions': {
+      post: {
+        tags: ['Economy'],
+        summary: "Move coins from the caller's personal wallet into the goal",
+        description:
+          'TD-066 B10. One transaction covers the balance check, the contribution ' +
+          'row, the wallet debit and the running total, so a wallet can never be ' +
+          'debited without a contribution to show for it. An insufficient balance ' +
+          'answers 403 and writes nothing. Reaching the price unlocks the goal and ' +
+          'marks every contribution `applied`, which is what stops a later refund ' +
+          'handing back money for an item the household already owns.',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'goalId', in: 'path', required: true, schema: { type: 'string' } },
+          idempotencyKeyHeader,
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['amount'],
+                properties: { amount: { type: 'integer', minimum: 1 } },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'OK. `data` is `{ goal, contribution, wallet }`.' },
+          '400': { description: 'Malformed amount' },
+          '403': { description: 'Not enough coins, or not a member' },
+          '404': { description: 'Goal not found in this household' },
+          '409': { description: 'The goal is no longer active, or P1 is not enabled' },
+        },
+      },
+    },
+    '/households/{householdId}/economy/p1/savings-goals/{goalId}/cancel': {
+      post: {
+        tags: ['Economy'],
+        summary: 'Cancel the goal and refund every still-active contribution',
+        description:
+          'TD-066 B10 (PDR-018). A POST rather than a DELETE: the goal survives as ' +
+          'history with `status: "cancelled"`, and answering a DELETE would tell ' +
+          'the client the opposite of what happened. Only the creator or a ' +
+          'household admin may cancel — the money belongs to everyone who put it ' +
+          'in. An already-unlocked goal answers 409: the item is owned, so there ' +
+          'is nothing to give back.',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'goalId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          '200': { description: 'OK. `data` is `{ goal, refunds }`.' },
+          '403': { description: 'Not the creator, not an admin, or not a member' },
+          '404': { description: 'Goal not found in this household' },
+          '409': { description: 'The goal is not active, or P1 is not enabled' },
+        },
+      },
+    },
     '/households/{householdId}/economy': {
       get: {
         tags: ['Economy'],

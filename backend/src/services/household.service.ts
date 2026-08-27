@@ -7,6 +7,7 @@ import { emitToHousehold } from '../config/socket';
 import { RequesterMembership, Role } from '../types';
 import { sanitizeString } from '../utils/sanitize';
 import { logger } from '../utils/logger';
+import { refundDepartingMember } from './economy-p1-savings.service';
 
 const MAX_HOUSEHOLD_NAME_LENGTH = 100;
 const TASK_POPULATE_FIELDS = 'name email avatarUrl';
@@ -357,11 +358,27 @@ async function removeMemberInTransaction(
     throw new AppError('Cannot remove the last admin of the household', 400);
   }
 
+  // TD-066 B10: give the departing member their still-active savings
+  // contributions back, BEFORE their membership goes (TD-066-DESIGN §4). The
+  // order is the point: once the row is gone they are no longer a member, and
+  // a later best-effort refund could fail and leave their coins locked in a
+  // goal they can no longer see — money held by a household they left.
+  //
+  // Scoped to this member and this household, so nobody else's contributions
+  // move. Safe to repeat, which matters because `withTransaction` may re-run
+  // this whole callback: it only touches contributions still `active`, and a
+  // second pass finds none.
+  //
+  // NOT wrapped in try/catch, unlike `unassignDepartedMemberTasks` below. That
+  // one is cleanup and may fail without consequence; this one is money. A
+  // removal that cannot return someone's coins must fail as a unit rather than
+  // complete and lose them.
+  await refundDepartingMember(householdId, targetUserId, session);
+
   await HouseholdMemberModel.deleteOne(
     { householdId: householdObjectId, userId: new Types.ObjectId(targetUserId) },
     { session },
   );
-
 }
 
 /**

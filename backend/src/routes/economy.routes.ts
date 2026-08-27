@@ -6,6 +6,8 @@ import { validate, validateQuery } from '../middleware/validate';
 import { idempotency } from '../middleware/idempotency.middleware';
 import {
   buyIceSchema,
+  contributeSchema,
+  createSavingsGoalSchema,
   personalEconomyQuerySchema,
   updateBudgetSchema,
 } from '../schemas/economy-p1.schema';
@@ -46,5 +48,23 @@ router.post(
   idempotency,
   asyncHandler(economyController.buyIceP1),
 );
+
+// B10: the joint savings goal (PDR-018). Creating and contributing both
+// create resources, so both are POSTs under Idempotency-Key protection.
+router.post(
+  '/p1/savings-goals',
+  validate(createSavingsGoalSchema),
+  idempotency,
+  asyncHandler(economyController.createSavingsGoalP1),
+);
+router.post(
+  '/p1/savings-goals/:goalId/contributions',
+  validate(contributeSchema),
+  idempotency,
+  asyncHandler(economyController.contributeToSavingsGoalP1),
+);
+// Cancelling is a POST, not a DELETE: the goal survives as history with
+// status 'cancelled', and a DELETE would claim otherwise.
+router.post('/p1/savings-goals/:goalId/cancel', asyncHandler(economyController.cancelSavingsGoalP1));
 
 export default router;

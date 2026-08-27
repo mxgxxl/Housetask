@@ -10,7 +10,14 @@ import { isP1Enabled } from '../services/feature-flag.service';
 import { AppError } from '../middleware/error.middleware';
 import { resolveTimeZone, weekKey as currentWeekKey } from '../utils/economy-period';
 import { sendSuccess } from '../utils/response';
-import { PersonalEconomyQuery, UpdateBudgetBody } from '../schemas/economy-p1.schema';
+import * as economyP1SavingsService from '../services/economy-p1-savings.service';
+import { emitToHousehold } from '../config/socket';
+import {
+  ContributeBody,
+  CreateSavingsGoalBody,
+  PersonalEconomyQuery,
+  UpdateBudgetBody,
+} from '../schemas/economy-p1.schema';
 import { AuthenticatedRequest } from '../types';
 
 /**
@@ -81,13 +88,11 @@ export async function updateBudgetP1(req: AuthenticatedRequest, res: Response): 
   const userId = req.user!.userId;
   const body = req.body as UpdateBudgetBody;
 
-  if (!(await isP1Enabled(householdId))) {
-    // Refused rather than silently stored: writing a plan a disabled economy
-    // will never read would let a client believe it had configured something.
-    // The GETs answer a zeroed shape instead, because a read has something
-    // coherent to say when the economy is off and a write does not.
-    throw new AppError('The P1 economy is not enabled for this household', 409);
-  }
+  // Refused rather than silently stored: writing a plan a disabled economy
+  // will never read would let a client believe it had configured something.
+  // The GETs answer a zeroed shape instead, because a read has something
+  // coherent to say when the economy is off and a write does not.
+  await assertP1Enabled(householdId);
 
   const timeZone = resolveTimeZone(body.timeZone);
   const weekKey = body.weekKey ?? currentWeekKey(new Date(), timeZone);
@@ -119,9 +124,7 @@ export async function buyIceP1(req: AuthenticatedRequest, res: Response): Promis
   const householdId = req.params.householdId;
   const userId = req.user!.userId;
 
-  if (!(await isP1Enabled(householdId))) {
-    throw new AppError('The P1 economy is not enabled for this household', 409);
-  }
+  await assertP1Enabled(householdId);
 
   const operationId = req.get(IDEMPOTENCY_HEADER) ?? new Types.ObjectId().toString();
 
@@ -148,4 +151,122 @@ export async function buyIceP1(req: AuthenticatedRequest, res: Response): Promis
   });
 
   sendSuccess(res, purchase);
+}
+
+
+/**
+ * POST /api/households/:householdId/economy/p1/savings-goals
+ *
+ * Open the household's one active joint savings goal (B10, PDR-018). The
+ * price comes from the server-side catalog, never from the request.
+ */
+export async function createSavingsGoalP1(
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> {
+  const householdId = req.params.householdId;
+  await assertP1Enabled(householdId);
+
+  const body = req.body as CreateSavingsGoalBody;
+  const goal = await economyP1SavingsService.createGoal(
+    householdId,
+    req.user!.userId,
+    body.itemType,
+    body.itemId,
+  );
+
+  // A goal is the household's, not one member's: everyone can contribute to
+  // it and everyone sees it on the home card (UX-P1-SPEC §4).
+  emitToHousehold(householdId, 'household:savings_goal_created', goal.toJSON());
+
+  sendSuccess(res, { goal }, 201);
+}
+
+/**
+ * POST /api/households/:householdId/economy/p1/savings-goals/:goalId/contributions
+ *
+ * Move coins from the caller's personal wallet into the goal (B10).
+ */
+export async function contributeToSavingsGoalP1(
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> {
+  const householdId = req.params.householdId;
+  await assertP1Enabled(householdId);
+
+  const body = req.body as ContributeBody;
+  const operationId = req.get(IDEMPOTENCY_HEADER) ?? new Types.ObjectId().toString();
+
+  const result = await economyP1SavingsService.contribute(
+    householdId,
+    req.user!.userId,
+    req.params.goalId,
+    body.amount,
+    operationId,
+  );
+
+  // Both events are household-wide: the per-member breakdown is explicitly
+  // public (UX-P1-SPEC §6 renders "Tú: 40 · Ana: 28"), unlike a wallet.
+  emitToHousehold(householdId, 'household:savings_contribution', {
+    goalId: result.goal._id.toString(),
+    userId: req.user!.userId,
+    amount: result.contributedAmount,
+    contributedCoins: result.goal.contributedCoins,
+    targetCoins: result.goal.targetCoins,
+  });
+  if (result.unlocked) {
+    emitToHousehold(householdId, 'household:savings_goal_unlocked', result.goal.toJSON());
+  }
+
+  sendSuccess(res, {
+    goal: result.goal,
+    contribution: { amount: result.contributedAmount },
+    wallet: { balance: result.balance },
+  });
+}
+
+/**
+ * POST /api/households/:householdId/economy/p1/savings-goals/:goalId/cancel
+ *
+ * Cancel the goal and refund every still-active contribution (B10, PDR-018).
+ *
+ * A POST rather than a DELETE: the row survives as history with
+ * `status: 'cancelled'`, and answering a DELETE would tell the client the
+ * opposite of what happened.
+ */
+export async function cancelSavingsGoalP1(
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> {
+  const householdId = req.params.householdId;
+  await assertP1Enabled(householdId);
+
+  const result = await economyP1SavingsService.cancelGoal(
+    householdId,
+    req.user!.userId,
+    req.params.goalId,
+    req.member!.role === 'admin',
+  );
+
+  emitToHousehold(householdId, 'household:savings_goal_cancelled', {
+    goal: result.goal.toJSON(),
+    refunds: result.refunds,
+  });
+  // The refund lands in a personal wallet, so each contributor is told
+  // privately what came back to them.
+  for (const refund of result.refunds) {
+    emitToUser(refund.userId, 'economy:savings_refunded', {
+      goalId: result.goal._id.toString(),
+      amount: refund.amount,
+    });
+  }
+
+  sendSuccess(res, { goal: result.goal, refunds: result.refunds });
+}
+
+/** Shared guard: P1 writes are refused outright while the economy is off. */
+async function assertP1Enabled(householdId: string): Promise<void> {
+  if (!(await isP1Enabled(householdId))) {
+    throw new AppError('The P1 economy is not enabled for this household', 409);
+  }
 }

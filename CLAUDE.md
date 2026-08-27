@@ -202,6 +202,10 @@ Detailed ADRs live in docs/ADRs.md. Index:
 | `household:xp_updated` | `{ householdXp, level }` | Shared household XP moved (TD-066 B5). Household room. Only fires while P1 is enabled for the household — no household has it today |
 | `household:level_up` | `{ track: 'household', level, previousLevel, xp, unlocks[] }` | The household reached a new shared level (TD-066 B7). Household room — it unlocks shared cosmetics and reads as «lo habéis conseguido juntos» (UX-P1-SPEC §3) |
 | `household:milestone` | `{ kind: 'tasks_completed', value, total }` | The household crossed a pooled task-count milestone (25/100/250/750) |
+| `household:savings_goal_created` | JointSavingsGoal | A joint savings goal was opened (TD-066 B10, PDR-018) |
+| `household:savings_contribution` | `{ goalId, userId, amount, contributedCoins, targetCoins }` | Someone contributed. Household-wide because the per-member breakdown is explicitly public — UX-P1-SPEC §6 renders «Tú: 40 · Ana: 28» — unlike a wallet balance |
+| `household:savings_goal_unlocked` | JointSavingsGoal | Contributions reached the item's price |
+| `household:savings_goal_cancelled` | `{ goal, refunds[] }` | The goal was cancelled and every active contribution refunded |
 
 **Rooms, and why there are now two kinds** (TD-066 B5): besides `household_<id>`, every socket also joins `user_<userId>` — unconditionally, even for a member of no household, because a wallet and personal XP travel with the account (PDR-017). P1 makes part of the economy personal (PDR-012), and broadcasting a member's balance to the household room would hand every housemate everyone else's wallet — a leak the Fase A economy could not have, since it had a single shared purse. `emitToUser` is the counterpart of `emitToHousehold` for that channel; it reaches every device the member has connected.
 
@@ -218,6 +222,7 @@ Detailed ADRs live in docs/ADRs.md. Index:
 | `economy:streak_broken` | `{ dayKey }` | A weekday passed with no activity and no ice. Level, XP and coins are untouched (PDR-019) |
 | `economy:streak_milestone` | `{ value, current, iceReserve }` | The longest run reached 7/14/30/50/100 and earned an ice |
 | `economy:ice_purchased` | `{ iceReserve, spent, balance }` | An ice was bought for 20 🪙 |
+| `economy:savings_refunded` | `{ goalId, amount }` | A cancelled goal returned this member's coins (TD-066 B10) |
 
 Streaks are **account-scoped** (owner decision P4): they travel with the person like personal XP, so leaving a household never costs one — which is why every streak event is personal-room only. A flame, an ice reserve and a missed day are precisely what UX-P1-SPEC §0 rules out turning into a way of keeping score between housemates.
 
@@ -466,6 +471,7 @@ Testing stack installed: Jest + Supertest + mongodb-memory-server (backend); flu
 13. NEVER allow write POSTs without idempotency protection: every POST that creates a resource MUST accept an `Idempotency-Key` header; backend MUST dedupe via Redis with a TTL; frontend MUST generate one stable UUID per logical operation (surviving 401 retries). On duplicate key detection the backend MUST return the original resource with HTTP 200 and MUST NOT re-emit socket events. (Enforced since the TD-014 commit; see middleware/idempotency.middleware.ts)
 14. NEVER configure `express.json()` without a payload size limit (e.g. `limit: '100kb'`). (Enforced since the TD-015 commit; see app.ts's `express.json({ limit: '100kb' })`)
 15. NEVER ship production with empty `CORS_ORIGINS`: when `NODE_ENV=production` it MUST be non-empty and the server MUST fail fast at startup otherwise; wildcard `*` is only acceptable in development. (Enforced since the TD-016 commit; see utils/env.ts's `validateProductionEnv`, called from server.ts)
+16b. NEVER remove a member without returning their still-active joint-savings contributions FIRST, inside the same transaction as the membership delete (TD-066 B10, PDR-018). Once the row is gone they are no longer a member, so a later best-effort refund could fail and leave their coins locked in a goal they can no longer see. Unlike the task-unassign cleanup, this one is NOT wrapped in try/catch: it is money, and a removal that cannot return it must fail as a unit. (Enforced since the TD-066 B10 commit; see household.service.ts's `removeMemberInTransaction` and economy-p1-savings.service.ts's `refundDepartingMember`)
 16. NEVER leave orphaned references when a member leaves a household: their pending assigned tasks MUST be unassigned (removed from `assignedTo`), tasks they created MUST be preserved, and the UI MUST render "Ex-miembro" for a former assignee. (Enforced since the TD-018 commit; see household.service.ts's unassignDepartedMemberTasks and task_tile.dart's AvatarStack)
 17. NEVER allow edit/delete of a task by anyone other than the creator or an admin; any member may complete tasks and purchase shopping items. (Enforced since the TD-011 commit; see tasks.test.ts permission tests)
 18. NEVER render user-supplied text in any HTML-capable surface (future web client, email templates, push deep-links) without escaping at render time; mobile Text() widgets are safe by construction, storage stays raw per ADR-009

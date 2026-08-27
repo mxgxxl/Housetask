@@ -128,3 +128,28 @@ export type UpdateBudgetBody = z.infer<typeof updateBudgetSchema>;
 export const buyIceSchema = z.object({}).strict();
 
 export type BuyIceBody = z.infer<typeof buyIceSchema>;
+
+/**
+ * Body of `POST /households/:householdId/economy/p1/savings-goals` (B10).
+ *
+ * The client names the ITEM, never the price. A goal saves toward a catalog
+ * item (PDR-018), so letting the request carry a `targetAmount` would let a
+ * household unlock a 40-coin cosmetic by declaring the target to be 1 — the
+ * ceiling the whole economy is built around would be decorative.
+ */
+export const createSavingsGoalSchema = z.object({
+  itemType: z.enum(['cosmetic'], { error: 'itemType must be a known shared-item type' }),
+  itemId: z.string().trim().min(1, 'itemId is required'),
+});
+
+export type CreateSavingsGoalBody = z.infer<typeof createSavingsGoalSchema>;
+
+/** Body of `POST .../savings-goals/:goalId/contributions` (B10). */
+export const contributeSchema = z.object({
+  amount: z.coerce
+    .number()
+    .int('amount must be a whole number of coins')
+    .min(1, 'amount must be at least 1'),
+});
+
+export type ContributeBody = z.infer<typeof contributeSchema>;
