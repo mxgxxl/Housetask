@@ -7,13 +7,9 @@ import { RewardGrantModel } from '../models/RewardGrant';
 import { WeeklyPersonalBudgetModel } from '../models/WeeklyPersonalBudget';
 import { InMemoryIdempotencyStore } from '../services/idempotency.store';
 import { resetP1EnabledResolver, setP1EnabledResolver } from '../services/feature-flag.service';
-import {
-  DEFAULT_TASK_COINS,
-  TASK_HOUSEHOLD_XP,
-  TASK_PERSONAL_XP,
-  WEEKLY_CAP_COINS,
-} from '../config/economy-p1';
+import { TASK_HOUSEHOLD_XP, TASK_PERSONAL_XP, WEEKLY_CAP_COINS } from '../config/economy-p1';
 import { releasedOnDay, releasedThroughDay, weekKey } from '../utils/economy-period';
+import { unassignedAward } from './p1-award';
 import { buildTestApp } from './setup';
 import {
   TestHousehold,
@@ -40,6 +36,11 @@ let emitToHousehold: jest.SpyInstance;
 const MONDAY = '2026-08-24T10:00:00.000Z';
 const SUNDAY = '2026-08-23T10:00:00.000Z';
 const ZONE = 'UTC';
+
+/** What an unassigned task pays on the pinned Monday, under the B8 plan. */
+const MONDAY_AWARD = unassignedAward(0);
+/** ...and on the pinned Sunday, when the whole week's remainder is available. */
+const SUNDAY_AWARD = unassignedAward(6);
 
 beforeAll(async () => {
   app = await buildTestApp({ idempotencyStore: new InMemoryIdempotencyStore() });
@@ -112,7 +113,7 @@ describe('flag ON — the three P1 events', () => {
     expect(rewards[0][0]).toBe(user.id);
     expect(rewards[0][2]).toEqual({
       receiptId: res.body.data.receiptId,
-      coins: DEFAULT_TASK_COINS,
+      coins: MONDAY_AWARD,
       personalXp: TASK_PERSONAL_XP,
     });
 
@@ -134,7 +135,7 @@ describe('flag ON — the three P1 events', () => {
       weekKey: weekKey(new Date(MONDAY), ZONE),
       // Monday releases the first of six allocations; this completion took
       // DEFAULT_TASK_COINS out of it.
-      remaining: releasedThroughDay(WEEKLY_CAP_COINS, 0) - DEFAULT_TASK_COINS,
+      remaining: releasedThroughDay(WEEKLY_CAP_COINS, 0) - MONDAY_AWARD,
       dailyReleased: releasedOnDay(WEEKLY_CAP_COINS, 0),
     });
   });
@@ -150,10 +151,15 @@ describe('flag ON — the three P1 events', () => {
     const remainings = payloadsFor(emitToUser, 'economy:budget_updated').map(
       (p) => (p as { remaining: number }).remaining,
     );
-    expect(remainings).toEqual([
-      releasedThroughDay(WEEKLY_CAP_COINS, 0) - DEFAULT_TASK_COINS,
-      releasedThroughDay(WEEKLY_CAP_COINS, 0) - DEFAULT_TASK_COINS * 2,
-    ]);
+    // Monday's release is consumed entirely by the first completion, so the
+    // second is granted nothing and `remaining` stays at zero.
+    // Two unassigned tasks are pending when the plan is built, so the common
+    // tranche is split between them.
+    const firstAward = unassignedAward(0, 2);
+    const secondAward = unassignedAward(0, 2, firstAward);
+    const afterFirst = releasedThroughDay(WEEKLY_CAP_COINS, 0) - firstAward;
+    expect(remainings).toEqual([afterFirst, afterFirst - secondAward]);
+    expect(remainings[1]).toBeLessThan(remainings[0]);
   });
 
   it('reports dailyReleased as 0 on Sunday, the rest day (PDR-013)', async () => {
@@ -173,7 +179,7 @@ describe('flag ON — the three P1 events', () => {
     expect(budget.dailyReleased).toBe(0);
     // ...but the week's unspent remainder is still claimable (PDR-013), which
     // is why `remaining` is not 0 too.
-    expect(budget.remaining).toBe(WEEKLY_CAP_COINS - DEFAULT_TASK_COINS);
+    expect(budget.remaining).toBe(WEEKLY_CAP_COINS - SUNDAY_AWARD);
   });
 
   it('emits household:xp_updated to the household, not to one member', async () => {

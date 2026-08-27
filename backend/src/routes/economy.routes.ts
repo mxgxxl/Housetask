@@ -2,8 +2,8 @@ import { Router } from 'express';
 import * as economyController from '../controllers/economy.controller';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { requireMembership } from '../middleware/membership.middleware';
-import { validateQuery } from '../middleware/validate';
-import { personalEconomyQuerySchema } from '../schemas/economy-p1.schema';
+import { validate, validateQuery } from '../middleware/validate';
+import { personalEconomyQuerySchema, updateBudgetSchema } from '../schemas/economy-p1.schema';
 import { asyncHandler } from '../utils/asyncHandler';
 
 // mergeParams lets us read :householdId from the parent mount path.
@@ -24,5 +24,13 @@ router.get(
   asyncHandler(economyController.getPersonalP1),
 );
 router.get('/p1/household', asyncHandler(economyController.getHouseholdP1));
+
+// TD-066 B8. validate() before the handler, same order as every other write
+// route: a malformed plan must fail before it can touch a stored budget.
+router.patch(
+  '/p1/budget',
+  validate(updateBudgetSchema),
+  asyncHandler(economyController.updateBudgetP1),
+);
 
 export default router;

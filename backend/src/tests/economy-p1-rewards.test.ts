@@ -12,14 +12,10 @@ import { UserProgressModel } from '../models/UserProgress';
 import { WeeklyPersonalBudgetModel } from '../models/WeeklyPersonalBudget';
 import { InMemoryIdempotencyStore } from '../services/idempotency.store';
 import { resetP1EnabledResolver, setP1EnabledResolver } from '../services/feature-flag.service';
-import {
-  DEFAULT_TASK_COINS,
-  TASK_HOUSEHOLD_XP,
-  TASK_PERSONAL_XP,
-  WEEKLY_CAP_COINS,
-} from '../config/economy-p1';
+import { TASK_HOUSEHOLD_XP, TASK_PERSONAL_XP, WEEKLY_CAP_COINS } from '../config/economy-p1';
 import { TASK_COINS } from '../config/economy';
 import { releasedThroughDay, weekKey } from '../utils/economy-period';
+import { unassignedAward, unassignedAwardToday } from './p1-award';
 import { buildTestApp } from './setup';
 import {
   TestHousehold,
@@ -47,6 +43,13 @@ let app: Server;
 const MONDAY = '2026-08-24T10:00:00.000Z';
 const SUNDAY = '2026-08-23T10:00:00.000Z';
 const ZONE = 'UTC';
+
+/**
+ * What an unassigned task pays on the pinned Monday (B8): the common tranche,
+ * capped by what Monday has released. Was a flat DEFAULT_TASK_COINS before the
+ * weekly plan existed.
+ */
+const MONDAY_AWARD = unassignedAward(0);
 
 beforeAll(async () => {
   app = await buildTestApp({ idempotencyStore: new InMemoryIdempotencyStore() });
@@ -89,7 +92,7 @@ describe('POST .../tasks/:taskId/completions — flag ON', () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.data.reward).toEqual({
-      coins: DEFAULT_TASK_COINS,
+      coins: MONDAY_AWARD,
       personalXp: TASK_PERSONAL_XP,
       householdXp: TASK_HOUSEHOLD_XP,
     });
@@ -100,7 +103,7 @@ describe('POST .../tasks/:taskId/completions — flag ON', () => {
     const grant = await RewardGrantModel.findOne({ householdId: household.id, taskId });
     expect(grant?.completionOperationId).toBe('op-first');
     expect(grant?.userId.toString()).toBe(user.id);
-    expect(grant?.coinAwarded).toBe(DEFAULT_TASK_COINS);
+    expect(grant?.coinAwarded).toBe(MONDAY_AWARD);
 
     await expect(PersonalCoinLedgerModel.countDocuments({ userId: user.id })).resolves.toBe(1);
     await expect(PersonalXpLedgerModel.countDocuments({ userId: user.id })).resolves.toBe(1);
@@ -121,7 +124,7 @@ describe('POST .../tasks/:taskId/completions — flag ON', () => {
     const budget = await WeeklyPersonalBudgetModel.findOne({ userId: user.id });
     expect(budget?.weekKey).toBe(weekKey(new Date(MONDAY), ZONE));
     expect(budget?.weeklyCap).toBe(WEEKLY_CAP_COINS);
-    expect(budget?.grantedCoins).toBe(DEFAULT_TASK_COINS);
+    expect(budget?.grantedCoins).toBe(MONDAY_AWARD);
     expect(budget?.periodTimeZone).toBe(ZONE);
   });
 
@@ -154,7 +157,13 @@ describe('POST .../tasks/:taskId/completions — flag ON', () => {
     const budgets = await WeeklyPersonalBudgetModel.find({ userId: user.id });
     expect(budgets).toHaveLength(1);
     expect(budgets[0].periodTimeZone).toBe('Europe/Madrid');
-    expect(budgets[0].grantedCoins).toBe(DEFAULT_TASK_COINS * 2);
+    // The plan is built at the FIRST completion, when two unassigned tasks
+    // were pending ('Fregar los platos' from setup, and 'Uno') — so the
+    // tranche is split in two and 'Dos', created later, is priced by the plan
+    // that already existed rather than by one recomputed for it.
+    const firstAward = unassignedAward(0, 2);
+    const secondAward = unassignedAward(0, 2, firstAward);
+    expect(budgets[0].grantedCoins).toBe(firstAward + secondAward);
   });
 
   it('replays the original amounts for a retry with the same Idempotency-Key', async () => {
@@ -182,7 +191,7 @@ describe('POST .../tasks/:taskId/completions — flag ON', () => {
     await expect(RewardGrantModel.countDocuments({ taskId })).resolves.toBe(1);
     await expect(PersonalXpLedgerModel.countDocuments({ userId: user.id })).resolves.toBe(1);
     const budget = await WeeklyPersonalBudgetModel.findOne({ userId: user.id });
-    expect(budget?.grantedCoins).toBe(DEFAULT_TASK_COINS);
+    expect(budget?.grantedCoins).toBe(MONDAY_AWARD);
   });
 
   it('pays once when two requests race with the SAME Idempotency-Key', async () => {
@@ -242,7 +251,7 @@ describe('POST .../tasks/:taskId/completions — flag ON', () => {
     expect(rewards.filter((r) => r !== null)).toHaveLength(1);
 
     const budget = await WeeklyPersonalBudgetModel.findOne({ userId: user.id });
-    expect(budget?.grantedCoins).toBe(DEFAULT_TASK_COINS);
+    expect(budget?.grantedCoins).toBe(MONDAY_AWARD);
   });
 
   it('reports no reward to a second member completing an already-claimed task', async () => {
@@ -440,6 +449,8 @@ describe('occurredAt window (TD-066-DESIGN §9)', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data.reward.personalXp).toBe(TASK_PERSONAL_XP);
+    // Server-timestamped, so the award follows whatever day it runs on.
+    expect(res.body.data.reward.coins).toBe(unassignedAwardToday());
   });
 });
 
@@ -503,7 +514,7 @@ describe('transaction rollback', () => {
       .send({ occurredAt: MONDAY, timeZone: ZONE });
 
     expect(retry.status).toBe(200);
-    expect(retry.body.data.reward.coins).toBe(DEFAULT_TASK_COINS);
+    expect(retry.body.data.reward.coins).toBe(MONDAY_AWARD);
     await expect(RewardGrantModel.countDocuments({ taskId })).resolves.toBe(1);
   });
 });
@@ -580,7 +591,7 @@ describe('coexistence with the Fase A economy (owner decision P2b)', () => {
     // moment P1 switches on, and the pet shop — which still spends that
     // balance — would become unaffordable mid-migration.
     const personal = await PersonalCoinLedgerModel.findOne({ userId: user.id });
-    expect(personal?.amount).toBe(DEFAULT_TASK_COINS);
+    expect(personal?.amount).toBe(MONDAY_AWARD);
 
     const legacy = await EconomyLedgerModel.findOne({
       householdId: household.id,
@@ -649,6 +660,6 @@ describe('authorization and validation', () => {
       .set('Idempotency-Key', 'op-reusable')
       .send({ occurredAt: MONDAY, timeZone: ZONE });
     expect(good.status).toBe(200);
-    expect(good.body.data.reward.coins).toBe(DEFAULT_TASK_COINS);
+    expect(good.body.data.reward.coins).toBe(MONDAY_AWARD);
   });
 });

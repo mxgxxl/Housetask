@@ -1,8 +1,12 @@
 import { Response } from 'express';
 import * as economyService from '../services/economy.service';
 import * as economyP1ReadService from '../services/economy-p1-read.service';
+import * as economyP1BudgetService from '../services/economy-p1-budget.service';
+import { isP1Enabled } from '../services/feature-flag.service';
+import { AppError } from '../middleware/error.middleware';
+import { resolveTimeZone, weekKey as currentWeekKey } from '../utils/economy-period';
 import { sendSuccess } from '../utils/response';
-import { PersonalEconomyQuery } from '../schemas/economy-p1.schema';
+import { PersonalEconomyQuery, UpdateBudgetBody } from '../schemas/economy-p1.schema';
 import { AuthenticatedRequest } from '../types';
 
 /**
@@ -55,4 +59,43 @@ export async function getPersonalP1(req: AuthenticatedRequest, res: Response): P
 export async function getHouseholdP1(req: AuthenticatedRequest, res: Response): Promise<void> {
   const view = await economyP1ReadService.getHouseholdEconomy(req.params.householdId);
   sendSuccess(res, view);
+}
+
+/**
+ * PATCH /api/households/:householdId/economy/p1/budget
+ *
+ * Rewrites the CALLER's plan for one week (TD-066 B8, PDR-011). `mode:
+ * 'automatic'` is the "volver a automático" button: it drops every manual
+ * override and recomputes the deterministic split. `mode: 'manual'` applies
+ * `coinAmount` overrides on top of that same recomputation.
+ *
+ * Only ever the caller's own plan — the member comes from the access token,
+ * so there is no id to point at somebody else's budget.
+ */
+export async function updateBudgetP1(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const householdId = req.params.householdId;
+  const userId = req.user!.userId;
+  const body = req.body as UpdateBudgetBody;
+
+  if (!(await isP1Enabled(householdId))) {
+    // Refused rather than silently stored: writing a plan a disabled economy
+    // will never read would let a client believe it had configured something.
+    // The GETs answer a zeroed shape instead, because a read has something
+    // coherent to say when the economy is off and a write does not.
+    throw new AppError('The P1 economy is not enabled for this household', 409);
+  }
+
+  const timeZone = resolveTimeZone(body.timeZone);
+  const weekKey = body.weekKey ?? currentWeekKey(new Date(), timeZone);
+
+  const budget = await economyP1BudgetService.updateWeeklyBudget({
+    householdId,
+    userId,
+    weekKey,
+    periodTimeZone: timeZone,
+    mode: body.mode,
+    allocations: body.allocations,
+  });
+
+  sendSuccess(res, { weeklyBudget: budget });
 }

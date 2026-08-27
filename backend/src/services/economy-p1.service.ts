@@ -8,7 +8,7 @@ import { ITask, TaskModel } from '../models/Task';
 import { PersonalCoinLedgerModel } from '../models/PersonalCoinLedger';
 import { PersonalXpLedgerModel } from '../models/PersonalXpLedger';
 import { UserProgressModel } from '../models/UserProgress';
-import { WeeklyPersonalBudgetModel } from '../models/WeeklyPersonalBudget';
+import { IBudgetAllocation, WeeklyPersonalBudgetModel } from '../models/WeeklyPersonalBudget';
 import {
   DEFAULT_TASK_COINS,
   HOUSEHOLD_LEVEL_CURVE_FACTOR,
@@ -36,6 +36,7 @@ import {
   weekKey,
 } from '../utils/economy-period';
 import { emitToHousehold, emitToUser } from '../config/socket';
+import { buildAutomaticPlan, resolveAllocationForTask } from './economy-p1-budget.service';
 import { grantCoins } from './economy.service';
 import { isP1Enabled } from './feature-flag.service';
 import { logger } from '../utils/logger';
@@ -249,9 +250,18 @@ async function runRewardTransaction(
 
   const released = releasedThroughDay(budget.weeklyCap, dayIndex);
   const available = availableCoins(budget.weeklyCap, dayIndex, budget.grantedCoins);
+
+  // TD-066 B8: what the task is worth comes from the member's weekly plan.
+  // `null` means no plan covers it — a member's very first completion, before
+  // any plan has been built — and falls back to the flat default rather than
+  // paying nothing, because "we have not planned yet" must not read as "this
+  // was worthless".
+  const allocation = resolveAllocationForTask(budget.allocations ?? [], task, userId);
+  const planned = allocation?.coinAmount ?? DEFAULT_TASK_COINS;
+
   // Never pay more than the day has released. XP is untouched by this: PDR-013
   // makes Sunday and an exhausted budget stop the coins, not the progress.
-  const coinAward = Math.min(DEFAULT_TASK_COINS, available);
+  const coinAward = Math.min(planned, available);
 
   const [grant] = await RewardGrantModel.create(
     [
@@ -399,7 +409,16 @@ async function resolveWeeklyBudget(
   weeklyCap: number;
   grantedCoins: number;
   periodTimeZone: string;
+  allocations: IBudgetAllocation[];
 }> {
+  // The automatic plan is built as the week OPENS, not lazily on the first
+  // read (TD-066 B8). Two reasons: a member must be paid their planned
+  // amount from their very first completion of the week rather than a flat
+  // default until they happen to visit a screen, and freezing the plan at the
+  // start of the week is what makes it a plan — one that changed every time
+  // the household added a chore would silently reprice work already done.
+  const plan = await buildAutomaticPlan(householdId, userId, WEEKLY_CAP_COINS, session);
+
   const budget = await WeeklyPersonalBudgetModel.findOneAndUpdate(
     {
       userId: new Types.ObjectId(userId),
@@ -413,7 +432,7 @@ async function resolveWeeklyBudget(
         releasedCoins: 0,
         grantedCoins: 0,
         planVersion: 1,
-        allocations: [],
+        allocations: plan,
       },
     },
     { upsert: true, new: true, session },

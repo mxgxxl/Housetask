@@ -12,8 +12,9 @@ import { UserProgressModel } from '../models/UserProgress';
 import { WeeklyPersonalBudgetModel } from '../models/WeeklyPersonalBudget';
 import { InMemoryIdempotencyStore } from '../services/idempotency.store';
 import { resetP1EnabledResolver, setP1EnabledResolver } from '../services/feature-flag.service';
-import { DEFAULT_TASK_COINS, TASK_PERSONAL_XP } from '../config/economy-p1';
+import { TASK_PERSONAL_XP } from '../config/economy-p1';
 import { TASK_COINS } from '../config/economy';
+import { unassignedAwardToday } from './p1-award';
 import { buildTestApp } from './setup';
 import {
   TestHousehold,
@@ -227,7 +228,9 @@ describe('flag ON — one reward, whichever path is used', () => {
     expect(res.body.data).not.toHaveProperty('reward');
 
     const grant = await RewardGrantModel.findOne({ taskId });
-    expect(grant?.coinAwarded).toBe(DEFAULT_TASK_COINS);
+    // The legacy PATCH carries no occurredAt, so the server timestamps it and
+    // the award follows whichever day the suite runs on (B8).
+    expect(grant?.coinAwarded).toBe(unassignedAwardToday());
     expect(grant?.userId.toString()).toBe(user.id);
     await expect(PersonalXpLedgerModel.countDocuments({ userId: user.id })).resolves.toBe(1);
   });
@@ -246,7 +249,9 @@ describe('flag ON — one reward, whichever path is used', () => {
 
     const grant = await RewardGrantModel.findOne({ taskId });
     expect(grant?.kind).toBe('task_first_completion');
-    expect(grant?.coinAwarded).toBe(DEFAULT_TASK_COINS);
+    // The legacy PATCH carries no occurredAt, so the server timestamps it and
+    // the award follows whichever day the suite runs on (B8).
+    expect(grant?.coinAwarded).toBe(unassignedAwardToday());
   });
 
   it('the generic PATCH applies other fields AND completes atomically', async () => {
@@ -324,7 +329,7 @@ describe('flag ON — one reward, whichever path is used', () => {
       .set(authHeader(user.accessToken))
       .set('Idempotency-Key', 'op-before-patch')
       .send({});
-    expect(post.body.data.reward.coins).toBe(DEFAULT_TASK_COINS);
+    expect(post.body.data.reward.coins).toBe(unassignedAwardToday());
 
     const patch = await request(app)
       .patch(`/api/households/${household.id}/tasks/${taskId}/complete`)
@@ -336,7 +341,7 @@ describe('flag ON — one reward, whichever path is used', () => {
     await expect(RewardGrantModel.countDocuments({ taskId })).resolves.toBe(1);
     await expect(PersonalCoinLedgerModel.countDocuments({ userId: user.id })).resolves.toBe(1);
     const budget = await WeeklyPersonalBudgetModel.findOne({ userId: user.id });
-    expect(budget?.grantedCoins).toBe(DEFAULT_TASK_COINS);
+    expect(budget?.grantedCoins).toBe(unassignedAwardToday());
   });
 
   it('generic PATCH then PATCH .../complete pays only once', async () => {

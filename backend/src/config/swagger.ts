@@ -1170,6 +1170,65 @@ export const swaggerSpec: Record<string, unknown> = {
         },
       },
     },
+    '/households/{householdId}/economy/p1/budget': {
+      patch: {
+        tags: ['Economy'],
+        summary: "Adjust the caller's weekly plan, or restore the automatic split",
+        description:
+          'TD-066 B8 (PDR-011). `mode: "automatic"` is the "volver a automático" ' +
+          'button: it drops every manual override and recomputes the ' +
+          'deterministic split, which is why no second copy of the plan is ' +
+          'stored anywhere. `mode: "manual"` applies `coinAmount` overrides on ' +
+          'top of that same recomputation and is refused with 400 if the ' +
+          'resulting plan would promise more than the weekly ceiling over a ' +
+          'full week. Only `coinAmount` is editable: `expectedFrequency` is an ' +
+          "observation about the household's work, not a preference, and " +
+          'editing it would be a way to raise your own ceiling. Scoped to one ' +
+          '`weekKey`, and always to the caller — the member comes from the ' +
+          'access token, so there is no id pointing at somebody else\'s budget. ' +
+          'Answers 409 while P1 is disabled for the household rather than ' +
+          'storing a plan a disabled economy will never read.',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['mode'],
+                properties: {
+                  mode: { type: 'string', enum: ['automatic', 'manual'] },
+                  weekKey: { type: 'string', example: '2026-W35' },
+                  timeZone: { type: 'string', example: 'Europe/Madrid' },
+                  allocations: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      required: ['allocationKey', 'coinAmount'],
+                      properties: {
+                        allocationKey: { type: 'string', example: 'common:unassigned' },
+                        coinAmount: { type: 'integer', minimum: 0 },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'OK. `data` is `{ weeklyBudget }` with the new planVersion.' },
+          '400': {
+            description: 'Malformed body, unknown allocationKey, or a plan above the ceiling',
+          },
+          '403': { description: 'Not a member of this household' },
+          '409': { description: 'The P1 economy is not enabled for this household' },
+        },
+      },
+    },
     '/households/{householdId}/economy': {
       get: {
         tags: ['Economy'],

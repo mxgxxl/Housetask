@@ -72,3 +72,48 @@ export const personalEconomyQuerySchema = z.object({
 });
 
 export type PersonalEconomyQuery = z.infer<typeof personalEconomyQuerySchema>;
+
+/**
+ * Body of `PATCH /households/:householdId/economy/p1/budget` (B8).
+ *
+ * One endpoint covers both directions of PDR-011's "ajustar reparto" and
+ * "volver a automático", because they are one button in the UI and two
+ * endpoints for one toggle would let a client end up in neither state. `mode`
+ * is what distinguishes them.
+ *
+ * `allocations` carries only `coinAmount`. `expectedFrequency` is an
+ * observation about the household's work, not a preference: letting a member
+ * edit it would let them raise their own ceiling by claiming a chore happens
+ * ten times a week, which is precisely the inflation PDR-011 bounds.
+ */
+export const updateBudgetSchema = z.object({
+  /**
+   * Which week to rewrite. Absent means the current one, derived server-side
+   * — a client should not have to compute an ISO week to save a slider.
+   */
+  weekKey: z
+    .string()
+    .trim()
+    .regex(/^\d{4}-W\d{2}$/, { error: 'weekKey must look like 2026-W35' })
+    .optional(),
+  timeZone: z
+    .string()
+    .trim()
+    .min(1)
+    .refine(isValidTimeZone, { error: 'timeZone must be a valid IANA timezone' })
+    .optional(),
+  mode: z.enum(['automatic', 'manual'], { error: 'mode must be automatic or manual' }),
+  allocations: z
+    .array(
+      z.object({
+        allocationKey: z.string().trim().min(1, 'allocationKey is required'),
+        coinAmount: z.coerce
+          .number()
+          .int('coinAmount must be a whole number of coins')
+          .min(0, 'coinAmount cannot be negative'),
+      }),
+    )
+    .optional(),
+});
+
+export type UpdateBudgetBody = z.infer<typeof updateBudgetSchema>;

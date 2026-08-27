@@ -11,7 +11,6 @@ import { UserProgressModel } from '../models/UserProgress';
 import { InMemoryIdempotencyStore } from '../services/idempotency.store';
 import { resetP1EnabledResolver, setP1EnabledResolver } from '../services/feature-flag.service';
 import {
-  DEFAULT_TASK_COINS,
   HOUSEHOLD_LEVEL_CURVE_FACTOR,
   PERSONAL_LEVEL_CURVE_FACTOR,
   TASK_HOUSEHOLD_XP,
@@ -20,6 +19,7 @@ import {
   xpRequiredForLevel,
 } from '../config/economy-p1';
 import { releasedOnDay, releasedThroughDay, weekKey } from '../utils/economy-period';
+import { unassignedAward } from './p1-award';
 import { buildTestApp } from './setup';
 import {
   TestHousehold,
@@ -48,6 +48,9 @@ let app: Server;
 
 const MONDAY = '2026-08-24T10:00:00.000Z';
 const ZONE = 'UTC';
+
+/** What an unassigned task pays on the pinned Monday, under the B8 plan. */
+const MONDAY_AWARD = unassignedAward(0);
 
 beforeAll(async () => {
   app = await buildTestApp({ idempotencyStore: new InMemoryIdempotencyStore() });
@@ -180,7 +183,7 @@ describe('GET .../economy/p1/me — flag ON', () => {
       { $group: { _id: null, total: { $sum: '$amount' } } },
     ]);
     expect(res.body.data.wallet.balance).toBe(aggregated.total);
-    expect(res.body.data.wallet.balance).toBe(DEFAULT_TASK_COINS);
+    expect(res.body.data.wallet.balance).toBe(MONDAY_AWARD);
 
     expect(res.body.data.personalProgress.xp).toBe(TASK_PERSONAL_XP);
     expect(res.body.data.personalProgress.level).toBe(1);
@@ -189,7 +192,7 @@ describe('GET .../economy/p1/me — flag ON', () => {
       xpRequiredForLevel(2, PERSONAL_LEVEL_CURVE_FACTOR) - TASK_PERSONAL_XP,
     );
 
-    expect(res.body.data.weeklyBudget.grantedCoins).toBe(DEFAULT_TASK_COINS);
+    expect(res.body.data.weeklyBudget.grantedCoins).toBe(MONDAY_AWARD);
     expect(res.body.data.weeklyBudget.weekKey).toBe(weekKey(new Date(MONDAY), ZONE));
   });
 
@@ -201,7 +204,7 @@ describe('GET .../economy/p1/me — flag ON', () => {
 
     const res = await request(app).get(meUrl(household.id)).set(authHeader(user.accessToken));
     const budget = res.body.data.weeklyBudget;
-    expect(budget.grantedCoins).toBe(DEFAULT_TASK_COINS);
+    expect(budget.grantedCoins).toBe(MONDAY_AWARD);
 
     // The invariant a client may rely on. It only holds because the read
     // recomputes `releasedCoins` for TODAY instead of echoing the stored
@@ -225,11 +228,12 @@ describe('GET .../economy/p1/me — flag ON', () => {
     const fromFirst = await request(app).get(meUrl(household.id)).set(authHeader(user.accessToken));
     const fromSecond = await request(app).get(meUrl(other.id)).set(authHeader(user.accessToken));
 
-    expect(fromFirst.body.data.wallet.balance).toBe(DEFAULT_TASK_COINS * 2);
-    expect(fromSecond.body.data.wallet.balance).toBe(DEFAULT_TASK_COINS * 2);
-    // ...but the per-household budget only counted its own grant.
-    expect(fromFirst.body.data.weeklyBudget.grantedCoins).toBe(DEFAULT_TASK_COINS);
-    expect(fromSecond.body.data.weeklyBudget.grantedCoins).toBe(DEFAULT_TASK_COINS);
+    expect(fromFirst.body.data.wallet.balance).toBe(MONDAY_AWARD * 2);
+    expect(fromSecond.body.data.wallet.balance).toBe(MONDAY_AWARD * 2);
+    // ...but the per-household budget only counted its own grant. Each home
+    // has its own weekly ceiling, so neither capped the other.
+    expect(fromFirst.body.data.weeklyBudget.grantedCoins).toBe(MONDAY_AWARD);
+    expect(fromSecond.body.data.weeklyBudget.grantedCoins).toBe(MONDAY_AWARD);
   });
 
   it('reports the streak and the milestones its longest run has passed', async () => {
@@ -524,7 +528,7 @@ describe('authorization — requireMembership is the single checkpoint', () => {
     const asMate = await request(app).get(meUrl(household.id)).set(authHeader(mate.accessToken));
 
     expect(asOwner.body.data.wallet.balance).toBe(0);
-    expect(asMate.body.data.wallet.balance).toBe(DEFAULT_TASK_COINS);
+    expect(asMate.body.data.wallet.balance).toBe(MONDAY_AWARD);
   });
 });
 
