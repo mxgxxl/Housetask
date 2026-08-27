@@ -23,12 +23,13 @@ import {
   availableCoins,
   dayIndexIn,
   effectiveDayKey,
+  releasedOnDay,
   releasedThroughDay,
   resolveTimeZone,
   validateOccurredAt,
   weekKey,
 } from '../utils/economy-period';
-import { emitToHousehold } from '../config/socket';
+import { emitToHousehold, emitToUser } from '../config/socket';
 import { grantCoins } from './economy.service';
 import { isP1Enabled } from './feature-flag.service';
 import { logger } from '../utils/logger';
@@ -172,10 +173,33 @@ export async function completeTaskWithReward(
   return afterCommit(input, outcome);
 }
 
+/** Weekly-budget snapshot as it stands right after a grant (B5 payload). */
+export interface BudgetSummary {
+  weekKey: string;
+  /** Coins still claimable this week after this grant. */
+  remaining: number;
+  /** Coins today's allocation released on its own — 0 on Sunday (PDR-013). */
+  dailyReleased: number;
+}
+
+/** Household XP as it stands right after a grant (B5 payload). */
+export interface HouseholdProgressSummary {
+  householdXp: number;
+  level: number;
+}
+
 interface TransactionOutcome {
   task: ITask;
   reward: RewardSummary;
   receiptId: string;
+  /**
+   * Carried out of the transaction rather than re-read after it: these are
+   * the values that were actually committed, and re-reading could pick up a
+   * concurrent completion's numbers instead — which would make the socket
+   * payload disagree with the receipt the same request just returned.
+   */
+  budget: BudgetSummary;
+  householdProgress: HouseholdProgressSummary;
 }
 
 async function runRewardTransaction(
@@ -301,7 +325,7 @@ async function runRewardTransaction(
     PERSONAL_LEVEL_CURVE_FACTOR,
     session,
   );
-  await bumpProgress(
+  const householdProgress = await bumpProgress(
     HouseholdProgressModel,
     { householdId: new Types.ObjectId(householdId) },
     TASK_HOUSEHOLD_XP,
@@ -326,6 +350,21 @@ async function runRewardTransaction(
       householdXp: TASK_HOUSEHOLD_XP,
     },
     receiptId: grant._id.toString(),
+    budget: {
+      weekKey: budget.weekKey,
+      // `available` was computed BEFORE this grant, so the coins just paid
+      // have to come off it — the client is told what is left, not what was
+      // left a moment ago.
+      remaining: available - coinAward,
+      dailyReleased: releasedOnDay(budget.weeklyCap, dayIndex),
+    },
+    // Renamed on the way out: `xp` is what the projection calls it, but the
+    // socket payload sits next to `personalXp` on the client, where an
+    // unqualified `xp` would be ambiguous about whose it is.
+    householdProgress: {
+      householdXp: householdProgress.xp,
+      level: householdProgress.level,
+    },
   };
 }
 
@@ -384,19 +423,19 @@ async function resolveWeeklyBudget(
  * still used for the XP itself so the retry converges instead of replaying a
  * stale total.
  */
-async function bumpProgress<T extends { xp: number }>(
+async function bumpProgress(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   projection: mongoose.Model<any>,
   filter: Record<string, unknown>,
   xpDelta: number,
   curveFactor: number,
   session: ClientSession,
-): Promise<void> {
+): Promise<{ xp: number; level: number }> {
   const updated = (await projection.findOneAndUpdate(
     filter,
     { $inc: { xp: xpDelta } },
     { upsert: true, new: true, session, setDefaultsOnInsert: true },
-  )) as T | null;
+  )) as { xp: number } | null;
 
   if (!updated) {
     throw new AppError('Could not update progress projection', 500);
@@ -406,6 +445,7 @@ async function bumpProgress<T extends { xp: number }>(
   // total means a replayed or out-of-order grant cannot drift it.
   const level = levelForXp(updated.xp, curveFactor);
   await projection.updateOne(filter, { $set: { level } }, { session });
+  return { xp: updated.xp, level };
 }
 
 /**
@@ -500,6 +540,24 @@ async function afterCommit(
   await populateTask(task);
   taskService.notifyTaskCompleted(task, userId);
   emitToHousehold(householdId, 'task:completed', task.toJSON());
+
+  // ── P1 realtime (B5), strictly after the commit ──────────────────────────
+  // A socket event cannot be un-emitted. Emitting any of these inside the
+  // transaction would mean a late abort had already told the client its
+  // wallet grew — and the client would have no way to learn otherwise.
+  //
+  // The split is not cosmetic: coins, personal XP and the weekly budget go to
+  // the member ALONE (PDR-012 makes the wallet personal, so broadcasting it
+  // to the household room would hand every member everyone else's balance),
+  // while household XP is shared by definition (PDR-017) and goes to the
+  // household room.
+  emitToUser(userId, 'economy:reward', {
+    receiptId: outcome.receiptId,
+    coins: outcome.reward.coins,
+    personalXp: outcome.reward.personalXp,
+  });
+  emitToUser(userId, 'economy:budget_updated', outcome.budget);
+  emitToHousehold(householdId, 'household:xp_updated', outcome.householdProgress);
 
   return { task, reward: outcome.reward, receiptId: outcome.receiptId };
 }

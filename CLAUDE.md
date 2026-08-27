@@ -199,6 +199,17 @@ Detailed ADRs live in docs/ADRs.md. Index:
 | `pet:adopted` | Pet: `{ id, householdId, species, name, adoptedAt, adoptedBy, hunger, mood, lastFedAt, lastPlayedAt, cosmetics, activeCosmetic, createdAt, updatedAt }` (hunger/mood decayed to now) | A DIFFERENT member confirms a pending adoption, OR a single-member household adopts instantly on propose (no confirmation step — PDR-001) |
 | `pet:adopt_cancelled` | `{ householdId }` | Pending adoption request cancelled by its requester or a household admin |
 | `pet:updated` | Pet (same shape as `pet:adopted`) | Pet fed, played with, a cosmetic bought, or the active cosmetic changed |
+| `household:xp_updated` | `{ householdXp, level }` | Shared household XP moved (TD-066 B5). Household room. Only fires while P1 is enabled for the household — no household has it today |
+
+**Rooms, and why there are now two kinds** (TD-066 B5): besides `household_<id>`, every socket also joins `user_<userId>` — unconditionally, even for a member of no household, because a wallet and personal XP travel with the account (PDR-017). P1 makes part of the economy personal (PDR-012), and broadcasting a member's balance to the household room would hand every housemate everyone else's wallet — a leak the Fase A economy could not have, since it had a single shared purse. `emitToUser` is the counterpart of `emitToHousehold` for that channel; it reaches every device the member has connected.
+
+**Server → Client events, personal room only:**
+| Event | Payload | Trigger |
+|-------|---------|---------|
+| `economy:reward` | `{ receiptId, coins, personalXp }` | A completion paid out (TD-066 B5). P1-enabled households only |
+| `economy:budget_updated` | `{ weekKey, remaining, dailyReleased }` | The member's weekly budget moved. `dailyReleased` is 0 on Sunday (PDR-013), while `remaining` may not be — the week's unspent remainder stays claimable |
+
+All three P1 events are emitted strictly AFTER the reward transaction commits: a socket event cannot be un-emitted, so emitting inside the transaction would let a late abort announce a payout that never happened.
 
 **Client → Server events:**
 | Event | Payload | Purpose |
