@@ -3,7 +3,12 @@ import * as economyController from '../controllers/economy.controller';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { requireMembership } from '../middleware/membership.middleware';
 import { validate, validateQuery } from '../middleware/validate';
-import { personalEconomyQuerySchema, updateBudgetSchema } from '../schemas/economy-p1.schema';
+import { idempotency } from '../middleware/idempotency.middleware';
+import {
+  buyIceSchema,
+  personalEconomyQuerySchema,
+  updateBudgetSchema,
+} from '../schemas/economy-p1.schema';
 import { asyncHandler } from '../utils/asyncHandler';
 
 // mergeParams lets us read :householdId from the parent mount path.
@@ -31,6 +36,15 @@ router.patch(
   '/p1/budget',
   validate(updateBudgetSchema),
   asyncHandler(economyController.updateBudgetP1),
+);
+
+// B9: buying an ice creates a ledger entry, so it is a POST and carries
+// Idempotency-Key protection (Hard Rule 13).
+router.post(
+  '/p1/ice',
+  validate(buyIceSchema),
+  idempotency,
+  asyncHandler(economyController.buyIceP1),
 );
 
 export default router;

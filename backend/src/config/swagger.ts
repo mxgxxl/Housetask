@@ -1229,6 +1229,38 @@ export const swaggerSpec: Record<string, unknown> = {
         },
       },
     },
+    '/households/{householdId}/economy/p1/ice': {
+      post: {
+        tags: ['Economy'],
+        summary: "Buy one streak ice from the caller's personal wallet",
+        description:
+          'TD-066 B9 (PDR-019). Costs 20 coins, with at most 2 held in reserve. ' +
+          'The balance check, the wallet debit and the reserve increment are one ' +
+          'transaction, so a failure can never leave a member paying for an ice ' +
+          'they did not receive. Refused with 409 at the cap and with 400 on an ' +
+          'insufficient balance, in both cases without taking the money. ' +
+          '`Idempotency-Key` doubles as the operation id, so a retried tap after ' +
+          'a timeout replays instead of buying a second ice.',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+          {
+            name: 'Idempotency-Key',
+            in: 'header',
+            required: false,
+            schema: { type: 'string' },
+          },
+        ],
+        responses: {
+          '200': { description: 'OK. `data` is `{ iceReserve, spent, balance }`.' },
+          '400': { description: 'Not enough coins' },
+          '403': { description: 'Not a member of this household' },
+          '409': {
+            description: 'Already at the maximum reserve, or P1 is not enabled for the household',
+          },
+        },
+      },
+    },
     '/households/{householdId}/economy': {
       get: {
         tags: ['Economy'],

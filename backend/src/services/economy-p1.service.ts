@@ -37,6 +37,7 @@ import {
 } from '../utils/economy-period';
 import { emitToHousehold, emitToUser } from '../config/socket';
 import { buildAutomaticPlan, resolveAllocationForTask } from './economy-p1-budget.service';
+import { ActivityResult, recordUsefulActivity } from './economy-p1-streak.service';
 import { grantCoins } from './economy.service';
 import { isP1Enabled } from './feature-flag.service';
 import { logger } from '../utils/logger';
@@ -210,6 +211,8 @@ interface TransactionOutcome {
   /** Before/after figures for both tracks, so B7 can spot what was crossed. */
   personalDelta: ProgressDelta;
   householdDelta: ProgressDelta;
+  /** What the completion did to the member's streak and ice reserve (B9). */
+  streak: ActivityResult;
 }
 
 async function runRewardTransaction(
@@ -352,7 +355,12 @@ async function runRewardTransaction(
     session,
   );
 
-  // ── 3. Only now is the task itself completed. ──
+  // ── 3. The streak, inside the same transaction (B9). ──
+  // A completion that rolls back must not have advanced a flame or spent an
+  // ice, so this is not best-effort work that happens afterwards.
+  const streak = await recordUsefulActivity(userId, occurredAt, effectiveZone, new Date(), session);
+
+  // ── 4. Only now is the task itself completed. ──
   task.status = 'completed';
   // The instant it actually happened, not the instant it reached us: for an
   // offline completion those differ, and the truthful one is what the receipt
@@ -386,6 +394,7 @@ async function runRewardTransaction(
     },
     personalDelta: personalProgress,
     householdDelta: householdProgress,
+    streak,
   };
 }
 
@@ -689,6 +698,53 @@ function emitProgressEvents(
       kind: 'tasks_completed',
       value: householdMilestone,
       total: householdDelta.tasksCompleted,
+    });
+  }
+
+  emitStreakEvents(userId, outcome.streak);
+}
+
+/**
+ * Announce what the completion did to the streak (B9).
+ *
+ * All personal, all to the member's own room: a flame, an ice reserve and a
+ * missed day are exactly the things UX-P1-SPEC §0 rules out turning into a
+ * way of keeping score between housemates.
+ *
+ * `economy:streak_updated` always fires — the header carries the flame, so it
+ * has to move on every completion. The other three are events, not state, and
+ * fire only when they actually happened.
+ */
+function emitStreakEvents(userId: string, streak: ActivityResult): void {
+  emitToUser(userId, 'economy:streak_updated', {
+    current: streak.currentCount,
+    longest: streak.longestCount,
+    iceReserve: streak.iceReserve,
+  });
+
+  for (const day of streak.close.closed) {
+    if (day.closeState === 'ice_covered') {
+      // "Ayer fue un día complicado. Un hielo cubrió tu racha 🔥 12"
+      // (UX-P1-SPEC §7) — a banner of relief, shown when the app reopens.
+      emitToUser(userId, 'economy:ice_consumed', {
+        dayKey: day.dayKey,
+        iceReserve: streak.iceReserve,
+        current: streak.currentCount,
+      });
+    } else if (day.closeState === 'broken') {
+      emitToUser(userId, 'economy:streak_broken', { dayKey: day.dayKey });
+    }
+  }
+
+  if (streak.iceRefunded) {
+    emitToUser(userId, 'economy:ice_refunded', { iceReserve: streak.iceReserve });
+  }
+
+  if (streak.milestoneReached !== null) {
+    emitToUser(userId, 'economy:streak_milestone', {
+      value: streak.milestoneReached,
+      current: streak.currentCount,
+      iceReserve: streak.iceReserve,
     });
   }
 }

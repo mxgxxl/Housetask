@@ -350,13 +350,12 @@ describe('GET .../economy/p1/household', () => {
 
     const mateTask = await addTask(mate, household.id, 'Tarea del compañero');
     await completeTask(mate, household.id, mateTask, 'op-mate');
-    await PersonalStreakModel.create({
-      userId: new Types.ObjectId(mate.id),
-      scope: 'account',
-      currentCount: 9,
-      longestCount: 9,
-      iceReserve: 2,
-    });
+    // The completion already created their streak (B9), so this fills it in
+    // rather than inserting a second one — which the unique index forbids.
+    await PersonalStreakModel.updateOne(
+      { userId: new Types.ObjectId(mate.id), scope: 'account' },
+      { $set: { currentCount: 9, longestCount: 9, iceReserve: 2 } },
+    );
 
     const res = await request(app)
       .get(householdUrl(household.id))

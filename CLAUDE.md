@@ -212,6 +212,16 @@ Detailed ADRs live in docs/ADRs.md. Index:
 | `economy:budget_updated` | `{ weekKey, remaining, dailyReleased }` | The member's weekly budget moved. `dailyReleased` is 0 on Sunday (PDR-013), while `remaining` may not be — the week's unspent remainder stays claimable |
 | `economy:level_up` | `{ track: 'personal', level, previousLevel, xp, unlocks[] }` | The member reached a new personal level (TD-066 B7). Personal room, because titles and badges are their own (PDR-017) |
 | `economy:milestone` | `{ kind: 'tasks_completed', value, total }` | The member crossed a task-count milestone (10/50/100/365) |
+| `economy:streak_updated` | `{ current, longest, iceReserve }` | Every completion (TD-066 B9) — the header carries the flame, so it moves on each one |
+| `economy:ice_consumed` | `{ dayKey, iceReserve, current }` | A missed weekday was covered by an ice; the client shows the relief banner «Ayer fue un día complicado…» (UX-P1-SPEC §7) |
+| `economy:ice_refunded` | `{ iceReserve }` | A late offline sync proved activity on a day an ice had covered, and the reserve had room (approved decision 5) |
+| `economy:streak_broken` | `{ dayKey }` | A weekday passed with no activity and no ice. Level, XP and coins are untouched (PDR-019) |
+| `economy:streak_milestone` | `{ value, current, iceReserve }` | The longest run reached 7/14/30/50/100 and earned an ice |
+| `economy:ice_purchased` | `{ iceReserve, spent, balance }` | An ice was bought for 20 🪙 |
+
+Streaks are **account-scoped** (owner decision P4): they travel with the person like personal XP, so leaving a household never costs one — which is why every streak event is personal-room only. A flame, an ice reserve and a missed day are precisely what UX-P1-SPEC §0 rules out turning into a way of keeping score between housemates.
+
+**Days are judged lazily, with no cron behind them.** Nothing runs at midnight; a day gets its verdict on the next read or write that needs it (TD-066-DESIGN §4). The unique index on `(streakId, dayKey)` is what makes that safe: two requests arriving together race to create the same day and exactly one wins, so an ice is consumed once rather than once per request. `GET .../economy/p1/me` therefore WRITES — deliberately — because a member opening the app after three days away must have those days judged before the flame they are looking at means anything.
 
 All P1 events are emitted strictly AFTER the reward transaction commits: a socket event cannot be un-emitted, so emitting inside the transaction would let a late abort announce a payout that never happened.
 

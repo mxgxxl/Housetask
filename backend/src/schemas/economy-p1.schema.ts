@@ -117,3 +117,14 @@ export const updateBudgetSchema = z.object({
 });
 
 export type UpdateBudgetBody = z.infer<typeof updateBudgetSchema>;
+
+/**
+ * Body of `POST /households/:householdId/economy/p1/ice` (B9).
+ *
+ * Empty by design: what an ice costs and how many may be held are
+ * server-authoritative (PDR-019), so there is nothing for the client to
+ * propose. The schema exists anyway to reject a body that tries.
+ */
+export const buyIceSchema = z.object({}).strict();
+
+export type BuyIceBody = z.infer<typeof buyIceSchema>;

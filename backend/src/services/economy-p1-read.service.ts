@@ -23,11 +23,13 @@ import {
 import {
   availableCoins,
   dayIndexIn,
+  effectiveDayKey,
   releasedOnDay,
   releasedThroughDay,
   resolveTimeZone,
   weekKey,
 } from '../utils/economy-period';
+import { closeDaysUpTo, ensureStreak } from './economy-p1-streak.service';
 import { isP1Enabled } from './feature-flag.service';
 
 /**
@@ -198,6 +200,17 @@ export async function getPersonalEconomy(
 
   const userObjectId = new Types.ObjectId(userId);
   const provisionalWeek = weekKey(at, requestedZone);
+
+  // A READ that writes, deliberately (TD-066-DESIGN §4: "un cierre server-side
+  // de día, o la primera lectura/mutación posterior que lo necesite"). Nothing
+  // runs at midnight, so a member who opens the app after three days away must
+  // have those days judged now — otherwise the flame they are looking at is
+  // stale, and the ice that protected them would appear to have been spent for
+  // nothing. The unique index on (streakId, dayKey) keeps concurrent reads
+  // from each consuming their own ice for the same day.
+  const streakDoc = await ensureStreak(userId);
+  await closeDaysUpTo(streakDoc, effectiveDayKey(at, requestedZone));
+  await streakDoc.save();
 
   const [balanceRow, progress, streak, budget] = await Promise.all([
     PersonalCoinLedgerModel.aggregate<{ total: number }>([

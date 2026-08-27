@@ -1,7 +1,11 @@
 import { Response } from 'express';
 import * as economyService from '../services/economy.service';
 import * as economyP1ReadService from '../services/economy-p1-read.service';
+import mongoose, { Types } from 'mongoose';
 import * as economyP1BudgetService from '../services/economy-p1-budget.service';
+import * as economyP1StreakService from '../services/economy-p1-streak.service';
+import { IDEMPOTENCY_HEADER } from '../middleware/idempotency.middleware';
+import { emitToUser } from '../config/socket';
 import { isP1Enabled } from '../services/feature-flag.service';
 import { AppError } from '../middleware/error.middleware';
 import { resolveTimeZone, weekKey as currentWeekKey } from '../utils/economy-period';
@@ -98,4 +102,50 @@ export async function updateBudgetP1(req: AuthenticatedRequest, res: Response): 
   });
 
   sendSuccess(res, { weeklyBudget: budget });
+}
+
+/**
+ * POST /api/households/:householdId/economy/p1/ice
+ *
+ * Buy one streak ice from the caller's personal wallet (B9, PDR-019).
+ *
+ * Transactional: the balance check, the wallet debit and the reserve
+ * increment are one unit, so a failure can never leave a member paying for an
+ * ice they did not receive. `Idempotency-Key` doubles as the operation id, so
+ * a retried tap after a timeout hits the ledger's unique index rather than
+ * buying a second one.
+ */
+export async function buyIceP1(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const householdId = req.params.householdId;
+  const userId = req.user!.userId;
+
+  if (!(await isP1Enabled(householdId))) {
+    throw new AppError('The P1 economy is not enabled for this household', 409);
+  }
+
+  const operationId = req.get(IDEMPOTENCY_HEADER) ?? new Types.ObjectId().toString();
+
+  const session = await mongoose.startSession();
+  let result: economyP1StreakService.BuyIceResult | null = null;
+  try {
+    await session.withTransaction(async () => {
+      result = await economyP1StreakService.buyIce(userId, householdId, operationId, session);
+    });
+  } finally {
+    await session.endSession();
+  }
+
+  if (!result) {
+    throw new AppError('Could not complete the ice purchase', 500);
+  }
+  const purchase = result as economyP1StreakService.BuyIceResult;
+
+  // After the commit: a socket event cannot be un-emitted.
+  emitToUser(userId, 'economy:ice_purchased', {
+    iceReserve: purchase.iceReserve,
+    spent: purchase.spent,
+    balance: purchase.balance,
+  });
+
+  sendSuccess(res, purchase);
 }
