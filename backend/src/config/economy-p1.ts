@@ -14,12 +14,17 @@
  * ── Provenance of every number below ──────────────────────────────────────
  * Each constant is tagged with where it comes from:
  *
- *   [PDR]     Fixed by an accepted product decision or by UX-P1-SPEC.md.
- *             Changing it needs a product decision, not a code review.
- *   [PROPUESTA] Proposed here because no product decision fixes it. Every one
- *             of these carries a PENDIENTE REVISIÓN DEL DUEÑO marker and the
- *             reasoning behind the value, so the review has something to
- *             argue with instead of a bare magic number.
+ *   [PDR]      Fixed by an accepted product decision or by UX-P1-SPEC.md.
+ *              Changing it needs a product decision, not a code review.
+ *   [APROBADA] No PDR fixes it: proposed in B1 with the reasoning below and
+ *              approved by the owner on 2026-08-26. Same standing as a [PDR]
+ *              from here on — the tag records that the number came from a
+ *              design proposal rather than a product decision, which is what
+ *              tells a future reader where to go to revisit it.
+ *
+ * The XP constants and the two level curves are NOT independent: the curves
+ * are calibrated against TASK_PERSONAL_XP = 10. Changing that value means
+ * re-deriving both, not adjusting one of them.
  */
 
 /* ────────────────────────────────────────────────────────────────────────
@@ -44,7 +49,7 @@ export const WEEKLY_CAP_COINS = 200;
 export const BUDGET_ALLOCATION_DAYS = 6;
 
 /**
- * [PROPUESTA] PENDIENTE REVISIÓN DEL DUEÑO.
+ * [APROBADA] Aprobada por el dueño el 2026-08-26.
  *
  * Fraction of each member's weekly cap held back for the "tramo común" that
  * funds unassigned tasks (owner decision P3, 2026-08-26: an unassigned task
@@ -65,7 +70,7 @@ export const BUDGET_ALLOCATION_DAYS = 6;
 export const COMMON_TRANCHE_FRACTION = 0.2;
 
 /**
- * [PROPUESTA] PENDIENTE REVISIÓN DEL DUEÑO.
+ * [APROBADA] Aprobada por el dueño el 2026-08-26.
  *
  * Fallback coin value for one task completion when no weekly plan has been
  * built yet (a brand-new member, or the very first completion of a week
@@ -82,7 +87,7 @@ export const DEFAULT_TASK_COINS = 5;
  * ──────────────────────────────────────────────────────────────────────── */
 
 /**
- * [PROPUESTA] PENDIENTE REVISIÓN DEL DUEÑO.
+ * [APROBADA] Aprobada por el dueño el 2026-08-26.
  *
  * Personal XP granted for the first completion of a task instance.
  *
@@ -96,7 +101,7 @@ export const DEFAULT_TASK_COINS = 5;
 export const TASK_PERSONAL_XP = 10;
 
 /**
- * [PROPUESTA] PENDIENTE REVISIÓN DEL DUEÑO.
+ * [APROBADA] Aprobada por el dueño el 2026-08-26.
  *
  * Household XP granted for the same completion, on top of the personal grant.
  *
@@ -109,7 +114,7 @@ export const TASK_PERSONAL_XP = 10;
 export const TASK_HOUSEHOLD_XP = 10;
 
 /**
- * [PROPUESTA] PENDIENTE REVISIÓN DEL DUEÑO.
+ * [APROBADA] Aprobada por el dueño el 2026-08-26.
  *
  * Cumulative personal XP required to REACH level N: `50 * N * (N - 1)`.
  *
@@ -128,7 +133,7 @@ export const TASK_HOUSEHOLD_XP = 10;
 export const PERSONAL_LEVEL_CURVE_FACTOR = 50;
 
 /**
- * [PROPUESTA] PENDIENTE REVISIÓN DEL DUEÑO.
+ * [APROBADA] Aprobada por el dueño el 2026-08-26.
  *
  * Same curve shape for the household, with a factor of 100:
  * `100 * N * (N - 1)`.
@@ -223,7 +228,7 @@ export const MAX_ICE_RESERVE = 2;
  * ──────────────────────────────────────────────────────────────────────── */
 
 /**
- * [PROPUESTA] PENDIENTE REVISIÓN DEL DUEÑO.
+ * [APROBADA] Aprobada por el dueño el 2026-08-26.
  *
  * How far in the past a client-supplied `occurredAt` may sit before the
  * server refuses to honour it. TD-066-DESIGN §4 requires "una ventana
@@ -240,7 +245,7 @@ export const MAX_ICE_RESERVE = 2;
 export const OCCURRED_AT_MAX_PAST_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
- * [PROPUESTA] PENDIENTE REVISIÓN DEL DUEÑO.
+ * [APROBADA] Aprobada por el dueño el 2026-08-26.
  *
  * How far ahead of server time an `occurredAt` may sit. Not zero, because a
  * device clock a little fast is ordinary and must not have its completions
