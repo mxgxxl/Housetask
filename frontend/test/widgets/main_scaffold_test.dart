@@ -6,6 +6,7 @@ import 'package:homesync/data/datasources/remote/api_service.dart';
 import 'package:homesync/data/models/household.dart';
 import 'package:homesync/data/repositories/auth_repository.dart';
 import 'package:homesync/presentation/cubit/auth_cubit.dart';
+import 'package:homesync/presentation/cubit/economy_p1_cubit.dart';
 import 'package:homesync/presentation/cubit/household_cubit.dart';
 import 'package:homesync/presentation/cubit/pet_cubit.dart';
 import 'package:homesync/presentation/cubit/shopping_cubit.dart';
@@ -35,6 +36,10 @@ Widget _host({
   required PetCubit petCubit,
   required AuthCubit authCubit,
   required SocketCubit socketCubit,
+  // TD-066 F2: MainScaffold now warms EconomyP1Cubit with the household and
+  // refreshes it on the Mascota tab. Defaulted for the same reason as the
+  // timeline above — these tests assert on the nav, not on the economy.
+  EconomyP1Cubit? economyP1Cubit,
 }) {
   return MaterialApp(
     home: MultiBlocProvider(
@@ -48,6 +53,13 @@ Widget _host({
         BlocProvider<ShoppingCubit>.value(value: shoppingCubit),
         BlocProvider<PetCubit>.value(value: petCubit),
         BlocProvider<SocketCubit>.value(value: socketCubit),
+        BlocProvider<EconomyP1Cubit>.value(
+          value: economyP1Cubit ??
+              EconomyP1Cubit(
+                FakeEconomyP1Repository(),
+                connectivity: FakeConnectivityService(),
+              ),
+        ),
       ],
       child: const MainScaffold(),
     ),

@@ -8,6 +8,7 @@ import 'package:homesync/data/models/paginated_response.dart';
 import 'package:homesync/data/models/task.dart';
 import 'package:homesync/data/repositories/auth_repository.dart';
 import 'package:homesync/presentation/cubit/auth_cubit.dart';
+import 'package:homesync/presentation/cubit/economy_p1_cubit.dart';
 import 'package:homesync/presentation/cubit/household_cubit.dart';
 import 'package:homesync/presentation/cubit/pet_cubit.dart';
 import 'package:homesync/presentation/cubit/shopping_cubit.dart';
@@ -66,6 +67,15 @@ Widget _host({
         BlocProvider<ShoppingCubit>.value(value: shoppingCubit),
         BlocProvider<PetCubit>.value(value: petCubit),
         BlocProvider<SocketCubit>.value(value: socketCubit),
+        // TD-066 F2: the IndexedStack builds every page up front, PetPage
+        // included, and PetPage now hosts the "Mi progreso" section. Its
+        // state is `initial` here, so the section renders nothing.
+        BlocProvider<EconomyP1Cubit>.value(
+          value: EconomyP1Cubit(
+            FakeEconomyP1Repository(),
+            connectivity: FakeConnectivityService(),
+          ),
+        ),
       ],
       child: const MainScaffold(),
     ),

@@ -8,6 +8,7 @@ import '../../config/theme.dart';
 import '../../data/models/pet.dart';
 import '../cubit/pet_cubit.dart';
 import '../widgets/common.dart';
+import '../widgets/economy_p1_progress_section.dart';
 import 'pet_shop_page.dart';
 
 /// Mascota tab (PDR-001 A3): adoption proposal/confirmation/cancellation,
@@ -38,22 +39,35 @@ class PetPage extends StatelessWidget {
                 ),
             ],
           ),
-          body: switch (state.status) {
-            PetStatusUi.initial ||
-            PetStatusUi.loading =>
-              const Center(child: CircularProgressIndicator()),
-            PetStatusUi.error => EmptyState(
-                icon: Icons.error_outline,
-                title: state.error ?? 'No se pudo cargar la mascota',
-                action: ElevatedButton(
-                  onPressed: () => context.read<PetCubit>().refresh(),
-                  child: const Text('Reintentar'),
-                ),
+          // "Mi progreso" sits above whichever pet view is showing (owner
+          // decision D1). Deliberately OUTSIDE the status switch: a member's
+          // wallet, streak and level exist whether or not the household has
+          // adopted a pet, so gating them behind "adopt one first" would hide
+          // real progress. It collapses to a zero-height box while P1 is off,
+          // which is every household today, leaving this layout unchanged.
+          body: Column(
+            children: [
+              const EconomyP1ProgressSection(),
+              Expanded(
+                child: switch (state.status) {
+                  PetStatusUi.initial ||
+                  PetStatusUi.loading =>
+                    const Center(child: CircularProgressIndicator()),
+                  PetStatusUi.error => EmptyState(
+                      icon: Icons.error_outline,
+                      title: state.error ?? 'No se pudo cargar la mascota',
+                      action: ElevatedButton(
+                        onPressed: () => context.read<PetCubit>().refresh(),
+                        child: const Text('Reintentar'),
+                      ),
+                    ),
+                  PetStatusUi.noPet => const _AdoptionProposalView(),
+                  PetStatusUi.pendingRequest => _PendingRequestView(state: state),
+                  PetStatusUi.hasPet => _CareView(state: state),
+                },
               ),
-            PetStatusUi.noPet => const _AdoptionProposalView(),
-            PetStatusUi.pendingRequest => _PendingRequestView(state: state),
-            PetStatusUi.hasPet => _CareView(state: state),
-          },
+            ],
+          ),
         );
       },
     );
