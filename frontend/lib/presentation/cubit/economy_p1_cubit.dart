@@ -57,6 +57,9 @@ enum EconomyP1NoticeKind {
   iceConsumed,
   iceRefunded,
   streakBroken,
+
+  /// A cancelled joint goal returned this member's coins (TD-066 F3).
+  savingsRefunded,
 }
 
 /// One thing worth telling the member about.
@@ -511,6 +514,8 @@ class EconomyP1Cubit extends Cubit<EconomyP1State> {
         _applyLevelUp(json);
       case 'economy:milestone':
         _applyMilestone(json);
+      case 'economy:savings_refunded':
+        _applySavingsRefunded(json);
       default:
         // A name this build does not know. The server is ahead of the app;
         // refetching is the only honest response.
@@ -751,6 +756,32 @@ class EconomyP1Cubit extends Cubit<EconomyP1State> {
         EconomyP1NoticeKind.milestone,
         '$value tareas completadas. Cada una contó.',
         value: value,
+      ),
+    ));
+  }
+
+  /// `{ goalId, amount }` — a cancelled joint goal gave this member's coins
+  /// back (TD-066 B10, wired up in F3).
+  ///
+  /// The balance grows; the weekly budget does NOT. A contribution was spent
+  /// out of the wallet, not out of the week's release, so `remaining` was
+  /// never touched on the way in and must not be credited on the way back —
+  /// doing so would hand the member a week's worth of extra claimable coins
+  /// every time a goal was cancelled.
+  ///
+  /// This is the private half of `household:savings_goal_cancelled`, which
+  /// clears the goal for everyone without saying who got what back.
+  void _applySavingsRefunded(Map<String, dynamic> json) {
+    final amount = _int(json['amount']);
+    emit(state.copyWith(
+      wallet: WalletPersonal(
+        balance: state.wallet.balance + amount,
+        dailyReleased: state.wallet.dailyReleased,
+        remaining: state.wallet.remaining,
+      ),
+      notice: _nextNotice(
+        EconomyP1NoticeKind.savingsRefunded,
+        'La meta conjunta se canceló: recuperas $amount 🪙',
       ),
     ));
   }

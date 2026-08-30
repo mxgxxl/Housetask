@@ -14,6 +14,7 @@ import 'data/repositories/task_repository.dart';
 import 'presentation/cubit/auth_cubit.dart';
 import 'presentation/cubit/economy_p1_cubit.dart';
 import 'presentation/cubit/household_cubit.dart';
+import 'presentation/cubit/household_economy_cubit.dart';
 import 'presentation/cubit/pet_cubit.dart';
 import 'presentation/cubit/shopping_cubit.dart';
 import 'presentation/cubit/socket_cubit.dart';
@@ -82,6 +83,11 @@ class HomeSyncApp extends StatelessWidget {
           // TD-066 F2. Created before SocketCubit so the personal-room
           // `economy:*` events have somewhere to land from the first frame.
           BlocProvider(create: (_) => EconomyP1Cubit(economyP1Repo)),
+          // TD-066 F3, the household-room half. A separate cubit rather than
+          // more fields on EconomyP1Cubit: the two halves have different
+          // audiences, and keeping them apart is what stops a shared widget
+          // from being one `copyWith` away from a personal wallet.
+          BlocProvider(create: (_) => HouseholdEconomyCubit(economyP1Repo)),
           BlocProvider(
             create: (ctx) => SocketCubit(
               socketService,
@@ -92,6 +98,7 @@ class HomeSyncApp extends StatelessWidget {
               ctx.read<PetCubit>(),
               timeline: ctx.read<TimelineCubit>(),
               economyP1: ctx.read<EconomyP1Cubit>(),
+              householdEconomy: ctx.read<HouseholdEconomyCubit>(),
             ),
           ),
         ],

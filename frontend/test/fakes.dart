@@ -911,6 +911,55 @@ PersonalEconomy buildPersonalEconomy({
   );
 }
 
+/// Builds a `HouseholdEconomy` — the shared half (TD-066 F3).
+///
+/// [members] takes plain records so a test can spell a roster out inline; the
+/// list is passed through in the order given, because JOIN ORDER is the thing
+/// most of these tests are about (UX-P1-SPEC §0 rules out a leaderboard, and
+/// re-sorting this list is all it would take to build one).
+HouseholdEconomy buildHouseholdEconomy({
+  bool enabled = true,
+  int level = 1,
+  int xp = 0,
+  int xpIntoLevel = 0,
+  int xpForNextLevel = 0,
+  int tasksCompleted = 0,
+  List<String> unlocks = const [],
+  List<HouseholdMemberProgress> members = const [],
+  SavingsGoal? activeSavingsGoal,
+}) {
+  return HouseholdEconomy(
+    enabled: enabled,
+    householdProgress: ProgressP1(
+      xp: xp,
+      level: level,
+      unlocks: unlocks,
+      tasksCompleted: tasksCompleted,
+      xpIntoLevel: xpIntoLevel,
+      xpForNextLevel: xpForNextLevel,
+      xpToNextLevel: xpForNextLevel - xpIntoLevel,
+    ),
+    members: members,
+    activeSavingsGoal: activeSavingsGoal,
+  );
+}
+
+/// One roster row, in the shape the household endpoint sends.
+HouseholdMemberProgress buildMemberProgress(
+  String userId, {
+  String name = '',
+  int level = 1,
+  int xp = 0,
+  String? avatarUrl,
+}) =>
+    HouseholdMemberProgress(
+      userId: userId,
+      name: name.isEmpty ? userId : name,
+      level: level,
+      xp: xp,
+      avatarUrl: avatarUrl,
+    );
+
 /// Both halves. `household.enabled` mirrors [enabled] because
 /// `EconomyP1.enabled` requires BOTH, and a fake that left the household half
 /// off would hide the section in every test for a reason the test never
@@ -918,11 +967,12 @@ PersonalEconomy buildPersonalEconomy({
 EconomyP1 buildEconomyP1({
   bool enabled = true,
   PersonalEconomy? personal,
+  HouseholdEconomy? household,
   DateTime? refreshedAt,
 }) {
   return EconomyP1(
     personal: personal ?? buildPersonalEconomy(enabled: enabled),
-    household: HouseholdEconomy(enabled: enabled),
+    household: household ?? buildHouseholdEconomy(enabled: enabled),
     refreshedAt: refreshedAt ?? DateTime.utc(2026, 8, 30, 12),
   );
 }
@@ -954,7 +1004,7 @@ class FakeEconomyP1Repository implements EconomyP1Repository {
   @override
   bool lastLoadWasFromCache = false;
 
-  FakeEconomyP1Repository({this.economy, this.cachedEconomy});
+  FakeEconomyP1Repository({this.economy, this.cachedEconomy, this.loadError});
 
   @override
   Future<EconomyP1> load(String householdId, {required String timeZone}) async {

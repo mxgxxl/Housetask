@@ -265,6 +265,67 @@ void main() {
       expect(cached.household.activeSavingsGoal!.itemId, 'glasses');
     });
 
+    test('two concurrent reads of one household share a single round trip', () async {
+      // TD-066 F3 gave this snapshot a SECOND reader — HouseholdEconomyCubit
+      // for the shared half, beside EconomyP1Cubit for the personal one — and
+      // main_scaffold loads both in the same frame on entering a household.
+      // Without coalescing that is four requests for two endpoints, every
+      // time.
+      final adapter = _RecordingAdapter([
+        () => _json(_envelope(_personalJson()), 200),
+        () => _json(_envelope(_householdJson()), 200),
+      ]);
+      final repo = _repoWith(adapter);
+
+      final results = await Future.wait([
+        repo.load('h1', timeZone: 'Europe/Madrid'),
+        repo.load('h1', timeZone: 'Europe/Madrid'),
+      ]);
+
+      expect(adapter.requests, hasLength(2));
+      // Both callers get the same coherent reading, not two that could differ.
+      expect(results.first.personal.wallet.balance,
+          results.last.personal.wallet.balance);
+    });
+
+    test('a later read still goes to the network', () async {
+      // The merge only ever covers callers that overlap in time: a refresh
+      // after the first settled must not be served the old answer.
+      final adapter = _RecordingAdapter([
+        () => _json(_envelope(_personalJson()), 200),
+        () => _json(_envelope(_householdJson()), 200),
+      ]);
+      final repo = _repoWith(adapter);
+
+      await repo.load('h1', timeZone: 'UTC');
+      await repo.load('h1', timeZone: 'UTC');
+
+      expect(adapter.requests, hasLength(4));
+    });
+
+    test('reads that disagree on the timezone are not merged', () async {
+      // The zone changes the answer: PDR-013 makes Sunday release nothing, so
+      // the day boundary decides the budget.
+      final adapter = _RecordingAdapter([
+        () => _json(_envelope(_personalJson()), 200),
+        () => _json(_envelope(_householdJson()), 200),
+      ]);
+      final repo = _repoWith(adapter);
+
+      await Future.wait([
+        repo.load('h1', timeZone: 'Europe/Madrid'),
+        repo.load('h1', timeZone: 'America/Bogota'),
+      ]);
+
+      expect(adapter.requests, hasLength(4));
+      expect(
+        adapter.requests
+            .where((r) => r.path.contains('/me'))
+            .map((r) => r.queryParameters['timeZone']),
+        containsAll(['Europe/Madrid', 'America/Bogota']),
+      );
+    });
+
     test('falls back to the cached snapshot when the network fails', () async {
       // A stale wallet beats an error screen; `refreshedAt` lets the UI say
       // how stale it is.

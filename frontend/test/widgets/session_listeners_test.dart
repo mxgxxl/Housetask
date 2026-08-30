@@ -17,6 +17,7 @@ import 'package:homesync/data/repositories/auth_repository.dart';
 import 'package:homesync/presentation/cubit/auth_cubit.dart';
 import 'package:homesync/presentation/cubit/economy_p1_cubit.dart';
 import 'package:homesync/presentation/cubit/household_cubit.dart';
+import 'package:homesync/presentation/cubit/household_economy_cubit.dart';
 import 'package:homesync/presentation/cubit/pet_cubit.dart';
 import 'package:homesync/presentation/cubit/shopping_cubit.dart';
 import 'package:homesync/presentation/cubit/socket_cubit.dart';
@@ -141,6 +142,7 @@ Widget _host({
   required StatsCubit statsCubit,
   required SocketCubit socketCubit,
   EconomyP1Cubit? economyP1Cubit,
+  HouseholdEconomyCubit? householdEconomyCubit,
 }) {
   return MultiBlocProvider(
     providers: [
@@ -160,6 +162,13 @@ Widget _host({
               FakeEconomyP1Repository(),
               connectivity: FakeConnectivityService(),
             ),
+      ),
+      // TD-066 F3: the household half is reset on logout for the same
+      // reason — the roster names and the joint goal are the previous
+      // account's, not the next one's.
+      BlocProvider<HouseholdEconomyCubit>.value(
+        value: householdEconomyCubit ??
+            HouseholdEconomyCubit(FakeEconomyP1Repository()),
       ),
     ],
     child: SessionListeners(

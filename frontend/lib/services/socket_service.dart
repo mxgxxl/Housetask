@@ -112,7 +112,7 @@ class SocketService {
   /// The personal-room event names, in CLAUDE.md's documented order.
   ///
   /// Exposed so a test can assert the wiring covers exactly this set rather
-  /// than re-typing ten strings that would drift from the ones subscribed.
+  /// than re-typing eleven strings that would drift from the ones subscribed.
   static const List<String> economyP1Events = [
     'economy:reward',
     'economy:budget_updated',
@@ -124,6 +124,35 @@ class SocketService {
     'economy:ice_purchased',
     'economy:level_up',
     'economy:milestone',
+    // Added by TD-066 F3. It is a PERSONAL event — a refund lands in one
+    // member's wallet — even though what triggers it is the household-wide
+    // cancellation of a joint goal. F2 listed the ten events the personal
+    // economy emitted on its own and left this one unsubscribed, so a
+    // cancelled goal credited coins the app never showed until the next read.
+    'economy:savings_refunded',
+  ];
+
+  /// Household-room P1 economy events (TD-066 F3).
+  ///
+  /// The counterpart of [onEconomyP1Updated] on the other room. These carry
+  /// only what the whole household may see — pooled XP, shared levels and the
+  /// joint goal with its explicitly public per-member breakdown (UX-P1-SPEC
+  /// §4) — never a wallet, a budget or a streak.
+  void onHouseholdEconomyUpdated(void Function(String event, dynamic data) cb) {
+    for (final e in householdEconomyEvents) {
+      _socket?.on(e, (data) => cb(e, data));
+    }
+  }
+
+  /// The household-room event names, in CLAUDE.md's documented order.
+  static const List<String> householdEconomyEvents = [
+    'household:xp_updated',
+    'household:level_up',
+    'household:milestone',
+    'household:savings_goal_created',
+    'household:savings_contribution',
+    'household:savings_goal_unlocked',
+    'household:savings_goal_cancelled',
   ];
 
   void off(String event) => _socket?.off(event);

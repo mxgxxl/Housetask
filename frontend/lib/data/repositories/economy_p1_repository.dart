@@ -43,12 +43,44 @@ class EconomyP1Repository {
 
   String _base(String householdId) => '/households/$householdId/economy/p1';
 
+  /// Reads in flight, keyed by the household and timezone they were started
+  /// for, so genuinely concurrent callers share one round trip.
+  ///
+  /// This exists because TWO cubits now read this snapshot — EconomyP1Cubit
+  /// for the personal half, HouseholdEconomyCubit for the shared one (F3) —
+  /// and `main_scaffold.dart` loads both in the same frame on entering a
+  /// household. Without coalescing that is four HTTP requests for two
+  /// endpoints, every time. The key includes the timezone because it changes
+  /// the answer: two reads that disagree on the zone are not the same read
+  /// (PDR-013 makes Sunday release nothing, so the day boundary decides the
+  /// budget).
+  ///
+  /// Cleared when the future settles, so this only ever merges callers that
+  /// overlap in time — a later refresh always goes to the network.
+  final Map<String, Future<EconomyP1>> _inFlight = {};
+
   /// Both halves of the economy, cached as one snapshot.
   ///
   /// The two endpoints are fetched together and stored together: they are one
   /// coherent reading, and a screen that mixed a fresh personal half with a
   /// stale household half would show a state that never existed.
-  Future<EconomyP1> load(String householdId, {required String timeZone}) async {
+  Future<EconomyP1> load(String householdId, {required String timeZone}) {
+    final key = '$householdId|$timeZone';
+    final existing = _inFlight[key];
+    if (existing != null) return existing;
+
+    // A BLOCK body, deliberately: `Map.remove` returns the value it removed —
+    // which here is this very future — and `whenComplete` waits on a future
+    // its callback returns. An arrow body would make the read await itself
+    // and hang forever.
+    final future = _load(householdId, timeZone: timeZone).whenComplete(() {
+      _inFlight.remove(key);
+    });
+    _inFlight[key] = future;
+    return future;
+  }
+
+  Future<EconomyP1> _load(String householdId, {required String timeZone}) async {
     try {
       final personalJson = await _api.get(
         '${_base(householdId)}/me',

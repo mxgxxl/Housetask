@@ -460,6 +460,8 @@ class _NoticeBanner extends StatelessWidget {
       EconomyP1NoticeKind.iceRefunded =>
         _iceBlue,
       EconomyP1NoticeKind.streakMilestone => _flameCoral,
+      // Coins coming back are coins: amber, the wallet's colour (§2).
+      EconomyP1NoticeKind.savingsRefunded => _coinAmber,
       // A reset is stated plainly, never in an alarm colour: PDR-019 keeps
       // level, XP and coins intact and the copy says so.
       _ => AppColors.textSecondary,

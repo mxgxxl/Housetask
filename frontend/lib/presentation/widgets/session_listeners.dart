@@ -6,6 +6,7 @@ import '../../services/notification_service.dart';
 import '../cubit/auth_cubit.dart';
 import '../cubit/economy_p1_cubit.dart';
 import '../cubit/household_cubit.dart';
+import '../cubit/household_economy_cubit.dart';
 import '../cubit/pet_cubit.dart';
 import '../cubit/shopping_cubit.dart';
 import '../cubit/socket_cubit.dart';
@@ -72,6 +73,9 @@ class SessionListeners extends StatelessWidget {
             // leaving them on screen for the next account is the same leak
             // TD-058 closed for tasks and shopping.
             context.read<EconomyP1Cubit>().reset();
+            // TD-066 F3: household XP is not private, but the roster is —
+            // names, levels and who has been contributing to the joint goal.
+            context.read<HouseholdEconomyCubit>().reset();
             Routes.navigatorKey.currentState
                 ?.pushNamedAndRemoveUntil(Routes.login, (route) => false);
           },

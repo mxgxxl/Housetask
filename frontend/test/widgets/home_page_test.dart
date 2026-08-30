@@ -10,6 +10,7 @@ import 'package:homesync/data/repositories/auth_repository.dart';
 import 'package:homesync/presentation/cubit/auth_cubit.dart';
 import 'package:homesync/presentation/cubit/economy_p1_cubit.dart';
 import 'package:homesync/presentation/cubit/household_cubit.dart';
+import 'package:homesync/presentation/cubit/household_economy_cubit.dart';
 import 'package:homesync/presentation/cubit/pet_cubit.dart';
 import 'package:homesync/presentation/cubit/shopping_cubit.dart';
 import 'package:homesync/presentation/cubit/socket_cubit.dart';
@@ -75,6 +76,12 @@ Widget _host({
             FakeEconomyP1Repository(),
             connectivity: FakeConnectivityService(),
           ),
+        ),
+        // TD-066 F3: PetPage hosts the «Hogar» section too, and MainScaffold
+        // warms it with the household. Its state is `initial` here, so the
+        // section renders nothing.
+        BlocProvider<HouseholdEconomyCubit>.value(
+          value: HouseholdEconomyCubit(FakeEconomyP1Repository()),
         ),
       ],
       child: const MainScaffold(),

@@ -5,6 +5,7 @@ import '../../services/cache_service.dart';
 import '../cubit/auth_cubit.dart';
 import '../cubit/economy_p1_cubit.dart';
 import '../cubit/household_cubit.dart';
+import '../cubit/household_economy_cubit.dart';
 import '../cubit/pet_cubit.dart';
 import '../cubit/shopping_cubit.dart';
 import '../cubit/socket_cubit.dart';
@@ -89,6 +90,12 @@ class _MainScaffoldState extends State<MainScaffold> {
     // TD-066 F2. Warmed up front like every other tab; while P1 is off the
     // read still answers a zeroed structure and the section stays hidden.
     context.read<EconomyP1Cubit>().load(householdId);
+    // TD-066 F3, the household half. It reads the SAME snapshot — the
+    // repository coalesces two concurrent loads of one household into one
+    // round trip, so this line costs no extra request. `currentUserId` is
+    // what lets the savings breakdown say «Tú» for one of its rows; null
+    // before the profile resolves costs that one label, not the read.
+    context.read<HouseholdEconomyCubit>().load(householdId, currentUserId: userId);
   }
 
   /// Every page below lives in an [IndexedStack], so switching tabs never
@@ -124,6 +131,11 @@ class _MainScaffoldState extends State<MainScaffold> {
       // EconomyP1Cubit coalesces concurrent refreshes, so a fast tab
       // switch is one request, not several.
       context.read<EconomyP1Cubit>().refresh();
+      // Same staleness, and one thing socket events cannot cover at all: no
+      // household event carries a HOUSEMATE's own level or XP — those only
+      // ever travel on that member's personal room — so the roster's figures
+      // move on this read and nowhere else.
+      context.read<HouseholdEconomyCubit>().refresh();
     }
   }
 

@@ -474,6 +474,30 @@ void main() {
     );
 
     blocTest<EconomyP1Cubit, EconomyP1State>(
+      'economy:savings_refunded credits the wallet but not the weekly budget',
+      build: () => _cubit(FakeEconomyP1Repository()),
+      seed: () => _ready(balance: 100, remaining: 30, dailyReleased: 10),
+      act: (cubit) => cubit.applyRealtime(
+        'economy:savings_refunded',
+        {'goalId': 'g1', 'amount': 40},
+      ),
+      verify: (cubit) {
+        expect(cubit.state.wallet.balance, 140);
+        // A contribution left the WALLET, never the week's release, so
+        // crediting `remaining` here would hand the member a week's worth of
+        // extra claimable coins every time a goal was cancelled.
+        expect(cubit.state.wallet.remaining, 30);
+        expect(cubit.state.wallet.dailyReleased, 10);
+        // Banner-class, not modal: TD-066 F3 routes the shared half of this
+        // (household:savings_goal_cancelled) to HouseholdEconomyCubit, which
+        // says nothing at all — only the personal figure is worth showing.
+        expect(cubit.state.notice!.kind, EconomyP1NoticeKind.savingsRefunded);
+        expect(cubit.state.notice!.message, contains('40 🪙'));
+        expect(cubit.state.celebration, isNull);
+      },
+    );
+
+    blocTest<EconomyP1Cubit, EconomyP1State>(
       'a malformed payload leaves the state intact instead of throwing',
       build: () => _cubit(FakeEconomyP1Repository()),
       seed: () => _ready(balance: 100),

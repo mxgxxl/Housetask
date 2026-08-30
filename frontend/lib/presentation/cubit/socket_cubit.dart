@@ -3,6 +3,7 @@ import '../../data/datasources/local/auth_local_datasource.dart';
 import '../../services/socket_service.dart';
 import 'economy_p1_cubit.dart';
 import 'household_cubit.dart';
+import 'household_economy_cubit.dart';
 import 'pet_cubit.dart';
 import 'shopping_cubit.dart';
 import 'task_cubit.dart';
@@ -10,7 +11,7 @@ import 'timeline_cubit.dart';
 
 /// Bridges the Socket.io connection to the feature cubits: it connects using
 /// the stored token, joins the active household room, and forwards realtime
-/// events to the Task, Shopping, Household, and Pet cubits.
+/// events to the Task, Shopping, Household, Pet and both economy cubits.
 class SocketCubit extends Cubit<bool> {
   final SocketService _socket;
   final AuthLocalDataSource _local;
@@ -26,6 +27,10 @@ class SocketCubit extends Cubit<bool> {
   /// today: a build with no economy section still wires up cleanly.
   final EconomyP1Cubit? _economyP1Cubit;
 
+  /// The household-room half of the same economy (TD-066 F3), optional for
+  /// the same reasons.
+  final HouseholdEconomyCubit? _householdEconomyCubit;
+
   bool _listenersBound = false;
 
   SocketCubit(
@@ -37,8 +42,10 @@ class SocketCubit extends Cubit<bool> {
     this._petCubit, {
     TimelineCubit? timeline,
     EconomyP1Cubit? economyP1,
+    HouseholdEconomyCubit? householdEconomy,
   })  : _timelineCubit = timeline,
         _economyP1Cubit = economyP1,
+        _householdEconomyCubit = householdEconomy,
         super(false);
 
   /// Connect with the stored access token and start listening for events.
@@ -84,6 +91,16 @@ class SocketCubit extends Cubit<bool> {
     // a GET per event — see EconomyP1Cubit.applyRealtime.
     final economy = _economyP1Cubit;
     if (economy != null) _socket.onEconomyP1Updated(economy.applyRealtime);
+    // TD-066 F3: the seven household-room `household:*` economy events, kept
+    // on a separate route to a separate cubit. The split is the privacy
+    // boundary made structural — personal events reach one member's devices,
+    // these reach every housemate — so a future event added to the wrong list
+    // fails to compile into the wrong cubit rather than quietly broadcasting
+    // a wallet.
+    final householdEconomy = _householdEconomyCubit;
+    if (householdEconomy != null) {
+      _socket.onHouseholdEconomyUpdated(householdEconomy.applyRealtime);
+    }
   }
 
   /// Join a household room (call after creating/joining a household).
