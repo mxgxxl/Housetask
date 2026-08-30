@@ -15,6 +15,7 @@ import {
 } from '../services/economy-p1-budget.service';
 import { COMMON_TRANCHE_FRACTION, DEFAULT_TASK_COINS, WEEKLY_CAP_COINS } from '../config/economy-p1';
 import { releasedThroughDay, weekKey } from '../utils/economy-period';
+import { recentInstantOnDay } from './p1-award';
 import { buildTestApp } from './setup';
 import {
   TestHousehold,
@@ -40,7 +41,12 @@ import {
  */
 let app: Server;
 
-const MONDAY = '2026-08-24T10:00:00.000Z';
+// A recent Monday, derived from the clock rather than pinned. A fixed date
+// EXPIRES: `occurredAt` is rejected as `too_old` past seven days, which is how
+// '2026-08-23T10:00:00.000Z' took two sibling suites down on 2026-08-30.
+// `recentInstantOnDay` keeps the property that mattered — a known day index —
+// without the expiry.
+const MONDAY = recentInstantOnDay(0);
 const ZONE = 'UTC';
 
 const COMMON_BUDGET = Math.floor(WEEKLY_CAP_COINS * COMMON_TRANCHE_FRACTION);

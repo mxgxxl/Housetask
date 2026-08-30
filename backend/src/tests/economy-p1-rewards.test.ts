@@ -15,7 +15,7 @@ import { resetP1EnabledResolver, setP1EnabledResolver } from '../services/featur
 import { TASK_HOUSEHOLD_XP, TASK_PERSONAL_XP, WEEKLY_CAP_COINS } from '../config/economy-p1';
 import { TASK_COINS } from '../config/economy';
 import { releasedThroughDay, weekKey } from '../utils/economy-period';
-import { unassignedAward, unassignedAwardToday } from './p1-award';
+import { recentInstantOnDay, unassignedAward, unassignedAwardToday } from './p1-award';
 import { buildTestApp } from './setup';
 import {
   TestHousehold,
@@ -37,11 +37,15 @@ import {
  */
 let app: Server;
 
-// A fixed Monday: 2026-08-24 is a Monday, so day index 0 releases the first
-// of the six allocations. Pinning the instant keeps the coin assertions from
-// depending on the day the suite happens to run.
-const MONDAY = '2026-08-24T10:00:00.000Z';
-const SUNDAY = '2026-08-23T10:00:00.000Z';
+// A recent Monday and Sunday, derived from the clock rather than pinned.
+// Pinning the instant is what these used to do, and it kept the coin
+// assertions independent of the day the suite runs — but a fixed date also
+// EXPIRES: `occurredAt` is rejected as `too_old` past seven days, so
+// '2026-08-23T10:00:00.000Z' stopped validating at 2026-08-30T10:00:00Z and
+// took these suites down mid-morning. `recentInstantOnDay` keeps the property
+// that mattered (a known day index) without the expiry.
+const MONDAY = recentInstantOnDay(0);
+const SUNDAY = recentInstantOnDay(6);
 const ZONE = 'UTC';
 
 /**
