@@ -1026,6 +1026,10 @@ class FakeEconomyP1Repository implements EconomyP1Repository {
       throw UnimplementedError('contribute is F4 surface');
 
   @override
-  Future<SavingsGoal> cancelSavingsGoal(String householdId, String goalId) async =>
+  Future<SavingsGoal> cancelSavingsGoal(
+    String householdId,
+    String goalId, {
+    required String operationId,
+  }) async =>
       throw UnimplementedError('cancelSavingsGoal is F4 surface');
 }
