@@ -9,7 +9,7 @@ import { InMemoryIdempotencyStore } from '../services/idempotency.store';
 import { resetP1EnabledResolver, setP1EnabledResolver } from '../services/feature-flag.service';
 import { TASK_HOUSEHOLD_XP, TASK_PERSONAL_XP, WEEKLY_CAP_COINS } from '../config/economy-p1';
 import { releasedOnDay, releasedThroughDay, weekKey } from '../utils/economy-period';
-import { unassignedAward } from './p1-award';
+import { recentInstantOnDay, unassignedAward } from './p1-award';
 import { buildTestApp } from './setup';
 import {
   TestHousehold,
@@ -33,13 +33,20 @@ let app: Server;
 let emitToUser: jest.SpyInstance;
 let emitToHousehold: jest.SpyInstance;
 
-const MONDAY = '2026-08-24T10:00:00.000Z';
-const SUNDAY = '2026-08-23T10:00:00.000Z';
+// A recent Monday and Sunday, derived from the clock rather than pinned.
+// Pinning the instant is what these used to do, and it kept the coin
+// assertions independent of the day the suite runs — but a fixed date also
+// EXPIRES: `occurredAt` is rejected as `too_old` past seven days, so
+// '2026-08-23T10:00:00.000Z' stopped validating at 2026-08-30T10:00:00Z and
+// took these suites down mid-morning. `recentInstantOnDay` keeps the property
+// that mattered (a known day index) without the expiry.
+const MONDAY = recentInstantOnDay(0);
+const SUNDAY = recentInstantOnDay(6);
 const ZONE = 'UTC';
 
-/** What an unassigned task pays on the pinned Monday, under the B8 plan. */
+/** What an unassigned task pays on that Monday, under the B8 plan. */
 const MONDAY_AWARD = unassignedAward(0);
-/** ...and on the pinned Sunday, when the whole week's remainder is available. */
+/** ...and on that Sunday, when the whole week's remainder is available. */
 const SUNDAY_AWARD = unassignedAward(6);
 
 beforeAll(async () => {
