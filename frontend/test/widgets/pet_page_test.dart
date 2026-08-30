@@ -2,15 +2,22 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homesync/presentation/cubit/economy_p1_cubit.dart';
+import 'package:homesync/data/models/economy_p1/economy_p1.dart';
+import 'package:homesync/presentation/cubit/household_economy_cubit.dart';
 import 'package:homesync/presentation/cubit/pet_cubit.dart';
 import 'package:homesync/presentation/pages/pet_page.dart';
 
 import '../fakes.dart';
 
-/// TD-066 F2: PetPage now hosts the "Mi progreso" section, which reads
-/// EconomyP1Cubit. Defaulted to a fresh one — its state is `initial`, so the
-/// section renders a zero-height box and every assertion below is unaffected.
-Widget _host(PetCubit cubit, {EconomyP1Cubit? economyP1Cubit}) {
+/// TD-066 F2/F3: PetPage now hosts the "Mi progreso" and «Hogar» sections,
+/// which read EconomyP1Cubit and HouseholdEconomyCubit. Defaulted to fresh
+/// ones — their state is `initial`, so both sections render zero-height boxes
+/// and every assertion below is unaffected.
+Widget _host(
+  PetCubit cubit, {
+  EconomyP1Cubit? economyP1Cubit,
+  HouseholdEconomyCubit? householdEconomyCubit,
+}) {
   return MaterialApp(
     home: MultiBlocProvider(
       providers: [
@@ -21,6 +28,10 @@ Widget _host(PetCubit cubit, {EconomyP1Cubit? economyP1Cubit}) {
                 FakeEconomyP1Repository(),
                 connectivity: FakeConnectivityService(),
               ),
+        ),
+        BlocProvider<HouseholdEconomyCubit>.value(
+          value: householdEconomyCubit ??
+              HouseholdEconomyCubit(FakeEconomyP1Repository()),
         ),
       ],
       child: const PetPage(),
@@ -266,6 +277,97 @@ void main() {
       // here is itself the assertion that the timer was cancelled.
       await tester.pumpWidget(const MaterialApp(home: SizedBox()));
       await tester.pumpAndSettle();
+    });
+  });
+
+  group('PetPage — P1 economy sections (TD-066 F3)', () {
+    /// A loaded, P1-enabled household with a roster long enough to be worth
+    /// a layout assertion.
+    HouseholdEconomyState readyHousehold({int members = 6}) =>
+        HouseholdEconomyState(
+          status: HouseholdEconomyStatus.ready,
+          enabled: true,
+          currentUserId: 'u0',
+          householdProgress: const ProgressP1(
+            level: 4,
+            xpIntoLevel: 100,
+            xpForNextLevel: 400,
+            xpToNextLevel: 300,
+          ),
+          members: [
+            for (var i = 0; i < members; i++)
+              buildMemberProgress('u$i', name: 'Miembro $i', level: i + 1, xp: i * 50),
+          ],
+        );
+
+    testWidgets('neither section renders while P1 is off', (tester) async {
+      // Every household today. Both cubits sit at `initial`, which is what
+      // the default host provides.
+      final cubit = PetCubit(FakePetRepository(pet: buildPet('p1')));
+      await cubit.load('h1', 'me');
+
+      await tester.pumpWidget(_host(cubit));
+      await tester.pump();
+
+      expect(find.text('Mi progreso'), findsNothing);
+      expect(find.text('Hogar'), findsNothing);
+      // The pet view has the tab to itself, exactly as before F2/F3.
+      expect(find.text('Michi'), findsOneWidget);
+    });
+
+    testWidgets('«Hogar» renders in the Mascota tab once P1 is on',
+        (tester) async {
+      final cubit = PetCubit(FakePetRepository(pet: buildPet('p1')));
+      await cubit.load('h1', 'me');
+      final household = HouseholdEconomyCubit(FakeEconomyP1Repository())
+        ..emit(readyHousehold(members: 2));
+
+      await tester.pumpWidget(_host(cubit, householdEconomyCubit: household));
+      await tester.pump();
+
+      expect(find.text('Hogar'), findsOneWidget);
+      expect(find.text('Nivel de hogar 4'), findsOneWidget);
+      // Deliberately OUTSIDE the pet status switch: shared progress exists
+      // whether or not the household has adopted anything.
+      expect(find.text('Michi'), findsOneWidget);
+      await household.close();
+    });
+
+    testWidgets('a long roster never squeezes the pet view off-screen',
+        (tester) async {
+      // The economy block is unbounded — the roster grows with the household
+      // — so a plain Column would hand `Expanded` a negative share and
+      // overflow. The 60% cap is what stops that; an overflow would surface
+      // here as a RenderFlex exception rather than a failed expectation.
+      final cubit = PetCubit(FakePetRepository(pet: buildPet('p1')));
+      await cubit.load('h1', 'me');
+      final household = HouseholdEconomyCubit(FakeEconomyP1Repository())
+        ..emit(readyHousehold(members: 40));
+
+      await tester.pumpWidget(_host(cubit, householdEconomyCubit: household));
+      await tester.pump();
+
+      // An overflow would surface as a RenderFlex exception here.
+      expect(tester.takeException(), isNull);
+
+      // And the pet keeps a real share of the tab rather than a sliver: the
+      // cap is 60% of the body, so whatever the roster's length the care
+      // view is laid out with at least the remaining 40%.
+      final bodyHeight = tester.getSize(find.byType(Scaffold)).height -
+          tester.getSize(find.byType(AppBar)).height;
+      final careHeight = tester.getSize(find.byType(RefreshIndicator)).height;
+      expect(careHeight, greaterThanOrEqualTo(bodyHeight * 0.4 - 1));
+
+      // The roster is longer than the cap allows, so the economy block is
+      // scrollable rather than clipped — nothing is unreachable.
+      expect(
+        find.descendant(
+          of: find.byType(PetPage),
+          matching: find.byType(SingleChildScrollView),
+        ),
+        findsWidgets,
+      );
+      await household.close();
     });
   });
 }

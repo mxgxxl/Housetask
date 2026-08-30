@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../config/theme.dart';
+import '../../core/utils/unlock_label.dart';
 import '../cubit/economy_p1_cubit.dart';
 import 'common.dart';
 import 'economy_p1_celebration.dart';
@@ -300,22 +301,15 @@ class _PersonalLevel extends StatelessWidget {
             runSpacing: 6,
             children: [
               for (final unlock in state.unlocks)
-                Pill(label: _unlockLabel(unlock), color: AppColors.secondary),
+                // `title:constante` → «Constante». Shared with the household
+                // track since F3, which needs the identical mapping — two
+                // copies would drift towards two names for one unlock.
+                Pill(label: unlockLabel(unlock), color: AppColors.secondary),
             ],
           ),
         ],
       ],
     );
-  }
-
-  /// `title:constante` → «Constante». The server sends namespaced ids and no
-  /// display names, so the id is humanised here rather than shown raw; an
-  /// unknown shape falls back to the id itself instead of vanishing.
-  static String _unlockLabel(String unlock) {
-    final value = unlock.contains(':') ? unlock.split(':').last : unlock;
-    if (value.isEmpty) return unlock;
-    final spaced = value.replaceAll('_', ' ').replaceAll('-', ' ');
-    return spaced[0].toUpperCase() + spaced.substring(1);
   }
 }
 

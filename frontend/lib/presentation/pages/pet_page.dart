@@ -9,6 +9,7 @@ import '../../data/models/pet.dart';
 import '../cubit/pet_cubit.dart';
 import '../widgets/common.dart';
 import '../widgets/economy_p1_progress_section.dart';
+import '../widgets/household_economy_section.dart';
 import 'pet_shop_page.dart';
 
 /// Mascota tab (PDR-001 A3): adoption proposal/confirmation/cancellation,
@@ -39,34 +40,57 @@ class PetPage extends StatelessWidget {
                 ),
             ],
           ),
-          // "Mi progreso" sits above whichever pet view is showing (owner
-          // decision D1). Deliberately OUTSIDE the status switch: a member's
-          // wallet, streak and level exist whether or not the household has
-          // adopted a pet, so gating them behind "adopt one first" would hide
-          // real progress. It collapses to a zero-height box while P1 is off,
-          // which is every household today, leaving this layout unchanged.
-          body: Column(
-            children: [
-              const EconomyP1ProgressSection(),
-              Expanded(
-                child: switch (state.status) {
-                  PetStatusUi.initial ||
-                  PetStatusUi.loading =>
-                    const Center(child: CircularProgressIndicator()),
-                  PetStatusUi.error => EmptyState(
-                      icon: Icons.error_outline,
-                      title: state.error ?? 'No se pudo cargar la mascota',
-                      action: ElevatedButton(
-                        onPressed: () => context.read<PetCubit>().refresh(),
-                        child: const Text('Reintentar'),
-                      ),
+          // "Mi progreso" and «Hogar» sit above whichever pet view is showing
+          // (owner decision D1). Deliberately OUTSIDE the status switch: a
+          // member's wallet, streak and level — and the household's shared
+          // level — exist whether or not the household has adopted a pet, so
+          // gating them behind "adopt one first" would hide real progress.
+          // Both collapse to zero-height boxes while P1 is off, which is
+          // every household today, leaving this layout unchanged.
+          //
+          // ── Why the cap, added with «Hogar» in F3 ──────────────────────
+          // The two sections together are unbounded: the roster grows with
+          // the household. A plain Column would hand `Expanded` a negative
+          // share once they exceeded the viewport and overflow the pet view
+          // off-screen. Capping the economy block at 60% of the body and
+          // scrolling it internally guarantees the pet keeps 40% whatever
+          // the household's size, and costs nothing while P1 is off: an
+          // empty block measures zero and `Expanded` still takes everything.
+          body: LayoutBuilder(
+            builder: (context, constraints) => Column(
+              children: [
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: constraints.maxHeight * 0.6),
+                  child: const SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        EconomyP1ProgressSection(),
+                        HouseholdEconomySection(),
+                      ],
                     ),
-                  PetStatusUi.noPet => const _AdoptionProposalView(),
-                  PetStatusUi.pendingRequest => _PendingRequestView(state: state),
-                  PetStatusUi.hasPet => _CareView(state: state),
-                },
-              ),
-            ],
+                  ),
+                ),
+                Expanded(
+                  child: switch (state.status) {
+                    PetStatusUi.initial ||
+                    PetStatusUi.loading =>
+                      const Center(child: CircularProgressIndicator()),
+                    PetStatusUi.error => EmptyState(
+                        icon: Icons.error_outline,
+                        title: state.error ?? 'No se pudo cargar la mascota',
+                        action: ElevatedButton(
+                          onPressed: () => context.read<PetCubit>().refresh(),
+                          child: const Text('Reintentar'),
+                        ),
+                      ),
+                    PetStatusUi.noPet => const _AdoptionProposalView(),
+                    PetStatusUi.pendingRequest => _PendingRequestView(state: state),
+                    PetStatusUi.hasPet => _CareView(state: state),
+                  },
+                ),
+              ],
+            ),
           ),
         );
       },
@@ -300,8 +324,7 @@ class _StatBar extends StatelessWidget {
           children: [
             Text(label,
                 style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
-            Text('${value.round()}%',
-                style: TextStyle(fontWeight: FontWeight.w700, color: _color)),
+            Text('${value.round()}%', style: TextStyle(fontWeight: FontWeight.w700, color: _color)),
           ],
         ),
         const SizedBox(height: 6),
@@ -348,8 +371,7 @@ class _CareButton extends StatelessWidget {
         ),
         if (disabledText != null) ...[
           const SizedBox(height: 4),
-          Text(disabledText!,
-              style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+          Text(disabledText!, style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
         ],
       ],
     );
