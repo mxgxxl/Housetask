@@ -108,6 +108,27 @@ enum IceUnavailableReason {
   noHousehold,
 }
 
+/// Which of UX-P1-SPEC §4's four "Línea de hoy" variants applies right now.
+///
+/// The CHOICE lives here rather than in the widget: picking between "spent
+/// out", "rest day" and "carry-over" is economy logic (PDR-013), and a widget
+/// that re-derived it from `remaining`/`dailyReleased` would be a second
+/// place for the Sunday rule to be got wrong. The widget only maps a variant
+/// to its sentence.
+enum TodayLineKind {
+  /// «Completaste tu recompensa de hoy; el progreso sigue contando».
+  spentOut,
+
+  /// «Día de descanso: tu progreso cuenta, las monedas descansan».
+  restDay,
+
+  /// «Hoy: N 🪙 (incluye M de días anteriores)».
+  carryOver,
+
+  /// «Hoy: N/M 🪙 disponibles».
+  normal,
+}
+
 enum EconomyP1Status { initial, loading, ready, failure }
 
 /// Everything "Mi progreso" renders (TD-066 F2).
@@ -188,11 +209,37 @@ class EconomyP1State extends Equatable {
   /// The week is spent AND nothing new released — not a rest day, just done.
   bool get isExhausted => wallet.dailyReleased == 0 && wallet.remaining <= 0;
 
+  /// Which "Línea de hoy" to show (UX-P1-SPEC §4).
+  ///
+  /// Order matters. Nothing claimable wins outright, because on a Sunday that
+  /// has been spent out the member has no coins either way and «día de
+  /// descanso» would read as though some were waiting. Only then does the
+  /// rest day apply, which is the case that cannot be inferred from
+  /// `remaining` alone: Sunday releases nothing yet still carries the week's
+  /// remainder (PDR-013).
+  TodayLineKind get todayLineKind {
+    if (wallet.remaining <= 0) return TodayLineKind.spentOut;
+    if (wallet.dailyReleased <= 0) return TodayLineKind.restDay;
+    if (wallet.remaining > wallet.dailyReleased) return TodayLineKind.carryOver;
+    return TodayLineKind.normal;
+  }
+
+  /// Coins still claimable that today's own allocation did not release —
+  /// the «(incluye M de días anteriores)» figure.
+  int get carriedOverCoins {
+    final carried = wallet.remaining - wallet.dailyReleased;
+    return carried > 0 ? carried : 0;
+  }
+
   IceUnavailableReason get iceUnavailableReason {
     if (!enabled) return IceUnavailableReason.flagOff;
     if (isBuyingIce) return IceUnavailableReason.inFlight;
-    if (streak.iceReserve >= kMaxIceReserve) return IceUnavailableReason.reserveFull;
-    if (wallet.balance < kIcePriceCoins) return IceUnavailableReason.insufficientCoins;
+    if (streak.iceReserve >= kMaxIceReserve) {
+      return IceUnavailableReason.reserveFull;
+    }
+    if (wallet.balance < kIcePriceCoins) {
+      return IceUnavailableReason.insufficientCoins;
+    }
     if (!isOnline) return IceUnavailableReason.offline;
     return IceUnavailableReason.none;
   }

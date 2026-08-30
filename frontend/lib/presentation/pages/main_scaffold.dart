@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../config/theme.dart';
 import '../../services/cache_service.dart';
 import '../cubit/auth_cubit.dart';
+import '../cubit/economy_p1_cubit.dart';
 import '../cubit/household_cubit.dart';
 import '../cubit/pet_cubit.dart';
 import '../cubit/shopping_cubit.dart';
@@ -85,6 +86,9 @@ class _MainScaffoldState extends State<MainScaffold> {
     if (userId != null) {
       context.read<PetCubit>().load(householdId, userId);
     }
+    // TD-066 F2. Warmed up front like every other tab; while P1 is off the
+    // read still answers a zeroed structure and the section stays hidden.
+    context.read<EconomyP1Cubit>().load(householdId);
   }
 
   /// Every page below lives in an [IndexedStack], so switching tabs never
@@ -114,6 +118,12 @@ class _MainScaffoldState extends State<MainScaffold> {
       // so without this the numbers stay at whatever they were when the app
       // started, however many tasks have been completed since.
       context.read<PetCubit>().refresh();
+      // Same staleness, same tab: "Mi progreso" lives here too, and while
+      // socket events keep it live for a P1 household, this covers a tab
+      // opened after a spell in the background with the socket down.
+      // EconomyP1Cubit coalesces concurrent refreshes, so a fast tab
+      // switch is one request, not several.
+      context.read<EconomyP1Cubit>().refresh();
     }
   }
 

@@ -1,14 +1,30 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:homesync/presentation/cubit/economy_p1_cubit.dart';
 import 'package:homesync/presentation/cubit/pet_cubit.dart';
 import 'package:homesync/presentation/pages/pet_page.dart';
 
 import '../fakes.dart';
 
-Widget _host(PetCubit cubit) {
+/// TD-066 F2: PetPage now hosts the "Mi progreso" section, which reads
+/// EconomyP1Cubit. Defaulted to a fresh one — its state is `initial`, so the
+/// section renders a zero-height box and every assertion below is unaffected.
+Widget _host(PetCubit cubit, {EconomyP1Cubit? economyP1Cubit}) {
   return MaterialApp(
-    home: BlocProvider<PetCubit>.value(value: cubit, child: const PetPage()),
+    home: MultiBlocProvider(
+      providers: [
+        BlocProvider<PetCubit>.value(value: cubit),
+        BlocProvider<EconomyP1Cubit>.value(
+          value: economyP1Cubit ??
+              EconomyP1Cubit(
+                FakeEconomyP1Repository(),
+                connectivity: FakeConnectivityService(),
+              ),
+        ),
+      ],
+      child: const PetPage(),
+    ),
   );
 }
 
