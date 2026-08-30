@@ -18,7 +18,7 @@ import {
   WEEKLY_CAP_COINS,
   xpRequiredForLevel,
 } from '../config/economy-p1';
-import { releasedOnDay, releasedThroughDay, weekKey } from '../utils/economy-period';
+import { dayIndexIn, releasedOnDay, releasedThroughDay, weekKey } from '../utils/economy-period';
 import { unassignedAward } from './p1-award';
 import { buildTestApp } from './setup';
 import {
@@ -571,12 +571,16 @@ describe('budget arithmetic surfaced by the read', () => {
     // Whatever today is when the suite runs, the reported figures must be the
     // ones the pure functions produce for that same day — the read must not
     // invent its own arithmetic.
-    const dayIndexFromRelease = [0, 1, 2, 3, 4, 5, 6].find(
-      (d) => releasedThroughDay(budget.weeklyCap, d) === budget.releasedCoins,
-    );
-    expect(dayIndexFromRelease).toBeDefined();
-    expect(res.body.data.wallet.dailyReleased).toBe(
-      releasedOnDay(budget.weeklyCap, dayIndexFromRelease!),
-    );
+    //
+    // The day index comes from the clock, the same way the read derives it,
+    // and NOT by inverting releasedCoins. That inversion is ambiguous exactly
+    // once a week: releasedThroughDay telescopes at `min(d + 1, 6)`, so
+    // Saturday and Sunday both equal the full cap, and a `.find()` over the
+    // week returns Saturday on a Sunday. The test then demanded Saturday's
+    // increment while the read correctly reported Sunday's zero (PDR-013), so
+    // this suite failed every Sunday — and only on a Sunday.
+    const dayIndex = dayIndexIn(new Date(), budget.periodTimeZone);
+    expect(budget.releasedCoins).toBe(releasedThroughDay(budget.weeklyCap, dayIndex));
+    expect(res.body.data.wallet.dailyReleased).toBe(releasedOnDay(budget.weeklyCap, dayIndex));
   });
 });
