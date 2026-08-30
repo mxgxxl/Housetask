@@ -430,7 +430,7 @@ to clients.
 <!-- sync-start: testing-standards -->
 ## 🧪 Testing Standards
 
-Testing stack installed: Jest + Supertest + mongodb-memory-server (backend); flutter_test + bloc_test (frontend). CI runs the full suite on every PR — 374 backend tests (27 suites) and 365 frontend tests as of 2026-08-25 (the previously documented 298/20 and 249 were stale; both counts re-measured against a green local run, not estimated), all in ONE blocking step: the `test/widgets/offline_banner_test.dart` allow-failure carve-out was removed on 2026-08-17 once TD-040 was root-caused and fixed.
+Testing stack installed: Jest + Supertest + mongodb-memory-server (backend); flutter_test + bloc_test (frontend). CI runs the full suite on every PR — as of 2026-08-27, 39 backend suites (`*.test.ts` files under `backend/src/tests/`, up from the 27 last documented on 2026-08-25 — TD-064 and TD-066 B5–B11 added coverage) with ~691 tests, and ~390 frontend tests (up from 365), all in ONE blocking step: the `test/widgets/offline_banner_test.dart` allow-failure carve-out was removed on 2026-08-17 once TD-040 was root-caused and fixed. The 39-suite figure is an exact file count; the ~691/~390 test-case totals are a static count of `it(`/`test(`/`testWidgets(`/`blocTest(` call sites, not a live run — this session could not reach the mongodb-memory-server binary download or a Flutter toolchain to re-measure the way the previous 374/365 figures were. Re-verify with a real run when convenient.
 
 - **Backend:** Jest + Supertest for integration tests
 - **Frontend:** `flutter_test` for widget tests, `bloc_test` for Cubit tests
