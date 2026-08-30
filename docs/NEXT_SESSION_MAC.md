@@ -28,6 +28,8 @@
 - 2026-08-19: TD-062 cerrado (marcador de propietario de la caché; otra cuenta ya no hereda la cola offline). Se abrió TD-063 (un fallo de red en el refresh se trata como sesión muerta).
 - 2026-08-19: TD-063 cerrado (solo un 401 mata la sesión; una desconexión ya no expulsa al login ni pierde la escritura en vuelo). Check de enlaces de docs extendido a CLAUDE.md.
 - 2026-08-25: **TD-001 cerrado.** Cutover completo a `HouseholdMember`; ADR-005 marcado como superseded.
+- 2026-08-25: **TD-064 cerrado.** Timeline con paginación keyset (backend) + TimelineCubit/vista con prefetch y offline (frontend, 4 commits).
+- 2026-08-27: **TD-066 backend B5–B11 completo** (sala socket user_<id>, lecturas p1, niveles/hitos, reparto semanal, rachas/hielos, hucha conjunta, script de migración/activación) + **F1** (modelos y repositorio frontend de economía P1). Runbook en `docs/TD-066-RUNBOOK.md`. Activación de P1 pendiente, manual por hogar.
 - 2026-08-17: PR #32 config fallback (Codex); PR #33 integración legacy
   (Claude); PR #34 sync (Codex, cerrado como superseded sin merge). Plan free de Codex activo y validado.
   gh instalado; Codex CLI instalado y autenticado.
@@ -46,10 +48,17 @@ en la colección `HouseholdMember` y las dos copias desnormalizadas
 Detalle completo, incluido el respaldo de lo eliminado, en
 [TECH_DEBT.md](TECH_DEBT.md).
 
-**Siguiente paso técnico: TD-064** (paginación del timeline por sesiones keyset),
-con **TD-067** (roles y administración) en paralelo — ambos son P0 y no dependen
-entre sí. Después **TD-066** (economía P1), cuyo único bloqueo era este cutover.
-Orden completo en [ROADMAP.md](ROADMAP.md).
+**TD-064 cerrado (2026-08-25)** y **TD-066 backend B5–B11 + frontend F1
+completos (2026-08-27)**: economía P1 tiene ya paginación de timeline,
+backend completo (wallets, XP dual, presupuesto, rachas, hucha, script de
+migración/activación con runbook) y los modelos/repositorio del frontend.
+
+**Siguiente paso técnico: TD-066 frontend F2–F4** (UI de economía P1 sobre
+F1 — wallets, XP dual, presupuesto, rachas, hucha en pantalla), con
+**TD-067** (roles y administración) en paralelo — ambos son P0 y no dependen
+entre sí. Recordatorio: verificar la entrega real por socket con dos
+dispositivos sigue pendiente (ver más abajo). Orden completo en
+[ROADMAP.md](ROADMAP.md).
 
 **Lo único de TD-001 que quedó sin verificar:** la entrega real por socket. Los
 14 tests de `td001-commit7-single-source.test.ts` prueban que el handshake
