@@ -1,11 +1,14 @@
 # Roadmap HomeSync
 
-> Última actualización: 2026-08-25
+> Última actualización: 2026-08-30
 
 ## Recién Completado (últimas 2 semanas)
 
 | Fecha | PR/Commit | Descripción | Impacto |
 |-------|-----------|-------------|---------|
+| 2026-08-27 | TD-066 F1 | Modelos y repositorio frontend de economía P1 (caché snapshot versionada, timeZone obligatoria). | Base para la UI (F2–F4). |
+| 2026-08-27 | TD-066 B5–B11 | Backend de economía P1 COMPLETO: sala socket user_<id>, lecturas p1, niveles/hitos, reparto semanal, rachas/hielos, hucha conjunta (Hard Rule 16b) y script de migración/activación con runbook. Flag apagado en los 7 hogares. | Economía P1 lista para activación manual por hogar. |
+| 2026-08-25 | TD-064 | Resolved: timeline con paginación keyset (backend) + TimelineCubit/vista con prefetch y offline (frontend, 4 commits). | Rendimiento — deja de re-pedir ventanas crecientes. |
 | 2026-08-25 | TD-001 | **Resolved**: cutover completo de la membresía a la colección `HouseholdMember`. Cinco fases con seis paradas, ventana de observación cerrada con cero divergencias, y las DOS copias desnormalizadas retiradas —`Household.members` y `User.households`— del esquema y de los datos (`$unset` aplicados el 2026-08-25). El handshake de socket lee ya la misma fuente que el HTTP. El contrato de la API no se movió en ningún despliegue: 130/130 checks idénticos en los seis runs de validación. Se cerró de paso un hueco de atomicidad que podía dejar hogares sin ninguna membresía. 359 tests | Arquitectura — desaparece la última fuente de verdad duplicada del dominio, y con ella el límite de 16MB por documento y el riesgo de divergencia que motivó ADR-005 |
 | 2026-08-19 | TD-063 | **Resolved**: `_refreshToken` devuelve tres desenlaces (rotado / rechazado / inalcanzable) en vez de `String?`, que era el root cause. Solo un 401 mata la sesión; sin respuesta, 5xx, 429, 403 y portal cautivo la conservan. Sin reintento, porque la rotación no es idempotente y un reintento dispara la detección de replay del backend. Se arregla además la otra mitad del daño: la escritura en vuelo se encola en vez de perderse. 11 tests | UX + corrección de datos — una desconexión pasajera dejaba al usuario en el login y le borraba la tarea que acababa de crear |
 | 2026-08-19 | TD-062 | **Resolved**: la caché de Hive lleva un marcador de propietario (`CacheOwner`, box propia) y `AuthCubit` lo comprueba en toda entrada a sesión —login, register y las dos ramas de `checkAuth`—, vaciándola antes de reclamarla si el usuario cambió (o si no hay marcador). Siempre ANTES de emitir `authenticated`: el orden es el arreglo, como en TD-057. Sin migración; `PendingOperation` intacto. 11 tests, 6 fallan sin el fix | Corrección de datos — la cola offline de una cuenta ya no se reproduce con el token de otra tras una expiración de sesión |
@@ -38,22 +41,24 @@
 
 ## Próximas Prioridades (ordenado)
 
-Con TD-001 cerrado, el orden de implementación de P0/P1/P2 queda desbloqueado:
-**TD-064 → TD-066 → TD-068/069 → TD-070 → TD-071/072**. TD-067 (roles y
-administración) puede ir en paralelo a TD-064: ambos son P0 y no dependen entre
-sí, y TD-067 construye sobre la autoridad que TD-001 acaba de dejar fijada.
+Con TD-001 cerrado y TD-064 resuelto, el orden de implementación de P0/P1/P2
+queda: **TD-066 frontend (F2–F4) → TD-068/069 → TD-070 → TD-071/072**. TD-067
+(roles y administración) va en paralelo a TD-066 F2–F4: ambos son P0 y no
+dependen entre sí, y TD-067 construye sobre la autoridad que TD-001 dejó
+fijada. El backend de TD-066 (B5–B11) ya está completo (2026-08-27); lo que
+queda es la UI sobre los modelos/repositorio de F1.
 
 | # | ID | Descripción | Esfuerzo | Bloqueante |
 |---|----|-------------|----------|------------|
-| 1 | TD-064 | Paginación del timeline: sesiones keyset y caché normalizada en lugar de refetch de ventanas crecientes | Alto | Ninguno |
-| 1b | TD-067 | Roles y administración: promoción/degradación, transferencia, salida voluntaria, destrucción del hogar | Alto | Ninguno (paralelo a TD-064) |
-| 2 | TD-066 | Refactor de economía P1: wallets personales, XP dual, presupuesto, rachas y hucha. **Desbloqueado**: su única dependencia era el cutover de TD-001 | Alto | Ninguno |
-| 3 | TD-068 / TD-069 | Recomendaciones por reglas y reparto inteligente de carga | Medio / Alto | TD-066 |
-| 4 | TD-070 | Dashboard de salud del hogar | Alto | TD-066, TD-068, TD-069 |
-| 5 | TD-071 / TD-072 | Reconocimiento entre miembros y deep-link de notificación | Medio / Alto | TD-070 (071) · TD-049 (072, push real) |
-| 6 | Validación PR #24 | Probar fix white screen en iPhone físico + limpiar debugPrints de diagnóstico | Bajo | Dispositivo físico |
-| 7 | Micro-pendientes | Ninguno bloquea nada; ver la lista de abajo | Bajo | Ninguno |
-| 8 | TD-054 | Ventana de token de acceso post-logout (bajo impacto, solo si el modelo de amenaza lo requiere) | Bajo | Ninguno |
+| ~~1~~ | ~~TD-064~~ | ~~Paginación del timeline: sesiones keyset y caché normalizada~~ — **Resolved 2026-08-25** | Alto | — |
+| 1 | TD-066 F2–F4 | UI de economía P1 (wallets, XP dual, presupuesto, rachas, hucha) sobre los modelos/repositorio de F1 y el backend B5–B11, ya completos | Alto | Ninguno |
+| 1b | TD-067 | Roles y administración: promoción/degradación, transferencia, salida voluntaria, destrucción del hogar | Alto | Ninguno (paralelo a TD-066 F2–F4) |
+| 2 | TD-068 / TD-069 | Recomendaciones por reglas y reparto inteligente de carga | Medio / Alto | TD-066 |
+| 3 | TD-070 | Dashboard de salud del hogar | Alto | TD-066, TD-068, TD-069 |
+| 4 | TD-071 / TD-072 | Reconocimiento entre miembros y deep-link de notificación | Medio / Alto | TD-070 (071) · TD-049 (072, push real) |
+| 5 | Validación PR #24 | Probar fix white screen en iPhone físico + limpiar debugPrints de diagnóstico | Bajo | Dispositivo físico |
+| 6 | Micro-pendientes | Ninguno bloquea nada; ver la lista de abajo | Bajo | Ninguno |
+| 7 | TD-054 | Ventana de token de acceso post-logout (bajo impacto, solo si el modelo de amenaza lo requiere) | Bajo | Ninguno |
 
 ## Producto — P1 (el cutover de TD-001 ya no lo bloquea)
 
