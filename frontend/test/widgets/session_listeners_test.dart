@@ -15,6 +15,7 @@ import 'package:homesync/data/models/shopping_item.dart';
 import 'package:homesync/data/models/task.dart';
 import 'package:homesync/data/repositories/auth_repository.dart';
 import 'package:homesync/presentation/cubit/auth_cubit.dart';
+import 'package:homesync/presentation/cubit/economy_p1_cubit.dart';
 import 'package:homesync/presentation/cubit/household_cubit.dart';
 import 'package:homesync/presentation/cubit/pet_cubit.dart';
 import 'package:homesync/presentation/cubit/shopping_cubit.dart';
@@ -139,6 +140,7 @@ Widget _host({
   required PetCubit petCubit,
   required StatsCubit statsCubit,
   required SocketCubit socketCubit,
+  EconomyP1Cubit? economyP1Cubit,
 }) {
   return MultiBlocProvider(
     providers: [
@@ -149,6 +151,16 @@ Widget _host({
       BlocProvider<PetCubit>.value(value: petCubit),
       BlocProvider<StatsCubit>.value(value: statsCubit),
       BlocProvider<SocketCubit>.value(value: socketCubit),
+      // TD-066 F2: SessionListeners now resets the P1 economy too, so the
+      // tree must carry one. Defaulted rather than threaded through every
+      // call site — only the reset-on-logout test cares which instance.
+      BlocProvider<EconomyP1Cubit>.value(
+        value: economyP1Cubit ??
+            EconomyP1Cubit(
+              FakeEconomyP1Repository(),
+              connectivity: FakeConnectivityService(),
+            ),
+      ),
     ],
     child: SessionListeners(
       notifications: FakeNotificationService(),

@@ -4,6 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../config/routes.dart';
 import '../../services/notification_service.dart';
 import '../cubit/auth_cubit.dart';
+import '../cubit/economy_p1_cubit.dart';
 import '../cubit/household_cubit.dart';
 import '../cubit/pet_cubit.dart';
 import '../cubit/shopping_cubit.dart';
@@ -67,6 +68,10 @@ class SessionListeners extends StatelessWidget {
             context.read<ShoppingCubit>().reset();
             context.read<PetCubit>().reset();
             context.read<StatsCubit>().reset();
+            // TD-066 F2: a wallet, a streak and a level are personal data —
+            // leaving them on screen for the next account is the same leak
+            // TD-058 closed for tasks and shopping.
+            context.read<EconomyP1Cubit>().reset();
             Routes.navigatorKey.currentState
                 ?.pushNamedAndRemoveUntil(Routes.login, (route) => false);
           },
