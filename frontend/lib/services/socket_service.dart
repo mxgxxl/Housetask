@@ -96,6 +96,36 @@ class SocketService {
     }
   }
 
+  /// Personal-room P1 economy events (TD-066 F2).
+  ///
+  /// These arrive on `user_<id>`, not on the household room: a wallet, a
+  /// budget and a streak are personal (PDR-012/PDR-017), and broadcasting
+  /// them to the household would hand every housemate everyone else's
+  /// balance. The client does not join that room — the server puts every
+  /// socket in it at handshake — so subscribing is all there is to do.
+  void onEconomyP1Updated(void Function(String event, dynamic data) cb) {
+    for (final e in economyP1Events) {
+      _socket?.on(e, (data) => cb(e, data));
+    }
+  }
+
+  /// The personal-room event names, in CLAUDE.md's documented order.
+  ///
+  /// Exposed so a test can assert the wiring covers exactly this set rather
+  /// than re-typing ten strings that would drift from the ones subscribed.
+  static const List<String> economyP1Events = [
+    'economy:reward',
+    'economy:budget_updated',
+    'economy:streak_updated',
+    'economy:ice_consumed',
+    'economy:ice_refunded',
+    'economy:streak_broken',
+    'economy:streak_milestone',
+    'economy:ice_purchased',
+    'economy:level_up',
+    'economy:milestone',
+  ];
+
   void off(String event) => _socket?.off(event);
 
   /// Disconnect and tear down the socket (used on logout).

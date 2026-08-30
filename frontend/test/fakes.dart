@@ -5,6 +5,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'package:homesync/config/pet_config.dart';
 import 'package:homesync/core/errors/failures.dart';
 import 'package:homesync/data/models/economy.dart';
+import 'package:homesync/data/models/economy_p1/economy_p1.dart';
 import 'package:homesync/data/models/household.dart';
 import 'package:homesync/data/models/household_stats.dart';
 import 'package:homesync/data/models/member.dart';
@@ -14,6 +15,7 @@ import 'package:homesync/data/models/shopping_item.dart';
 import 'package:homesync/data/models/task.dart';
 import 'package:homesync/data/models/user.dart';
 import 'package:homesync/data/repositories/auth_repository.dart';
+import 'package:homesync/data/repositories/economy_p1_repository.dart';
 import 'package:homesync/data/repositories/household_repository.dart';
 import 'package:homesync/data/repositories/pet_repository.dart';
 import 'package:homesync/data/repositories/shopping_repository.dart';
@@ -853,4 +855,177 @@ class FakeAuthRepository implements AuthRepository {
 
   @override
   Future<void> logout() async {}
+}
+
+
+// ── P1 economy (TD-066 F2) ────────────────────────────────────────────────
+
+/// Builds a `PersonalEconomy` without spelling out every nested default.
+///
+/// [enabled] defaults to true because a fake that was off by default would
+/// make most tests assert on a hidden section by accident.
+PersonalEconomy buildPersonalEconomy({
+  bool enabled = true,
+  int balance = 0,
+  int dailyReleased = 0,
+  int remaining = 0,
+  int level = 1,
+  int xp = 0,
+  int xpIntoLevel = 0,
+  int xpForNextLevel = 0,
+  int tasksCompleted = 0,
+  List<String> unlocks = const [],
+  int streakCurrent = 0,
+  int streakLongest = 0,
+  int iceReserve = 0,
+  String weekKey = '2026-W35',
+  int weeklyCap = 0,
+  List<BudgetAllocation> allocations = const [],
+}) {
+  return PersonalEconomy(
+    enabled: enabled,
+    wallet: WalletPersonal(
+      balance: balance,
+      dailyReleased: dailyReleased,
+      remaining: remaining,
+    ),
+    personalProgress: ProgressP1(
+      xp: xp,
+      level: level,
+      unlocks: unlocks,
+      tasksCompleted: tasksCompleted,
+      xpIntoLevel: xpIntoLevel,
+      xpForNextLevel: xpForNextLevel,
+      xpToNextLevel: xpForNextLevel - xpIntoLevel,
+    ),
+    streak: PersonalStreak(
+      current: streakCurrent,
+      longest: streakLongest,
+      iceReserve: iceReserve,
+    ),
+    weeklyBudget: PersonalBudget(
+      weekKey: weekKey,
+      weeklyCap: weeklyCap,
+      allocations: allocations,
+    ),
+  );
+}
+
+/// Both halves. `household.enabled` mirrors [enabled] because
+/// `EconomyP1.enabled` requires BOTH, and a fake that left the household half
+/// off would hide the section in every test for a reason the test never
+/// mentioned.
+EconomyP1 buildEconomyP1({
+  bool enabled = true,
+  PersonalEconomy? personal,
+  DateTime? refreshedAt,
+}) {
+  return EconomyP1(
+    personal: personal ?? buildPersonalEconomy(enabled: enabled),
+    household: HouseholdEconomy(enabled: enabled),
+    refreshedAt: refreshedAt ?? DateTime.utc(2026, 8, 30, 12),
+  );
+}
+
+/// Only the members the F2 cubit actually calls are implemented; the savings
+/// surface (F4) falls through to [noSuchMethod], which is enough to satisfy
+/// the interface without pretending to model behaviour no test exercises.
+class FakeEconomyP1Repository implements EconomyP1Repository {
+  EconomyP1? economy;
+  EconomyP1? cachedEconomy;
+
+  /// Thrown by [load] when set — an offline read, or a server refusal.
+  Object? loadError;
+
+  /// Thrown by [buyIce] when set.
+  Object? buyIceError;
+
+  Map<String, dynamic> buyIceResult = const {};
+
+  /// When set, [load] waits on it before answering — lets a test hold a
+  /// response in flight while something else happens (a logout, a household
+  /// switch) and assert the late answer is dropped.
+  Completer<void>? loadGate;
+
+  final List<String> loadedTimeZones = [];
+  final List<String> buyIceOperationIds = [];
+  int loadCalls = 0;
+
+  @override
+  bool lastLoadWasFromCache = false;
+
+  FakeEconomyP1Repository({this.economy, this.cachedEconomy});
+
+  @override
+  Future<EconomyP1> load(String householdId, {required String timeZone}) async {
+    loadCalls++;
+    loadedTimeZones.add(timeZone);
+    final gate = loadGate;
+    if (gate != null) await gate.future;
+
+    final error = loadError;
+    if (error != null) {
+      // Mirrors the real repository: a failed fetch falls back to the cache
+      // and only rethrows when there is nothing cached to show.
+      final fallback = cachedEconomy;
+      if (fallback == null) throw error;
+      lastLoadWasFromCache = true;
+      return fallback;
+    }
+
+    lastLoadWasFromCache = false;
+    return economy ?? buildEconomyP1();
+  }
+
+  @override
+  EconomyP1? cached(String householdId) => cachedEconomy;
+
+  @override
+  Future<Map<String, dynamic>> buyIce(
+    String householdId, {
+    required String operationId,
+  }) async {
+    buyIceOperationIds.add(operationId);
+    final error = buyIceError;
+    if (error != null) throw error;
+    return buyIceResult;
+  }
+
+  @override
+  Future<void> clearCache(String householdId) async {}
+
+  // The savings surface belongs to F4. Implemented explicitly rather than via
+  // noSuchMethod so a test that reaches one by accident fails by name.
+
+  @override
+  Future<PersonalBudget> adjustBudget(
+    String householdId, {
+    required String timeZone,
+    required String mode,
+    String? weekKey,
+    List<BudgetAllocation> allocations = const [],
+  }) async =>
+      throw UnimplementedError('adjustBudget is F4 surface');
+
+  @override
+  Future<SavingsGoal> createSavingsGoal(
+    String householdId, {
+    required String itemType,
+    required String itemId,
+    String? operationId,
+  }) async =>
+      throw UnimplementedError('createSavingsGoal is F4 surface');
+
+  @override
+  Future<SavingsGoal> contribute(
+    String householdId,
+    String goalId, {
+    required int amount,
+    required String operationId,
+  }) async =>
+      throw UnimplementedError('contribute is F4 surface');
+
+  @override
+  Future<SavingsGoal> cancelSavingsGoal(String householdId, String goalId) async =>
+      throw UnimplementedError('cancelSavingsGoal is F4 surface');
 }

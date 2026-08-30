@@ -6,11 +6,13 @@ import 'config/theme.dart';
 import 'data/datasources/local/auth_local_datasource.dart';
 import 'data/datasources/remote/api_service.dart';
 import 'data/repositories/auth_repository.dart';
+import 'data/repositories/economy_p1_repository.dart';
 import 'data/repositories/household_repository.dart';
 import 'data/repositories/pet_repository.dart';
 import 'data/repositories/shopping_repository.dart';
 import 'data/repositories/task_repository.dart';
 import 'presentation/cubit/auth_cubit.dart';
+import 'presentation/cubit/economy_p1_cubit.dart';
 import 'presentation/cubit/household_cubit.dart';
 import 'presentation/cubit/pet_cubit.dart';
 import 'presentation/cubit/shopping_cubit.dart';
@@ -19,6 +21,7 @@ import 'presentation/cubit/stats_cubit.dart';
 import 'presentation/cubit/task_cubit.dart';
 import 'presentation/cubit/timeline_cubit.dart';
 import 'presentation/widgets/session_listeners.dart';
+import 'services/cache_service.dart';
 import 'services/notification_service.dart';
 import 'services/socket_service.dart';
 
@@ -38,6 +41,7 @@ class HomeSyncApp extends StatelessWidget {
     final taskRepo = TaskRepository(api);
     final shoppingRepo = ShoppingRepository(api);
     final petRepo = PetRepository(api);
+    final economyP1Repo = EconomyP1Repository(api, CacheService());
 
     final notifications = NotificationService()..attachApi(api);
     final socketService = SocketService();
@@ -49,6 +53,7 @@ class HomeSyncApp extends StatelessWidget {
         RepositoryProvider.value(value: taskRepo),
         RepositoryProvider.value(value: shoppingRepo),
         RepositoryProvider.value(value: petRepo),
+        RepositoryProvider.value(value: economyP1Repo),
       ],
       child: MultiBlocProvider(
         providers: [
@@ -74,6 +79,9 @@ class HomeSyncApp extends StatelessWidget {
           BlocProvider(create: (_) => ShoppingCubit(shoppingRepo)),
           BlocProvider(create: (_) => PetCubit(petRepo)),
           BlocProvider(create: (_) => StatsCubit(householdRepo)),
+          // TD-066 F2. Created before SocketCubit so the personal-room
+          // `economy:*` events have somewhere to land from the first frame.
+          BlocProvider(create: (_) => EconomyP1Cubit(economyP1Repo)),
           BlocProvider(
             create: (ctx) => SocketCubit(
               socketService,
@@ -83,6 +91,7 @@ class HomeSyncApp extends StatelessWidget {
               ctx.read<HouseholdCubit>(),
               ctx.read<PetCubit>(),
               timeline: ctx.read<TimelineCubit>(),
+              economyP1: ctx.read<EconomyP1Cubit>(),
             ),
           ),
         ],

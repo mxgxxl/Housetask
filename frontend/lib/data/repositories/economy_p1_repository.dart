@@ -30,6 +30,17 @@ class EconomyP1Repository {
 
   EconomyP1Repository(this._api, this._cache, {Uuid? uuid}) : _uuid = uuid ?? const Uuid();
 
+  /// Whether the last [load] was served from cache instead of the network.
+  ///
+  /// [load] deliberately swallows a failed fetch and returns the last
+  /// snapshot, which leaves the caller unable to tell a fresh wallet from a
+  /// three-day-old one — and "stale" is a thing the UI must say out loud
+  /// (TD-066-DESIGN §7). Same flag-beside-the-call shape as
+  /// `TaskRepository.lastListWasFromCache`, for the same reason: threading a
+  /// wrapper type through every read would change the signature of a
+  /// contract F1 already settled.
+  bool lastLoadWasFromCache = false;
+
   String _base(String householdId) => '/households/$householdId/economy/p1';
 
   /// Both halves of the economy, cached as one snapshot.
@@ -52,12 +63,16 @@ class EconomyP1Repository {
         refreshedAt: DateTime.now().toUtc(),
       );
       await _cache.saveEconomyP1(householdId, snapshot);
+      lastLoadWasFromCache = false;
       return snapshot.toEconomy();
     } catch (_) {
       // Offline, or the server is unhappy. A stale wallet beats an error
       // screen, and `refreshedAt` lets the UI say how stale.
       final cached = _cache.economyP1(householdId);
-      if (cached != null) return cached.toEconomy();
+      if (cached != null) {
+        lastLoadWasFromCache = true;
+        return cached.toEconomy();
+      }
       rethrow;
     }
   }

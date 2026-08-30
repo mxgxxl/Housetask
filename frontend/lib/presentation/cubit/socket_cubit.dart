@@ -1,6 +1,7 @@
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../data/datasources/local/auth_local_datasource.dart';
 import '../../services/socket_service.dart';
+import 'economy_p1_cubit.dart';
 import 'household_cubit.dart';
 import 'pet_cubit.dart';
 import 'shopping_cubit.dart';
@@ -21,6 +22,10 @@ class SocketCubit extends Cubit<bool> {
   /// have to build a timeline it never asserts on.
   final TimelineCubit? _timelineCubit;
 
+  /// Optional for the same reason, and because P1 is off for every household
+  /// today: a build with no economy section still wires up cleanly.
+  final EconomyP1Cubit? _economyP1Cubit;
+
   bool _listenersBound = false;
 
   SocketCubit(
@@ -31,7 +36,9 @@ class SocketCubit extends Cubit<bool> {
     this._householdCubit,
     this._petCubit, {
     TimelineCubit? timeline,
+    EconomyP1Cubit? economyP1,
   })  : _timelineCubit = timeline,
+        _economyP1Cubit = economyP1,
         super(false);
 
   /// Connect with the stored access token and start listening for events.
@@ -72,6 +79,11 @@ class SocketCubit extends Cubit<bool> {
     });
     // PDR-001 A4: any pet/adoption/economy change elsewhere reloads the pet.
     _socket.onPetUpdated(_petCubit.applyRealtime);
+    // TD-066 F2: the ten personal-room `economy:*` events. Each carries the
+    // value it changed, so the cubit applies the payload rather than issuing
+    // a GET per event — see EconomyP1Cubit.applyRealtime.
+    final economy = _economyP1Cubit;
+    if (economy != null) _socket.onEconomyP1Updated(economy.applyRealtime);
   }
 
   /// Join a household room (call after creating/joining a household).
