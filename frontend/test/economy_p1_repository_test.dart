@@ -468,10 +468,45 @@ void main() {
         () => _json(_envelope({'goal': _householdJson()['activeSavingsGoal'], 'refunds': []}), 200),
       ]);
 
-      await _repoWith(adapter).cancelSavingsGoal('h1', 'g1');
+      await _repoWith(adapter).cancelSavingsGoal('h1', 'g1', operationId: 'op-x');
 
       expect(adapter.requests.first.method, 'POST');
       expect(adapter.requests.first.path, contains('/savings-goals/g1/cancel'));
+    });
+
+    test('cancelSavingsGoal carries an Idempotency-Key (Hard Rule 13)', () async {
+      // Cancelling writes one refund entry per contributor, so it creates
+      // resources and the rule applies. It was the only P1 write without it.
+      final adapter = _RecordingAdapter([
+        () => _json(_envelope({'goal': _householdJson()['activeSavingsGoal'], 'refunds': []}), 200),
+      ]);
+
+      await _repoWith(adapter).cancelSavingsGoal('h1', 'g1', operationId: 'op-cancel-1');
+
+      expect(adapter.requests.first.headers['Idempotency-Key'], 'op-cancel-1');
+    });
+
+    test('the cancel key is stable across retries of the same logical operation', () async {
+      // The property that makes the header worth having: the id belongs to the
+      // OPERATION, not to the attempt. Minting a fresh one per retry would key
+      // the server's replay on a value it had never seen, so the retry would
+      // execute as a first attempt and answer 409 instead of replaying the
+      // original 200.
+      final adapter = _RecordingAdapter([
+        () => _json(_envelope({'goal': _householdJson()['activeSavingsGoal'], 'refunds': []}), 200),
+        () => _json(_envelope({'goal': _householdJson()['activeSavingsGoal'], 'refunds': []}), 200),
+      ]);
+      final repo = _repoWith(adapter);
+
+      const operationId = 'op-one-logical-cancel';
+      await repo.cancelSavingsGoal('h1', 'g1', operationId: operationId);
+      await repo.cancelSavingsGoal('h1', 'g1', operationId: operationId);
+
+      expect(adapter.requests, hasLength(2));
+      expect(
+        adapter.requests.map((r) => r.headers['Idempotency-Key']).toSet(),
+        {operationId},
+      );
     });
 
     test('surfaces server errors instead of queueing the write', () async {

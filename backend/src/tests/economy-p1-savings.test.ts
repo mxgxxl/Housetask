@@ -106,10 +106,18 @@ function contribute(
     .send({ amount });
 }
 
-function cancelGoal(user: TestUser, householdId: string, goalId: string): request.Test {
-  return request(app)
+function cancelGoal(
+  user: TestUser,
+  householdId: string,
+  goalId: string,
+  key?: string,
+): request.Test {
+  const req = request(app)
     .post(`/api/households/${householdId}/economy/p1/savings-goals/${goalId}/cancel`)
     .set(authHeader(user.accessToken));
+  // Optional so the tests that do not care keep reading as before, and so one
+  // test can still exercise the header-less path the middleware allows.
+  return key ? req.set('Idempotency-Key', key) : req;
 }
 
 describe('creating a goal', () => {
@@ -341,6 +349,82 @@ describe('cancelling', () => {
     const res = await cancelGoal(user, household.id, goal.id);
     expect(res.status).toBe(409);
     await expect(balanceOf(user.id)).resolves.toBe(100 - GLASSES.price);
+  });
+
+  it('replays the original response on a retried cancel (Hard Rule 13)', async () => {
+    // The failure this closes: a cancel that succeeded but whose response was
+    // lost to a timeout. Retried with the same key it must look like what it
+    // was — a success, with the same refund list — not a 409 the client would
+    // surface as "no se pudo cancelar" for an operation that did cancel.
+    enableP1();
+    const { user, household } = await setup();
+    await fund(user.id, household.id, 100);
+    const goal = (await createGoal(user, household.id, 'op-cancel-goal')).body.data.goal;
+    await contribute(user, household.id, goal.id, 30, 'op-cancel-c');
+
+    const first = await cancelGoal(user, household.id, goal.id, 'op-cancel');
+    const second = await cancelGoal(user, household.id, goal.id, 'op-cancel');
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(second.body).toEqual(first.body);
+
+    // Refunded exactly once, asserted from both sides.
+    await expect(balanceOf(user.id)).resolves.toBe(100);
+    await expect(
+      PersonalCoinLedgerModel.countDocuments({ reason: 'savings_refund' }),
+    ).resolves.toBe(1);
+    await expect(SavingsContributionModel.countDocuments({ status: 'refunded' })).resolves.toBe(1);
+  });
+
+  it('never refunds twice even without a key, which is what the ledger index is for', async () => {
+    // Pins the property the middleware does NOT provide, so a future change
+    // cannot quietly make idempotency the only thing standing between a
+    // retried cancel and a double refund. Without a key the second call is a
+    // real second execution, and it still moves no money: `cancelGoal` refuses
+    // a goal that is no longer active.
+    enableP1();
+    const { user, household } = await setup();
+    await fund(user.id, household.id, 100);
+    const goal = (await createGoal(user, household.id, 'op-nokey-goal')).body.data.goal;
+    await contribute(user, household.id, goal.id, 30, 'op-nokey-c');
+
+    const first = await cancelGoal(user, household.id, goal.id);
+    const second = await cancelGoal(user, household.id, goal.id);
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(409);
+
+    await expect(balanceOf(user.id)).resolves.toBe(100);
+    await expect(
+      PersonalCoinLedgerModel.countDocuments({ reason: 'savings_refund' }),
+    ).resolves.toBe(1);
+  });
+
+  it('does not re-emit the refund events on a replayed cancel', async () => {
+    // A socket event cannot be un-emitted. The replay path must not announce a
+    // second refund that never happened — same reason ADR-007 keeps the
+    // handler from running twice.
+    enableP1();
+    const { user, household } = await setup();
+    await fund(user.id, household.id, 100);
+    const goal = (await createGoal(user, household.id, 'op-emit-goal')).body.data.goal;
+    await contribute(user, household.id, goal.id, 30, 'op-emit-c');
+
+    const emitToUser = jest.spyOn(socketModule, 'emitToUser').mockImplementation(() => {});
+    const emitToHousehold = jest
+      .spyOn(socketModule, 'emitToHousehold')
+      .mockImplementation(() => {});
+
+    await cancelGoal(user, household.id, goal.id, 'op-emit-cancel');
+    await cancelGoal(user, household.id, goal.id, 'op-emit-cancel');
+
+    expect(
+      emitToHousehold.mock.calls.filter((c) => c[1] === 'household:savings_goal_cancelled'),
+    ).toHaveLength(1);
+    expect(
+      emitToUser.mock.calls.filter((c) => c[1] === 'economy:savings_refunded'),
+    ).toHaveLength(1);
   });
 
   it('frees the household to open a new goal afterwards', async () => {
