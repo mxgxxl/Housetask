@@ -176,8 +176,24 @@ class EconomyP1Repository {
   /// A POST, not a DELETE: the goal survives as history with
   /// `status: 'cancelled'`, and the server would be lying if it answered a
   /// DELETE.
-  Future<SavingsGoal> cancelSavingsGoal(String householdId, String goalId) async {
-    final data = await _api.post('${_base(householdId)}/savings-goals/$goalId/cancel');
+  ///
+  /// [operationId] is required for the same reason it is on [buyIce], and is
+  /// the one this method most needs: cancelling writes a refund entry per
+  /// contributor, so it is a resource-creating POST under Hard Rule 13. Minted
+  /// once per logical cancel and reused across retries — a fresh id per ATTEMPT
+  /// would defeat the point, since the server keys the replay on it. Without
+  /// it, a cancel whose response was lost to a timeout comes back 409
+  /// "already cancelled" on retry, and the client cannot tell its own
+  /// successful cancel from someone else's.
+  Future<SavingsGoal> cancelSavingsGoal(
+    String householdId,
+    String goalId, {
+    required String operationId,
+  }) async {
+    final data = await _api.post(
+      '${_base(householdId)}/savings-goals/$goalId/cancel',
+      headers: {'Idempotency-Key': operationId},
+    );
     final map = Map<String, dynamic>.from(data as Map);
     return SavingsGoal.fromJson(Map<String, dynamic>.from(map['goal'] as Map));
   }

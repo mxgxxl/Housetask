@@ -65,6 +65,22 @@ router.post(
 );
 // Cancelling is a POST, not a DELETE: the goal survives as history with
 // status 'cancelled', and a DELETE would claim otherwise.
-router.post('/p1/savings-goals/:goalId/cancel', asyncHandler(economyController.cancelSavingsGoalP1));
+//
+// It creates resources too — one `savings_refund` ledger entry per active
+// contribution — so Hard Rule 13 applies to it exactly as it does to the three
+// writes above. It was the only P1 write without the middleware.
+//
+// The refund itself was never at risk of running twice: `refundContributions`
+// filters on `status: 'active'`, PersonalCoinLedger's unique index is keyed on
+// the contribution id, and `cancelGoal` refuses a goal that is not active. What
+// the missing middleware actually cost was the ANSWER — a retry of a cancel
+// that had already succeeded got a 409 "already cancelled" instead of replaying
+// its original 200, so a client that lost the response to a timeout could not
+// tell its own successful cancel from someone else's.
+router.post(
+  '/p1/savings-goals/:goalId/cancel',
+  idempotency,
+  asyncHandler(economyController.cancelSavingsGoalP1),
+);
 
 export default router;
