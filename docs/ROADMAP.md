@@ -1,11 +1,12 @@
 # Roadmap HomeSync
 
-> Última actualización: 2026-08-30
+> Última actualización: 2026-09-01
 
 ## Recién Completado (últimas 2 semanas)
 
 | Fecha | PR/Commit | Descripción | Impacto |
 |-------|-----------|-------------|---------|
+| 2026-08-30 → 09-01 | TD-066 F2–F4 | Frontend de economía P1 completo: cubits de progreso personal y de hogar, sección «Mi progreso» y sección «Hogar» en la pestaña Mascota, y hucha conjunta con sus tres escrituras (crear/aportar/cancelar). `flutter build ios --simulator` verde; 563 tests frontend. | Cierra la UI de P1. La verificación visual real sigue pendiente: P1 está apagado en los 7 hogares, así que las secciones no se renderizan hasta activarlo (runbook). |
 | 2026-08-27 | TD-066 F1 | Modelos y repositorio frontend de economía P1 (caché snapshot versionada, timeZone obligatoria). | Base para la UI (F2–F4). |
 | 2026-08-27 | TD-066 B5–B11 | Backend de economía P1 COMPLETO: sala socket user_<id>, lecturas p1, niveles/hitos, reparto semanal, rachas/hielos, hucha conjunta (Hard Rule 16b) y script de migración/activación con runbook. Flag apagado en los 7 hogares. | Economía P1 lista para activación manual por hogar. |
 | 2026-08-25 | TD-064 | Resolved: timeline con paginación keyset (backend) + TimelineCubit/vista con prefetch y offline (frontend, 4 commits). | Rendimiento — deja de re-pedir ventanas crecientes. |
@@ -41,19 +42,26 @@
 
 ## Próximas Prioridades (ordenado)
 
-Con TD-001 cerrado y TD-064 resuelto, el orden de implementación de P0/P1/P2
-queda: **TD-066 frontend (F2–F4) → TD-068/069 → TD-070 → TD-071/072**. TD-067
-(roles y administración) va en paralelo a TD-066 F2–F4: ambos son P0 y no
-dependen entre sí, y TD-067 construye sobre la autoridad que TD-001 dejó
-fijada. El backend de TD-066 (B5–B11) ya está completo (2026-08-27); lo que
-queda es la UI sobre los modelos/repositorio de F1.
+Con TD-066 F2–F4 entregado (2026-09-01), el orden de implementación de
+P0/P1/P2 queda: **TD-067 → TD-068/069 → TD-070 → TD-071/072**. TD-067 (roles y
+administración) pasa a ser el único P0 abierto y construye sobre la autoridad
+que TD-001 dejó fijada; TD-068 puede ir en paralelo, porque su dependencia de
+TD-066 era la economía, que ya está en pantalla.
+
+**Lo que TD-066 deja sin construir, y no es un descuido:** la pantalla
+«Ajustar reparto» de UX-P1-SPEC §4. `PATCH /economy/p1/budget` existe desde
+B8 y el plan semanal se muestra en «Mi progreso», pero de solo lectura
+(decisión del dueño D3 en el round F2). Y la activación de P1 sigue siendo
+manual por hogar (`docs/TD-066-RUNBOOK.md`): mientras el flag esté apagado,
+toda la UI de P1 se pliega a cero píxeles a propósito, así que nada de esto
+es visible todavía.
 
 | # | ID | Descripción | Esfuerzo | Bloqueante |
 |---|----|-------------|----------|------------|
 | ~~1~~ | ~~TD-064~~ | ~~Paginación del timeline: sesiones keyset y caché normalizada~~ — **Resolved 2026-08-25** | Alto | — |
-| 1 | TD-066 F2–F4 | UI de economía P1 (wallets, XP dual, presupuesto, rachas, hucha) sobre los modelos/repositorio de F1 y el backend B5–B11, ya completos | Alto | Ninguno |
-| 1b | TD-067 | Roles y administración: promoción/degradación, transferencia, salida voluntaria, destrucción del hogar | Alto | Ninguno (paralelo a TD-066 F2–F4) |
-| 2 | TD-068 / TD-069 | Recomendaciones por reglas y reparto inteligente de carga | Medio / Alto | TD-066 |
+| ~~1~~ | ~~TD-066 F2–F4~~ | ~~UI de economía P1 (wallets, XP dual, presupuesto, rachas, hucha)~~ — **Entregado 2026-09-01.** Queda fuera «Ajustar reparto» (editor del plan semanal, decisión D3) y la activación manual del flag | Alto | — |
+| 1 | TD-067 | Roles y administración: promoción/degradación, transferencia, salida voluntaria, destrucción del hogar | Alto | Ninguno |
+| 2 | TD-068 / TD-069 | Recomendaciones por reglas y reparto inteligente de carga | Medio / Alto | Ninguno (TD-066 ya no bloquea) / TD-069 sí espera a TD-068 |
 | 3 | TD-070 | Dashboard de salud del hogar | Alto | TD-066, TD-068, TD-069 |
 | 4 | TD-071 / TD-072 | Reconocimiento entre miembros y deep-link de notificación | Medio / Alto | TD-070 (071) · TD-049 (072, push real) |
 | 5 | Validación PR #24 | Probar fix white screen en iPhone físico + limpiar debugPrints de diagnóstico | Bajo | Dispositivo físico |

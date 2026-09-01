@@ -29,6 +29,7 @@
 - 2026-08-19: TD-063 cerrado (solo un 401 mata la sesión; una desconexión ya no expulsa al login ni pierde la escritura en vuelo). Check de enlaces de docs extendido a CLAUDE.md.
 - 2026-08-25: **TD-001 cerrado.** Cutover completo a `HouseholdMember`; ADR-005 marcado como superseded.
 - 2026-08-25: **TD-064 cerrado.** Timeline con paginación keyset (backend) + TimelineCubit/vista con prefetch y offline (frontend, 4 commits).
+- 2026-08-30 → 09-01: **TD-066 frontend F2–F4 completo.** «Mi progreso» y «Hogar» en la pestaña Mascota (cubits de progreso personal y de hogar, routing de los eventos de ambas salas) y la hucha conjunta entera: crear meta, aportar y cancelar con reembolso. 563 tests frontend, build de simulador iOS verde. Dos decisiones nuevas registradas como PDR-020 y PDR-021. **No verificado a ojo todavía:** P1 sigue apagado en los 7 hogares y la UI se pliega a cero mientras lo esté.
 - 2026-08-27: **TD-066 backend B5–B11 completo** (sala socket user_<id>, lecturas p1, niveles/hitos, reparto semanal, rachas/hielos, hucha conjunta, script de migración/activación) + **F1** (modelos y repositorio frontend de economía P1). Runbook en `docs/TD-066-RUNBOOK.md`. Activación de P1 pendiente, manual por hogar.
 - 2026-08-17: PR #32 config fallback (Codex); PR #33 integración legacy
   (Claude); PR #34 sync (Codex, cerrado como superseded sin merge). Plan free de Codex activo y validado.
@@ -53,12 +54,23 @@ completos (2026-08-27)**: economía P1 tiene ya paginación de timeline,
 backend completo (wallets, XP dual, presupuesto, rachas, hucha, script de
 migración/activación con runbook) y los modelos/repositorio del frontend.
 
-**Siguiente paso técnico: TD-066 frontend F2–F4** (UI de economía P1 sobre
-F1 — wallets, XP dual, presupuesto, rachas, hucha en pantalla), con
-**TD-067** (roles y administración) en paralelo — ambos son P0 y no dependen
-entre sí. Recordatorio: verificar la entrega real por socket con dos
-dispositivos sigue pendiente (ver más abajo). Orden completo en
-[ROADMAP.md](ROADMAP.md).
+**TD-066 frontend F2–F4 entregado (2026-09-01).** La economía P1 está
+completa de punta a punta: backend, modelos, cubits y UI. Lo que queda de
+TD-066 no es código de pantalla sino dos cosas distintas: la pantalla
+«Ajustar reparto» (editor del plan semanal, aplazada por decisión D3 aunque
+`PATCH /economy/p1/budget` existe desde B8) y **la activación manual del flag
+por hogar**, con su runbook en [TD-066-RUNBOOK.md](TD-066-RUNBOOK.md). Hasta
+que se active en al menos un hogar, nadie ha visto esta UI funcionando: con
+el flag apagado se pliega a cero píxeles a propósito, para no enseñar una
+wallet de 0 🪙 que parecería real.
+
+**Siguiente paso técnico: TD-067** (roles y administración) como P0 único,
+con **TD-068** (recomendaciones por reglas) en paralelo — su dependencia de
+TD-066 era la economía, que ya está en pantalla. Recordatorio: verificar la
+entrega real por socket con dos dispositivos sigue pendiente (ver más abajo),
+y ahora importa más que antes: los eventos de economía P1 viajan por dos
+salas distintas (`user_<id>` y `household_<id>`) y ningún test prueba el
+transporte. Orden completo en [ROADMAP.md](ROADMAP.md).
 
 **Lo único de TD-001 que quedó sin verificar:** la entrega real por socket. Los
 14 tests de `td001-commit7-single-source.test.ts` prueban que el handshake
