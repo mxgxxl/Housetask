@@ -402,3 +402,142 @@ Hueco identificado al cerrar TD-062.
 Importa porque esa rama es justo la del arranque sin red, que es cuando la caché es lo único que hay. Una refactorización que moviera el `_adoptCache` dentro del `try` lo rompería sin que ningún test se quejara, y el síntoma sería el peor de los dos posibles: arrancar offline y no ver nada.
 
 Estado: pendiente, prioridad baja. Es un test, no un arreglo.
+
+---
+
+## 2026-09-01 — TD-066 F3/F4: mejoras propuestas de la economía P1
+
+Consolidado de las secciones «💡 Proposed Improvements» de los dos rounds.
+Ordenado por lo que cuesta si nadie lo toca, no por esfuerzo.
+
+### 1. `ApiService` descarta el mensaje de todo 409 (prioridad alta)
+
+`_mapDioError` convierte **cualquier** 409 en `ConflictFailure('Operation
+already in progress, please try again in a moment')`. Se escribió pensando
+en el 409 del middleware de idempotencia —donde es cierto— pero el backend
+también responde 409 a conflictos de dominio: «This household already has an
+active savings goal», «This goal is unlocked and no longer accepts
+contributions», «This goal is already cancelled».
+
+Para el usuario eso es un mensaje **activamente falso**: lo que ha pasado no
+es que su operación esté en curso, sino que las monedas de otra persona
+llegaron al precio primero.
+
+En F4 lo rodeé por operación —cada cubit redacta su propio mensaje según el
+tipo de fallo— pero es un parche local: cualquier endpoint futuro con un 409
+de dominio hereda el problema. El arreglo real es conservar el `error` del
+cuerpo cuando lo hay y dejar la frase genérica solo para un 409 sin cuerpo.
+Es un cambio en el mapeo de errores de **toda** la app, así que no lo hice
+como efecto secundario de una feature.
+
+De paso: el mensaje del propio middleware («A request with this
+Idempotency-Key is still in progress») es inglés técnico en una app que es
+española entera, y llegaría tal cual al usuario.
+
+### 2. `isAdmin` se lee una sola vez, al cargar el hogar (prioridad alta, atarlo a TD-067)
+
+`HouseholdEconomyCubit.load` recibe `isAdmin` calculado desde la lista de
+miembros y no vuelve a mirarlo. Hoy es correcto **porque no existe forma de
+cambiar un rol**: promoción y degradación son TD-067, sin implementar.
+
+En cuanto TD-067 aterrice deja de serlo: a un admin degradado le seguiría
+apareciendo «Cancelar meta» hasta reiniciar la app. No es un agujero de
+seguridad —el backend responde 403— pero sí un botón que miente. **Conviene
+resolverlo dentro de TD-067**, no después: quien toque roles ya tendrá el
+contexto delante.
+
+### 3. Ningún evento mantiene fresco el nivel/XP de un compañero de piso
+
+`economy:level_up` viaja solo por la sala personal, así que este dispositivo
+nunca se entera del de nadie más; la sala de hogar solo lleva
+`household:xp_updated`, que es el total agregado y no dice quién lo ganó. El
+roster de «Hogar» solo se mueve en la siguiente lectura (entrar a la pestaña
+Mascota).
+
+Un evento `household:member_progress` con `{userId, level, xp}` lo cerraría
+sin filtrar nada: nivel y XP personales ya son públicos por decisión del
+dueño (2026-08-27), a diferencia de la wallet, el presupuesto y la racha.
+
+### 4. La respuesta de aportar trae `wallet.balance` y el cliente lo ignora
+
+`EconomyP1Cubit.contributeToGoal` resta el importe localmente porque
+`EconomyP1Repository.contribute` solo devuelve la meta. El servidor manda
+además el saldo resultante, que es el dato autoritativo justo en el camino
+que lo gasta.
+
+Peor: **no hay evento personal para el débito de una aportación** — los que
+emite el controlador de contribuciones son todos de hogar. Así que los
+*otros* dispositivos del mismo miembro no ven bajar su saldo hasta la
+siguiente lectura.
+
+### 5. El catálogo de cosméticos sigue siendo un espejo a mano
+
+`frontend/lib/config/pet_config.dart` replica `backend/src/config/economy.ts`
+sin nada que verifique que coinciden. F4 hace visible la deriva: el selector
+de meta enseña un precio que el servidor puede no compartir, y un ítem que
+el backend ya no conoce vuelve como 400 («Ese artículo ya no está
+disponible»).
+
+Un endpoint de catálogo cerraría de una vez tres duplicaciones: este espejo,
+`kIcePriceCoins`/`kMaxIceReserve` (F2) y los nombres de desbloqueo, que hoy
+se adivinan humanizando el id (`cosmetic:dragon_skin` → «Dragon skin»,
+`core/utils/unlock_label.dart`).
+
+### 6. `SavingsGoalView` no expone `status`
+
+La lectura de hogar solo devuelve la meta activa, así que el cliente asume
+`'active'` por defecto. Correcto hoy; silenciosamente equivocado el día que
+ese endpoint devuelva historial.
+
+### 7. Dos ficheros de test necesitaron mockear `MethodChannel` para no colgarse
+
+`load()` consulta `DeviceTimeZoneService`, y ese viaje por platform channel
+dentro de la zona fake-async de `testWidgets` **bloquea el test** — la misma
+forma exacta de TD-040. Me costó dos cuelgues de 10 minutos en F4.
+
+Ya son cuatro ficheros repitiendo el mismo `setUp`/`tearDown`. Un helper de
+test compartido que lo instale una vez evitaría el siguiente. Nótese que el
+síntoma no se parece a la causa: no falla, se queda quieto.
+
+### 8. La pestaña Mascota acumula cuatro bloques y un tope de altura al 60%
+
+El tope es una heurística: existe para que un roster largo no empuje a la
+mascota fuera de pantalla. Un `CustomScrollView` con la vista de mascota
+como sliver haría que todo desplazara como una sola superficie y quitaría el
+número mágico, pero obliga a refactorizar el `RefreshIndicator` de
+`_CareView`. Relacionado con PDR-020: si P1 crece, esto se decide junto con
+la reorganización.
+
+---
+
+## 2026-09-01 — El mutation testing encontró lo que el `git stash` no podía
+
+Aprendizaje de método, de los rounds F3 y F4.
+
+El guion de verificación pedía comprobar que los tests nuevos fallan sin el
+código: `git stash` de `lib/` y volver a correr. **No funciona cuando el
+código nuevo está en ficheros sin trackear** — `git stash` sin `-u` los deja
+en su sitio, así que la suite pasó en verde con `lib/` supuestamente
+guardado y la comprobación no probó nada.
+
+Lo sustituí por mutación dirigida: romper a propósito una regla concreta,
+correr solo los tests que deberían cogerlo, restaurar. 28 mutaciones en F4,
+22 en F3, todas detectadas — pero solo **después** de arreglar cuatro tests
+que la primera pasada reveló ciegos:
+
+- un test de orden de aportaciones con importes **iguales**, donde un sort
+  estable no reordena nada y por tanto no distingue una lista ordenada de
+  una que no lo está;
+- ningún test afirmaba que el nombre del evento de reembolso estuviera
+  suscrito, así que quitarlo de `SocketService` era invisible;
+- los botones deshabilitados se comprobaban por su etiqueta pero no por
+  `onPressed`, así que un botón que ignoraba su propia razón pasaba;
+- un test de «no hay ranking» que no habría notado un reordenamiento.
+
+La lección no es «usar mutación siempre», es que **un test verde no dice
+nada sobre si el fixture puede distinguir el fallo que persigue**. Con
+importes iguales, dos órdenes distintos se ven idénticos. Los cuatro huecos
+eran de fixture, no de aserción.
+
+Estado: aplicado en F3 y F4. Vale la pena en cualquier round donde una
+regla de negocio se pueda romper sin que cambie la forma de la salida.
