@@ -194,6 +194,24 @@ Los PDRs registran decisiones de producto con Context / Decision / Consequences,
 - **Razón:** Tolerancia a fallos sin fricción manual; sumidero de monedas para controlar inflación y coherencia con offline-first.
 - **Consequences:** La racha no equivale al nivel ni puede destruir progreso acumulado.
 
+## PDR-020: La economía P1 vive en la pestaña Mascota
+
+**Status:** Accepted (2026-09-01)
+
+- **Context:** UX-P1-SPEC §2 y §4 describen otra distribución: un header persistente con avatar, wallet y racha; una tarjeta de hogar en Home; y una pantalla «Economía y tienda» aparte, con pestañas Personal/Hogar. La implementación no fue por ahí. F2 colocó «Mi progreso» en la pestaña Mascota, junto a la economía de Fase A, y ese round se mergeó y se aprobó (PR #58); F3 y F4 apilaron encima la sección «Hogar» y la hucha conjunta.
+- **Decision:** Toda la UI de economía P1 vive en la pestaña Mascota, junto a la economía de Fase A: «Mi progreso» (wallet, racha, nivel personal, plan semanal, comprar hielo) y debajo «Hogar» (nivel compartido, roster, hucha con sus tres acciones). No hay header persistente ni pantalla de economía separada.
+- **Razón:** El precedente ya estaba mergeado y aprobado, y las dos economías —Fase A y P1— comparten pantalla de forma natural: la de Fase A ya vivía ahí. Reorganizarlo ahora costaría más que lo que rinde, y el flujo resultante se lee de arriba abajo sin saltos: cabecera, progreso propio, progreso del hogar, meta conjunta.
+- **Consequences:** Divergencia deliberada y registrada con UX-P1-SPEC §2 y §4; la spec queda como referencia de CONTENIDO y de copy, no de ubicación. Dos efectos concretos: el header de tres objetos de §2 no existe (sus datos viven dentro de la sección, no sobre todas las pantallas), y la tarjeta de hogar no aparece en Home. La pestaña Mascota acumula ya cuatro bloques y un tope de altura del 60% para que la mascota no quede fuera de pantalla; si P1 crece —misiones semanales, «Ajustar reparto»— eso deja de sostenerse y toca reconsiderar la reorganización que la spec describía.
+
+## PDR-021: Tope de aportación a la hucha conjunta
+
+**Status:** Accepted (2026-09-01)
+
+- **Context:** Al construir «Aportar» (TD-066 F4) hacía falta decidir hasta dónde llega el selector. El servidor solo impone un límite: rechaza con 403 un débito mayor que el saldo. Aportar de más a una meta sí lo acepta, y la meta se desbloquea en cuanto alcanza el precio.
+- **Decision:** La aportación se limita al MENOR de dos techos: el saldo del miembro y lo que a la meta le falta para su precio. El tope se aplica dos veces —al construir el selector y otra vez al escribir— porque el saldo que produjo el selector puede haberse movido por un evento de socket entre una cosa y la otra.
+- **Razón:** El primer techo es «never overspend» y es el que el servidor ya defiende. El segundo no lo defiende nadie más: PDR-018 reembolsa las aportaciones de una meta CANCELADA, no el exceso sobre una que se desbloquea. Sin este tope, aportar 30 🪙 a una meta a la que le faltaban 4 quema 26 monedas sin que nada avise, y el miembro no tiene forma de recuperarlas.
+- **Consequences:** Es validación de cliente sobre una regla que el servidor no comparte: el backend aceptaría el exceso. Si en el futuro se quiere permitir la generosidad deliberada —aportar de más a sabiendas— hay que decidirlo aquí primero, no en el widget. El tope se calcula en el cubit que tiene el saldo vivo (`EconomyP1Cubit`), no en el que tiene la meta, precisamente para que no se valide contra un saldo de hace un rato.
+
 ## 2026-08-18 — Cambio de rol no expuesto en API
 
 ### Decisión

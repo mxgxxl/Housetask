@@ -70,7 +70,7 @@ es visible todavía.
 
 ## Producto — P1 (el cutover de TD-001 ya no lo bloquea)
 
-P1 y los bloques P2/P3 están en scope, pero P1 se cierra antes de decidir los posteriores. La especificación de producto y UX vive en [UX-P1-SPEC.md](UX-P1-SPEC.md); sus decisiones normativas son PDR-010 a PDR-019 en [PRODUCT_DECISIONS.md](PRODUCT_DECISIONS.md).
+P1 y los bloques P2/P3 están en scope, pero P1 se cierra antes de decidir los posteriores. La especificación de producto y UX vive en [UX-P1-SPEC.md](UX-P1-SPEC.md); sus decisiones normativas son PDR-010 a PDR-021 en [PRODUCT_DECISIONS.md](PRODUCT_DECISIONS.md).
 
 1. Separar XP y moneda.
 2. Presupuesto semanal, reparto automático y ajuste manual opcional.
