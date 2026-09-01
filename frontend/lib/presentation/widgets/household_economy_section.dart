@@ -4,9 +4,11 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../config/theme.dart';
 import '../../core/utils/unlock_label.dart';
 import '../../data/models/economy_p1/economy_p1.dart';
+import '../cubit/economy_p1_cubit.dart';
 import '../cubit/household_economy_cubit.dart';
 import 'common.dart';
 import 'household_economy_celebration.dart';
+import 'savings_goal_actions.dart';
 
 /// UX-P1-SPEC §2's visual grammar for the shared track: «Nivel de hogar:
 /// icono de casa con número y barra». Amber stays the coin, as in
@@ -45,6 +47,18 @@ class HouseholdEconomySection extends StatelessWidget {
     // fire the wrong feedback.
     return MultiBlocListener(
       listeners: [
+        // A refused WRITE — a goal that could not be opened (TD-066 F4).
+        // A failed read degrades to the stale indicator instead; only a write
+        // the member asked for is worth interrupting them about.
+        BlocListener<HouseholdEconomyCubit, HouseholdEconomyState>(
+          listenWhen: (previous, current) =>
+              current.actionError != null &&
+              current.actionError != previous.actionError,
+          listener: (context, state) {
+            showSnack(context, state.actionError!, isError: true);
+            context.read<HouseholdEconomyCubit>().clearActionError();
+          },
+        ),
         // Modal class: a shared level-up, an unlocked goal (UX-P1-SPEC §3).
         // `sequence` is what makes two identical celebrations in a row two
         // distinct states, so the second is not swallowed by Equatable.
@@ -320,6 +334,132 @@ class _Initial extends StatelessWidget {
   }
 }
 
+/// UX-P1-SPEC §4's empty state, CTA included (TD-066 F4).
+///
+/// The button was a plain sentence in F3 because `POST /savings-goals` had no
+/// caller yet and a CTA that did nothing would have been worse than none.
+class _EmptyGoalState extends StatelessWidget {
+  const _EmptyGoalState();
+
+  /// Every reason worth spelling out. `flagOff` is unreachable — the whole
+  /// section is hidden then — and `goalExists` cannot coexist with the empty
+  /// state, so both fall through to no label rather than inventing copy for a
+  /// situation the member cannot be looking at.
+  static String? _reasonLabel(GoalCreateUnavailableReason reason) =>
+      switch (reason) {
+        GoalCreateUnavailableReason.offline =>
+          'Sin conexión: podréis elegir una meta al recuperarla',
+        GoalCreateUnavailableReason.none ||
+        GoalCreateUnavailableReason.inFlight ||
+        GoalCreateUnavailableReason.flagOff ||
+        GoalCreateUnavailableReason.goalExists =>
+          null,
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<HouseholdEconomyCubit>().state;
+    final label = _reasonLabel(state.createGoalReason);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text(
+          'Todavía no tenéis una meta conjunta.',
+          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+        ),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          onPressed: state.canCreateGoal
+              ? () => showCreateSavingsGoalSheet(context)
+              : null,
+          icon: state.isCreatingGoal
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.savings_outlined, size: 18),
+          label: const Text('Elegid algo para los dos'),
+        ),
+        if (label != null) ...[
+          const SizedBox(height: 4),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// «Aportar», with the reason it cannot be tapped spelled out.
+///
+/// A disabled button that does not say why is a dead end, and every reason
+/// here is either something the member can act on or something that just
+/// happened to the goal. Offline is deliberately one of them: a contribution
+/// is a debit and is never queued (TD-066-DESIGN §7), so disabling it is
+/// more honest than accepting a tap that would be lost.
+class _ContributeButton extends StatelessWidget {
+  final SavingsGoal goal;
+  const _ContributeButton({required this.goal});
+
+  static String? _reasonLabel(ContributeUnavailableReason reason) =>
+      switch (reason) {
+        ContributeUnavailableReason.none ||
+        ContributeUnavailableReason.inFlight =>
+          null,
+        ContributeUnavailableReason.flagOff =>
+          'La economía no está activa en este hogar',
+        ContributeUnavailableReason.noGoal => 'No hay ninguna meta activa',
+        ContributeUnavailableReason.goalInactive =>
+          'Esta meta ya no acepta aportaciones',
+        ContributeUnavailableReason.insufficientCoins =>
+          'No te quedan monedas que aportar',
+        ContributeUnavailableReason.offline =>
+          'Sin conexión: no se puede aportar ahora',
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    // Reads the PERSONAL cubit: whether this member may contribute depends on
+    // their wallet, which is theirs alone and never reaches the household
+    // room. The goal itself comes from the household cubit above.
+    final economy = context.watch<EconomyP1Cubit>().state;
+    final reason = economy.contributeReasonFor(goal);
+    final label = _reasonLabel(reason);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ElevatedButton.icon(
+          onPressed: economy.canContributeTo(goal)
+              ? () => showContributeDialog(context, goal)
+              : null,
+          icon: economy.isContributing
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.add, size: 18),
+          label: const Text('Aportar'),
+        ),
+        if (label != null) ...[
+          const SizedBox(height: 4),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
 /// The joint savings goal and its per-member breakdown (PDR-018).
 class _SavingsGoalBlock extends StatelessWidget {
   final HouseholdEconomyState state;
@@ -329,15 +469,8 @@ class _SavingsGoalBlock extends StatelessWidget {
   Widget build(BuildContext context) {
     final goal = state.activeSavingsGoal;
 
-    if (goal == null) {
-      // UX-P1-SPEC §4 pairs this empty state with a CTA — «Elegid algo para
-      // los dos» — which needs `POST /savings-goals`. That write is F4's, and
-      // a button that did nothing would be worse than none, so the line
-      // states the fact and stops there.
-      return const Text(
-        'Todavía no tenéis una meta conjunta.',
-        style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
-      );
+    if (goal == null || goal.status == 'cancelled') {
+      return const _EmptyGoalState();
     }
 
     return Column(
@@ -387,6 +520,8 @@ class _SavingsGoalBlock extends StatelessWidget {
             ),
           ),
         ],
+        const SizedBox(height: 10),
+        _ContributeButton(goal: goal),
       ],
     );
   }

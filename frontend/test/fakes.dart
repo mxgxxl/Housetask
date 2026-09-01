@@ -1044,8 +1044,66 @@ class FakeEconomyP1Repository implements EconomyP1Repository {
   @override
   Future<void> clearCache(String householdId) async {}
 
-  // The savings surface belongs to F4. Implemented explicitly rather than via
-  // noSuchMethod so a test that reaches one by accident fails by name.
+  // ── Savings writes (TD-066 F4) ──────────────────────────────────────────
+
+  /// Goal returned by [createSavingsGoal]/[contribute]/[cancelSavingsGoal]
+  /// when they do not throw. Scripted so a test can assert exactly what the
+  /// cubit adopted.
+  SavingsGoal? goalResult;
+
+  Object? createGoalError;
+  Object? contributeError;
+  Object? cancelGoalError;
+
+  /// Everything the writes received, in call order — the amounts and the
+  /// operation ids are what the idempotency and «never overspend» assertions
+  /// are made of.
+  final List<Map<String, String>> createGoalCalls = [];
+  final List<int> contributedAmounts = [];
+  final List<String> contributeOperationIds = [];
+  final List<String> cancelledGoalIds = [];
+  final List<String> cancelOperationIds = [];
+
+  @override
+  Future<SavingsGoal> createSavingsGoal(
+    String householdId, {
+    required String itemType,
+    required String itemId,
+    String? operationId,
+  }) async {
+    createGoalCalls.add({'itemType': itemType, 'itemId': itemId});
+    final error = createGoalError;
+    if (error != null) throw error;
+    return goalResult ??
+        SavingsGoal(id: 'g1', itemType: itemType, itemId: itemId, targetCoins: 40);
+  }
+
+  @override
+  Future<SavingsGoal> contribute(
+    String householdId,
+    String goalId, {
+    required int amount,
+    required String operationId,
+  }) async {
+    contributedAmounts.add(amount);
+    contributeOperationIds.add(operationId);
+    final error = contributeError;
+    if (error != null) throw error;
+    return goalResult ?? SavingsGoal(id: goalId, targetCoins: 100, contributedCoins: amount);
+  }
+
+  @override
+  Future<SavingsGoal> cancelSavingsGoal(
+    String householdId,
+    String goalId, {
+    required String operationId,
+  }) async {
+    cancelledGoalIds.add(goalId);
+    cancelOperationIds.add(operationId);
+    final error = cancelGoalError;
+    if (error != null) throw error;
+    return goalResult ?? SavingsGoal(id: goalId, status: 'cancelled');
+  }
 
   @override
   Future<PersonalBudget> adjustBudget(
@@ -1057,29 +1115,5 @@ class FakeEconomyP1Repository implements EconomyP1Repository {
   }) async =>
       throw UnimplementedError('adjustBudget is F4 surface');
 
-  @override
-  Future<SavingsGoal> createSavingsGoal(
-    String householdId, {
-    required String itemType,
-    required String itemId,
-    String? operationId,
-  }) async =>
-      throw UnimplementedError('createSavingsGoal is F4 surface');
 
-  @override
-  Future<SavingsGoal> contribute(
-    String householdId,
-    String goalId, {
-    required int amount,
-    required String operationId,
-  }) async =>
-      throw UnimplementedError('contribute is F4 surface');
-
-  @override
-  Future<SavingsGoal> cancelSavingsGoal(
-    String householdId,
-    String goalId, {
-    required String operationId,
-  }) async =>
-      throw UnimplementedError('cancelSavingsGoal is F4 surface');
 }

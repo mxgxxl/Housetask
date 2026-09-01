@@ -3,9 +3,12 @@ import 'dart:async';
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import 'package:uuid/uuid.dart';
+
 import '../../core/errors/failures.dart';
 import '../../data/models/economy_p1/economy_p1.dart';
 import '../../data/repositories/economy_p1_repository.dart';
+import '../../services/connectivity_service.dart';
 import '../../services/device_timezone_service.dart';
 
 // ── Payload readers ────────────────────────────────────────────────────────
@@ -79,14 +82,13 @@ class HouseholdEconomyNotice extends Equatable {
 
 enum HouseholdEconomyStatus { initial, loading, ready, failure }
 
-/// Everything the «Hogar» section renders (TD-066 F3).
+/// Why «Elegid algo para los dos» is not available (TD-066 F4).
 ///
-/// Shared only. There is deliberately no wallet, budget or streak here: those
-/// are personal (PDR-012), they never leave the personal room, and the
-/// household read endpoint does not send them. What IS shared is household XP
-/// and level, the roster with each member's personal level/XP (owner decision,
-/// 2026-08-27) and the joint savings goal with its per-member breakdown —
-/// which UX-P1-SPEC §4 renders in as many words as «Tú: 40 · Ana: 28».
+/// [goalExists] is PDR-018's «en v1 solo hay una meta activa», enforced
+/// server-side by a partial unique index — so this is the client saying the
+/// same thing early, not the client enforcing it.
+enum GoalCreateUnavailableReason { none, flagOff, goalExists, offline, inFlight }
+
 class HouseholdEconomyState extends Equatable {
   final HouseholdEconomyStatus status;
 
@@ -117,6 +119,15 @@ class HouseholdEconomyState extends Equatable {
   /// Who is looking, so the breakdown can say «Tú» for one of the rows.
   final String? currentUserId;
 
+  /// Whether the viewer is a household admin (TD-066 F4).
+  ///
+  /// Carried from load time so the cancel surface can use it. The BACKEND is
+  /// the authority — it refuses a cancel from anyone but the creator or an
+  /// admin with a 403 — so a wrong value here costs a button, never a
+  /// permission. Roles cannot change while the app runs, since
+  /// promotion/demotion is TD-067 and unimplemented.
+  final bool currentUserIsAdmin;
+
   final DateTime? refreshedAt;
 
   /// The content came from cache because the network could not be reached.
@@ -125,6 +136,13 @@ class HouseholdEconomyState extends Equatable {
 
   /// A failed LOAD. Fatal to the section.
   final String? error;
+
+  /// A failed WRITE — a refused create or cancel. Shown in a snackbar and
+  /// deliberately separate from [error]: the section keeps rendering.
+  final String? actionError;
+
+  final bool isOnline;
+  final bool isCreatingGoal;
 
   /// Modal-class: a household level-up or an unlocked goal.
   final HouseholdEconomyNotice? celebration;
@@ -139,9 +157,13 @@ class HouseholdEconomyState extends Equatable {
     this.members = const [],
     this.activeSavingsGoal,
     this.currentUserId,
+    this.currentUserIsAdmin = false,
     this.refreshedAt,
     this.isStale = false,
     this.error,
+    this.actionError,
+    this.isOnline = true,
+    this.isCreatingGoal = false,
     this.celebration,
     this.notice,
   });
@@ -157,6 +179,22 @@ class HouseholdEconomyState extends Equatable {
   /// figure UX-P1-SPEC §4 asks the household card to show.
   int get xpToNextLevel => householdProgress.xpToNextLevel;
 
+  GoalCreateUnavailableReason get createGoalReason {
+    if (!enabled) return GoalCreateUnavailableReason.flagOff;
+    if (isCreatingGoal) return GoalCreateUnavailableReason.inFlight;
+    // An UNLOCKED goal is not an active one, so it does not block a new goal
+    // server-side either: the partial unique index only covers `active`.
+    final goal = activeSavingsGoal;
+    if (goal != null && goal.isActive) {
+      return GoalCreateUnavailableReason.goalExists;
+    }
+    if (!isOnline) return GoalCreateUnavailableReason.offline;
+    return GoalCreateUnavailableReason.none;
+  }
+
+  bool get canCreateGoal =>
+      createGoalReason == GoalCreateUnavailableReason.none;
+
   /// Nullable fields use explicit `clearX` sentinels rather than
   /// unconditional assignment — the TD-056 fix. Without them a `copyWith()`
   /// that did not mention [error] would keep a stale one alive forever, and
@@ -169,10 +207,15 @@ class HouseholdEconomyState extends Equatable {
     SavingsGoal? activeSavingsGoal,
     bool clearGoal = false,
     String? currentUserId,
+    bool? currentUserIsAdmin,
     DateTime? refreshedAt,
     bool? isStale,
     String? error,
     bool clearError = false,
+    String? actionError,
+    bool clearActionError = false,
+    bool? isOnline,
+    bool? isCreatingGoal,
     HouseholdEconomyNotice? celebration,
     bool clearCelebration = false,
     HouseholdEconomyNotice? notice,
@@ -186,9 +229,13 @@ class HouseholdEconomyState extends Equatable {
         activeSavingsGoal:
             clearGoal ? null : (activeSavingsGoal ?? this.activeSavingsGoal),
         currentUserId: currentUserId ?? this.currentUserId,
+        currentUserIsAdmin: currentUserIsAdmin ?? this.currentUserIsAdmin,
         refreshedAt: refreshedAt ?? this.refreshedAt,
         isStale: isStale ?? this.isStale,
         error: clearError ? null : (error ?? this.error),
+        actionError: clearActionError ? null : (actionError ?? this.actionError),
+        isOnline: isOnline ?? this.isOnline,
+        isCreatingGoal: isCreatingGoal ?? this.isCreatingGoal,
         celebration: clearCelebration ? null : (celebration ?? this.celebration),
         notice: clearNotice ? null : (notice ?? this.notice),
       );
@@ -201,9 +248,13 @@ class HouseholdEconomyState extends Equatable {
         members,
         activeSavingsGoal,
         currentUserId,
+        currentUserIsAdmin,
         refreshedAt,
         isStale,
         error,
+        actionError,
+        isOnline,
+        isCreatingGoal,
         celebration,
         notice,
       ];
@@ -234,12 +285,22 @@ class HouseholdEconomyState extends Equatable {
 /// Mascota tab refreshes on entry), not on the event — see the PR's Proposed
 /// Improvements for the shape a fix would take.
 ///
-/// ── No writes ────────────────────────────────────────────────────────────
-/// Creating, contributing to and cancelling a goal are F4. This cubit reads
-/// and reacts; nothing here spends a coin.
+/// ── Which writes live here, and which do not ─────────────────────────────
+/// Opening a goal does (TD-066 F4): it acts on a HOUSEHOLD resource and needs
+/// no wallet balance to decide anything. Contributing does not — it is a
+/// debit that has to be validated against a live personal balance, which only
+/// EconomyP1Cubit has; it hands the resulting goal back through [applyGoal].
+///
+/// The write is never queued offline. PDR-018 makes a goal real money, and
+/// TD-066-DESIGN §7 rules out queueing any of it until offline compensation
+/// is designed.
 class HouseholdEconomyCubit extends Cubit<HouseholdEconomyState> {
   final EconomyP1Repository _repo;
   final DeviceTimeZoneService _timeZone;
+  final ConnectivityService _connectivity;
+  final Uuid _uuid;
+
+  StreamSubscription<bool>? _connectivitySub;
 
   String? _householdId;
 
@@ -258,8 +319,23 @@ class HouseholdEconomyCubit extends Cubit<HouseholdEconomyState> {
   HouseholdEconomyCubit(
     this._repo, {
     DeviceTimeZoneService? timeZone,
+    ConnectivityService? connectivity,
+    Uuid? uuid,
   })  : _timeZone = timeZone ?? DeviceTimeZoneService(),
-        super(const HouseholdEconomyState());
+        _connectivity = connectivity ?? ConnectivityService(),
+        _uuid = uuid ?? const Uuid(),
+        super(const HouseholdEconomyState()) {
+    _connectivitySub = _connectivity.isOnline.listen((online) {
+      if (isClosed) return;
+      emit(state.copyWith(isOnline: online));
+    });
+  }
+
+  @override
+  Future<void> close() {
+    _connectivitySub?.cancel();
+    return super.close();
+  }
 
   /// Reset to a blank state on logout or session expiry (TD-055/TD-058).
   ///
@@ -279,7 +355,15 @@ class HouseholdEconomyCubit extends Cubit<HouseholdEconomyState> {
   /// its rows. Optional rather than required: the section is worth rendering
   /// before the profile has resolved, and a missing id costs one label, not
   /// the whole read.
-  Future<void> load(String householdId, {String? currentUserId}) async {
+  ///
+  /// [isAdmin] decides only whether «Cancelar meta» is OFFERED — the backend
+  /// is the authority and refuses a cancel from anyone else with a 403, so a
+  /// stale value here costs a button, never a permission.
+  Future<void> load(
+    String householdId, {
+    String? currentUserId,
+    bool? isAdmin,
+  }) async {
     // Switching households: nothing from the previous one may survive, and
     // its in-flight response must not land here. Deliberately not done on the
     // FIRST load — emitting a blank state equal to the initial one would
@@ -292,8 +376,11 @@ class HouseholdEconomyCubit extends Cubit<HouseholdEconomyState> {
     }
     _householdId = householdId;
 
-    if (!isClosed && currentUserId != null) {
-      emit(state.copyWith(currentUserId: currentUserId));
+    if (!isClosed && (currentUserId != null || isAdmin != null)) {
+      emit(state.copyWith(
+        currentUserId: currentUserId,
+        currentUserIsAdmin: isAdmin,
+      ));
     }
 
     final cached = _repo.cached(householdId);
@@ -650,6 +737,110 @@ class HouseholdEconomyCubit extends Cubit<HouseholdEconomyState> {
       level: level,
       value: value,
     );
+  }
+
+  // ── Writes (TD-066 F4) ──────────────────────────────────────────────────
+
+  /// Adopt a goal produced by a write, wherever it was performed.
+  ///
+  /// Public because the third savings write — contributing — happens on
+  /// EconomyP1Cubit, which owns the wallet it debits; the composition root
+  /// wires its `onGoalChanged` to this. Idempotent by construction: a goal is
+  /// replaced wholesale, so applying the same one twice (the HTTP response
+  /// and then the socket echo) lands on the same state.
+  ///
+  /// A goal that is no longer active is CLEARED rather than kept, with one
+  /// exception: an `unlocked` goal lingers so the section can say so until the
+  /// next read. A cancelled one has nothing left to show.
+  void applyGoal(SavingsGoal goal) {
+    if (isClosed) return;
+    if (goal.status == 'cancelled') {
+      emit(state.copyWith(clearGoal: true));
+      return;
+    }
+    emit(state.copyWith(activeSavingsGoal: goal));
+  }
+
+  /// Open the household's one active goal for a catalog item (PDR-018).
+  ///
+  /// Only `itemType`/`itemId` travel: the PRICE comes from the server-side
+  /// catalog. A client that could name its own target would unlock a 40-coin
+  /// cosmetic by declaring the target to be 1, and the economy's ceiling
+  /// would be decorative.
+  Future<void> createGoal({
+    required String itemType,
+    required String itemId,
+  }) async {
+    final householdId = _householdId;
+    if (householdId == null || isClosed) return;
+    if (!state.canCreateGoal) return;
+
+    // Re-checked on the hot path: `state.isOnline` follows a stream that can
+    // lag a transition, and everything downstream of this is money.
+    final online = await _connectivity.checkConnectivity();
+    if (isClosed) return;
+    if (!online) {
+      emit(state.copyWith(
+        actionError: 'Sin conexión: no se puede crear una meta ahora.',
+      ));
+      return;
+    }
+
+    emit(state.copyWith(isCreatingGoal: true, clearActionError: true));
+
+    // One id per logical creation, reused across whatever retries happen
+    // inside ApiService, so a timeout that actually reached the server
+    // replays instead of opening a second goal.
+    final operationId = _uuid.v4();
+
+    try {
+      final goal = await _repo.createSavingsGoal(
+        householdId,
+        itemType: itemType,
+        itemId: itemId,
+        operationId: operationId,
+      );
+      if (isClosed) return;
+      emit(state.copyWith(isCreatingGoal: false, activeSavingsGoal: goal));
+    } catch (e) {
+      if (isClosed) return;
+      emit(state.copyWith(
+        isCreatingGoal: false,
+        actionError: _createMessageFor(e),
+      ));
+      // A 409 means the household already has a goal this build has not seen
+      // — someone else opened one seconds ago. Refetching is what makes the
+      // section show THEIR goal instead of leaving the create button up.
+      if (e is ConflictFailure) unawaited(refresh());
+    }
+  }
+
+  void clearActionError() {
+    if (isClosed) return;
+    emit(state.copyWith(clearActionError: true));
+  }
+
+  /// What to tell the household when opening a goal is refused.
+  ///
+  /// Authored here rather than passed through: the backend's messages in this
+  /// area are English («Unknown cosmetic: x») while the app is Spanish
+  /// throughout, and `ApiService` flattens every 409 into a generic
+  /// "operation already in progress" that would be actively wrong for the
+  /// case that actually happens — a housemate opening a goal first.
+  String _createMessageFor(Object error) {
+    if (error is ConflictFailure) {
+      return 'Vuestro hogar ya tiene una meta activa.';
+    }
+    if (error is NetworkFailure) {
+      return 'Sin conexión: no se pudo crear la meta.';
+    }
+    // 400 is what `priceOfItem` throws for an item the catalog does not know.
+    // It is reachable in practice because the client's catalog is a hand-kept
+    // mirror of the server's (see pet_config.dart), so the two can drift.
+    if (error is ServerFailure && error.statusCode == 400) {
+      return 'Ese artículo ya no está disponible. Actualiza la app y prueba otro.';
+    }
+    return 'No se pudo crear la meta. Inténtalo de nuevo.';
   }
 
   void dismissCelebration() {

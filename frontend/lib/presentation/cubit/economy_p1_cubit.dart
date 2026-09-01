@@ -111,6 +111,23 @@ enum IceUnavailableReason {
   noHousehold,
 }
 
+/// Why «Aportar» is not available (TD-066 F4).
+///
+/// Lives beside the ice reasons because a contribution is the same KIND of
+/// act: a debit from the personal wallet, refused for a reason the member
+/// deserves to be told. [goalInactive] is the one that is not the member's
+/// doing — someone else's contribution reached the price a moment ago, or an
+/// admin cancelled the goal.
+enum ContributeUnavailableReason {
+  none,
+  flagOff,
+  noGoal,
+  goalInactive,
+  insufficientCoins,
+  offline,
+  inFlight,
+}
+
 /// Which of UX-P1-SPEC §4's four "Línea de hoy" variants applies right now.
 ///
 /// The CHOICE lives here rather than in the widget: picking between "spent
@@ -165,6 +182,9 @@ class EconomyP1State extends Equatable {
   final bool isOnline;
   final bool isBuyingIce;
 
+  /// A contribution to the joint savings goal is in flight (TD-066 F4).
+  final bool isContributing;
+
   /// A failed LOAD. Fatal to the section.
   final String? error;
 
@@ -189,6 +209,7 @@ class EconomyP1State extends Equatable {
     this.isStale = false,
     this.isOnline = true,
     this.isBuyingIce = false,
+    this.isContributing = false,
     this.error,
     this.actionError,
     this.celebration,
@@ -249,6 +270,49 @@ class EconomyP1State extends Equatable {
 
   bool get canBuyIce => iceUnavailableReason == IceUnavailableReason.none;
 
+  /// The most this member may put into [goal] right now (TD-066 F4).
+  ///
+  /// The LOWER of two ceilings, and both matter:
+  ///
+  ///  * the wallet balance — «never overspend». The server refuses a debit
+  ///    beyond it with a 403, so a slider that went further would be offering
+  ///    a tap that is guaranteed to fail;
+  ///  * what the goal still needs. The server would happily accept an
+  ///    overshoot — it unlocks the moment the price is reached and the excess
+  ///    is simply gone from the wallet — so nothing but this stops a member
+  ///    from burning 30 🪙 on a goal that needed 4. PDR-018 gives coins back
+  ///    only when a goal is CANCELLED; an overshoot on a goal that unlocks is
+  ///    not refunded.
+  ///
+  /// Floored at zero so a finished or over-funded goal yields a disabled
+  /// control rather than a negative range a slider would assert on.
+  int maxContributionFor(SavingsGoal goal) {
+    final stillNeeded = goal.targetCoins - goal.contributedCoins;
+    final ceiling = stillNeeded < wallet.balance ? stillNeeded : wallet.balance;
+    return ceiling > 0 ? ceiling : 0;
+  }
+
+  /// Why «Aportar» cannot be tapped for [goal], or [ContributeUnavailableReason.none].
+  ///
+  /// Order matters: the reasons the member can act on come last, so a goal
+  /// that is already unlocked says so rather than complaining about coins.
+  ContributeUnavailableReason contributeReasonFor(SavingsGoal? goal) {
+    if (!enabled) return ContributeUnavailableReason.flagOff;
+    if (isContributing) return ContributeUnavailableReason.inFlight;
+    if (goal == null) return ContributeUnavailableReason.noGoal;
+    if (!goal.isActive) return ContributeUnavailableReason.goalInactive;
+    if (maxContributionFor(goal) < 1) {
+      return ContributeUnavailableReason.insufficientCoins;
+    }
+    // Last, because it is the only one that is not about the goal or the
+    // wallet — and the only one that fixes itself.
+    if (!isOnline) return ContributeUnavailableReason.offline;
+    return ContributeUnavailableReason.none;
+  }
+
+  bool canContributeTo(SavingsGoal? goal) =>
+      contributeReasonFor(goal) == ContributeUnavailableReason.none;
+
   /// Nullable fields use explicit `clearX` sentinels rather than
   /// unconditional assignment — the TD-056 fix. Without them, any
   /// `copyWith()` that did not mention [error] would silently keep a stale
@@ -264,6 +328,7 @@ class EconomyP1State extends Equatable {
     bool? isStale,
     bool? isOnline,
     bool? isBuyingIce,
+    bool? isContributing,
     String? error,
     bool clearError = false,
     String? actionError,
@@ -284,6 +349,7 @@ class EconomyP1State extends Equatable {
         isStale: isStale ?? this.isStale,
         isOnline: isOnline ?? this.isOnline,
         isBuyingIce: isBuyingIce ?? this.isBuyingIce,
+        isContributing: isContributing ?? this.isContributing,
         error: clearError ? null : (error ?? this.error),
         actionError: clearActionError ? null : (actionError ?? this.actionError),
         celebration: clearCelebration ? null : (celebration ?? this.celebration),
@@ -302,6 +368,7 @@ class EconomyP1State extends Equatable {
         isStale,
         isOnline,
         isBuyingIce,
+        isContributing,
         error,
         actionError,
         celebration,
@@ -330,6 +397,25 @@ class EconomyP1Cubit extends Cubit<EconomyP1State> {
   final DeviceTimeZoneService _timeZone;
   final ConnectivityService _connectivity;
   final Uuid _uuid;
+
+  /// Where a savings goal this cubit just wrote is handed on (TD-066 F4).
+  ///
+  /// ── Why contributing lives HERE and not on HouseholdEconomyCubit ────────
+  /// A contribution is a debit from the personal wallet. The rule the product
+  /// cares about — «never overspend» — can only be enforced against a LIVE
+  /// balance, and this is the only cubit that has one: `economy:reward` and
+  /// `economy:ice_purchased` move it on every completion and purchase, while
+  /// the household half only ever sees the balance that came with its last
+  /// read. Validating a spend against a snapshot would make "never overspend"
+  /// a claim that stops being true after the first task of the session.
+  ///
+  /// What the write produces, though, is a GOAL — household state. Rather
+  /// than have a widget carry the result from one cubit to the other, the
+  /// composition root wires this to `HouseholdEconomyCubit.applyGoal`, the
+  /// same way `app.dart` already wires `api.onSessionExpired`. The socket
+  /// echo (`household:savings_contribution`) usually arrives too and is
+  /// harmless: it writes server-authoritative totals rather than adding.
+  void Function(SavingsGoal goal)? onGoalChanged;
 
   String? _householdId;
 
@@ -848,6 +934,104 @@ class EconomyP1Cubit extends Cubit<EconomyP1State> {
       if (isClosed) return;
       emit(state.copyWith(isBuyingIce: false, actionError: _messageFor(e)));
     }
+  }
+
+  /// Move [amount] 🪙 from this wallet into [goal] (TD-066 F4, PDR-018).
+  ///
+  /// Never queued offline, for the reason in the class doc: this is a debit,
+  /// and TD-066-DESIGN §7 rules out queueing one until its offline
+  /// compensation is designed. Offline the button is disabled, and a refusal
+  /// that still happens surfaces as a message rather than a pending write.
+  ///
+  /// [amount] is re-clamped here rather than trusted from the caller. The
+  /// slider that produced it was built from a balance that a socket event may
+  /// have moved since — a completion crediting coins, or another device of
+  /// the same member spending them — and the last read of the truth belongs
+  /// where the truth lives.
+  Future<void> contributeToGoal(SavingsGoal goal, int amount) async {
+    final householdId = _householdId;
+    if (householdId == null || isClosed) return;
+    if (!state.canContributeTo(goal)) return;
+
+    final ceiling = state.maxContributionFor(goal);
+    final capped = amount > ceiling ? ceiling : amount;
+    if (capped < 1) return;
+
+    // Re-checked on the hot path: `state.isOnline` follows a stream that can
+    // lag a transition, and this is the last moment before spending money.
+    final online = await _connectivity.checkConnectivity();
+    if (isClosed) return;
+    if (!online) {
+      emit(state.copyWith(
+        actionError: 'Sin conexión: no se puede aportar ahora.',
+      ));
+      return;
+    }
+
+    emit(state.copyWith(isContributing: true, clearActionError: true));
+
+    // One id per logical contribution, reused by whatever retries happen
+    // inside ApiService, so a timeout that actually reached the server
+    // replays instead of paying twice for one tap.
+    final operationId = _uuid.v4();
+
+    try {
+      final updated = await _repo.contribute(
+        householdId,
+        goal.id,
+        amount: capped,
+        operationId: operationId,
+      );
+      if (isClosed) return;
+
+      // The debit is not echoed on the personal room — the contribution
+      // events the server emits are all household-wide (see the controller) —
+      // so this is the only signal the wallet has that the coins left. The
+      // response's own `wallet.balance` would be better still; see the PR's
+      // Proposed Improvements.
+      emit(state.copyWith(
+        isContributing: false,
+        wallet: WalletPersonal(
+          balance: _atLeastZero(state.wallet.balance - capped),
+          dailyReleased: state.wallet.dailyReleased,
+          remaining: state.wallet.remaining,
+        ),
+      ));
+
+      // Household state, produced by a personal write — handed on rather than
+      // held here. See [onGoalChanged].
+      onGoalChanged?.call(updated);
+    } catch (e) {
+      if (isClosed) return;
+      emit(state.copyWith(
+        isContributing: false,
+        actionError: _contributeMessageFor(e),
+      ));
+    }
+  }
+
+  /// What to tell the member when a contribution is refused.
+  ///
+  /// Authored here rather than passed through from the server: every backend
+  /// message in this area is English («Not enough coins: your balance is 12»)
+  /// while the app is Spanish throughout, and a 409 is flattened by
+  /// `ApiService` into a generic "operation already in progress" that would
+  /// be actively wrong for the case that actually happens — someone else's
+  /// contribution reaching the price a moment before this one landed.
+  String _contributeMessageFor(Object error) {
+    if (error is ConflictFailure) {
+      return 'Esta meta ya no acepta aportaciones.';
+    }
+    if (error is NetworkFailure) {
+      return 'Sin conexión: no se pudo aportar.';
+    }
+    if (error is ServerFailure && error.statusCode == 403) {
+      return 'No tienes monedas suficientes para esa aportación.';
+    }
+    if (error is ServerFailure && error.statusCode == 404) {
+      return 'Esa meta ya no existe.';
+    }
+    return 'No se pudo aportar. Inténtalo de nuevo.';
   }
 
   void dismissCelebration() {

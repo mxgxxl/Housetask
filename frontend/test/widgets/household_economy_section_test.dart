@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:homesync/data/models/economy_p1/economy_p1.dart';
+import 'package:homesync/presentation/cubit/economy_p1_cubit.dart';
 import 'package:homesync/presentation/cubit/household_economy_cubit.dart';
 import 'package:homesync/presentation/widgets/celebration_dialog.dart';
 import 'package:homesync/presentation/widgets/household_economy_section.dart';
@@ -61,18 +62,35 @@ HouseholdEconomyState _ready({
 
 /// The cubit is real rather than mocked: its getters are exactly what the
 /// widget renders, so faking them would test the fake.
+///
+/// TD-066 F4 gave the section a second cubit to read: «Aportar» is enabled or
+/// not by the PERSONAL wallet, which never reaches the household room. It is
+/// seeded with a comfortable balance here — these tests are about what the
+/// section displays, and the contribution rules have their own file.
+late EconomyP1Cubit _wallet;
+
 Future<HouseholdEconomyCubit> _pump(
   WidgetTester tester,
   HouseholdEconomyState state,
 ) async {
-  final cubit = HouseholdEconomyCubit(FakeEconomyP1Repository());
+  final repo = FakeEconomyP1Repository();
+  final cubit = HouseholdEconomyCubit(repo, connectivity: FakeConnectivityService());
   cubit.emit(state);
+  _wallet = EconomyP1Cubit(repo, connectivity: FakeConnectivityService())
+    ..emit(const EconomyP1State(
+      status: EconomyP1Status.ready,
+      enabled: true,
+      wallet: WalletPersonal(balance: 100, dailyReleased: 10, remaining: 30),
+    ));
 
   await tester.pumpWidget(
     MaterialApp(
       home: Scaffold(
-        body: BlocProvider<HouseholdEconomyCubit>.value(
-          value: cubit,
+        body: MultiBlocProvider(
+          providers: [
+            BlocProvider<HouseholdEconomyCubit>.value(value: cubit),
+            BlocProvider<EconomyP1Cubit>.value(value: _wallet),
+          ],
           child: const SingleChildScrollView(child: HouseholdEconomySection()),
         ),
       ),
@@ -95,12 +113,14 @@ void main() {
       expect(find.text('Bea'), findsNothing);
       expect(find.textContaining('Nivel de hogar'), findsNothing);
       await cubit.close();
+      await _wallet.close();
     });
 
     testWidgets('renders nothing before the first load', (tester) async {
       final cubit = await _pump(tester, const HouseholdEconomyState());
       expect(find.text('Hogar'), findsNothing);
       await cubit.close();
+      await _wallet.close();
     });
 
     testWidgets('renders the section once P1 is on', (tester) async {
@@ -112,6 +132,7 @@ void main() {
         findsOneWidget,
       );
       await cubit.close();
+      await _wallet.close();
     });
 
     testWidgets('marks stale content without hiding it', (tester) async {
@@ -119,6 +140,7 @@ void main() {
       expect(find.text('Sin conexión'), findsOneWidget);
       expect(find.text('Ana (tú)'), findsOneWidget);
       await cubit.close();
+      await _wallet.close();
     });
   });
 
@@ -134,6 +156,7 @@ void main() {
       // UX-P1-SPEC §4's own phrasing: the distance left, not the fraction.
       expect(find.text('200 XP para nivel 6'), findsOneWidget);
       await cubit.close();
+      await _wallet.close();
     });
 
     testWidgets('renders shared unlocks as readable names', (tester) async {
@@ -145,6 +168,7 @@ void main() {
       // Not the raw id: the server sends namespaced ids and no display names.
       expect(find.text('Dragon skin'), findsOneWidget);
       await cubit.close();
+      await _wallet.close();
     });
   });
 
@@ -159,6 +183,7 @@ void main() {
       // is exactly one `sort` away and would look like nothing was wrong.
       expect(ana.dy, lessThan(bea.dy));
       await cubit.close();
+      await _wallet.close();
     });
 
     testWidgets('shows each member level and XP, and no wallet or streak',
@@ -172,6 +197,7 @@ void main() {
       expect(find.textContaining('🪙 '), findsNothing);
       expect(find.textContaining('🔥'), findsNothing);
       await cubit.close();
+      await _wallet.close();
     });
 
     testWidgets('carries no ranking decoration of any kind', (tester) async {
@@ -184,6 +210,7 @@ void main() {
             reason: 'found ranking marker "$marker"');
       }
       await cubit.close();
+      await _wallet.close();
     });
 
     testWidgets('marks the reader without moving them', (tester) async {
@@ -196,6 +223,7 @@ void main() {
       final bea = tester.getTopLeft(find.text('Bea (tú)'));
       expect(ana.dy, lessThan(bea.dy));
       await cubit.close();
+      await _wallet.close();
     });
   });
 
@@ -228,6 +256,7 @@ void main() {
       // in the order the cubit holds — never sorted by amount.
       expect(find.text('Tú: 40 · Bea: 28'), findsOneWidget);
       await cubit.close();
+      await _wallet.close();
     });
 
     testWidgets('keeps the breakdown order when the reader is behind',
@@ -250,6 +279,7 @@ void main() {
       // in, not a ranking of who chipped in most.
       expect(find.text('Tú: 20 · Bea: 70'), findsOneWidget);
       await cubit.close();
+      await _wallet.close();
     });
 
     testWidgets('says so when the goal is unlocked', (tester) async {
@@ -260,16 +290,20 @@ void main() {
 
       expect(find.text('Meta desbloqueada'), findsOneWidget);
       await cubit.close();
+      await _wallet.close();
     });
 
-    testWidgets('states the empty case without a dead CTA', (tester) async {
+    testWidgets('states the empty case with the spec\'s live CTA', (tester) async {
       final cubit = await _pump(tester, _ready());
 
       expect(find.text('Todavía no tenéis una meta conjunta.'), findsOneWidget);
-      // The spec's «Elegid algo para los dos» CTA needs the create-goal
-      // write, which is F4's. A button that did nothing would be worse.
-      expect(find.text('Elegid algo para los dos'), findsNothing);
+      // UX-P1-SPEC §4's CTA, verbatim. It was a plain sentence in F3 because
+      // `POST /savings-goals` had no caller yet; F4 gave it one, so the
+      // button is real rather than decorative — see
+      // savings_goal_actions_test.dart for what it sends.
+      expect(find.text('Elegid algo para los dos'), findsOneWidget);
       await cubit.close();
+      await _wallet.close();
     });
   });
 
@@ -303,6 +337,7 @@ void main() {
       // re-raised on the next rebuild.
       expect(cubit.state.celebration, isNull);
       await cubit.close();
+      await _wallet.close();
     });
 
     testWidgets('an unlocked goal celebrates cooperatively', (tester) async {
@@ -325,6 +360,7 @@ void main() {
         findsOneWidget,
       );
       await cubit.close();
+      await _wallet.close();
     });
 
     testWidgets('a milestone is a toast, not a modal', (tester) async {
@@ -349,6 +385,7 @@ void main() {
         findsOneWidget,
       );
       await cubit.close();
+      await _wallet.close();
     });
 
     testWidgets('a cancelled goal says nothing shared', (tester) async {
@@ -379,6 +416,7 @@ void main() {
       expect(find.byType(SnackBar), findsNothing);
       expect(find.byType(CelebrationDialog), findsNothing);
       await cubit.close();
+      await _wallet.close();
     });
   });
 }

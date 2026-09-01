@@ -87,7 +87,17 @@ class HomeSyncApp extends StatelessWidget {
           // more fields on EconomyP1Cubit: the two halves have different
           // audiences, and keeping them apart is what stops a shared widget
           // from being one `copyWith` away from a personal wallet.
-          BlocProvider(create: (_) => HouseholdEconomyCubit(economyP1Repo)),
+          BlocProvider(create: (ctx) {
+            final household = HouseholdEconomyCubit(economyP1Repo);
+            // TD-066 F4: contributing to the joint goal is a debit, so it
+            // lives on EconomyP1Cubit where the live wallet balance is — but
+            // what it produces is a GOAL, which is household state. Wiring
+            // the handoff here rather than in a widget keeps the two cubits
+            // ignorant of each other, the same way `api.onSessionExpired` is
+            // wired above.
+            ctx.read<EconomyP1Cubit>().onGoalChanged = household.applyGoal;
+            return household;
+          }),
           BlocProvider(
             create: (ctx) => SocketCubit(
               socketService,

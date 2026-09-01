@@ -95,7 +95,17 @@ class _MainScaffoldState extends State<MainScaffold> {
     // round trip, so this line costs no extra request. `currentUserId` is
     // what lets the savings breakdown say «Tú» for one of its rows; null
     // before the profile resolves costs that one label, not the read.
-    context.read<HouseholdEconomyCubit>().load(householdId, currentUserId: userId);
+    // `isAdmin` decides only whether «Cancelar meta» is offered; the backend
+    // refuses a cancel from anyone but the creator or an admin regardless.
+    // Read once here because roles cannot change while the app runs —
+    // promotion/demotion is TD-067 and unimplemented.
+    final members = context.read<HouseholdCubit>().state.current?.members;
+    final isAdmin = members?.any((m) => m.user.id == userId && m.isAdmin) ?? false;
+    context.read<HouseholdEconomyCubit>().load(
+          householdId,
+          currentUserId: userId,
+          isAdmin: isAdmin,
+        );
   }
 
   /// Every page below lives in an [IndexedStack], so switching tabs never
