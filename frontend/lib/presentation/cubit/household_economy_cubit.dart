@@ -89,6 +89,29 @@ enum HouseholdEconomyStatus { initial, loading, ready, failure }
 /// same thing early, not the client enforcing it.
 enum GoalCreateUnavailableReason { none, flagOff, goalExists, offline, inFlight }
 
+/// Why «Cancelar meta» is not available (TD-066 F4).
+///
+/// [notAllowed] mirrors the backend rule: only the goal's creator or a
+/// household admin may dissolve it, because the money in it belongs to
+/// everyone who put some in.
+enum GoalCancelUnavailableReason {
+  none,
+  flagOff,
+  noGoal,
+  goalInactive,
+  notAllowed,
+  offline,
+  inFlight,
+}
+
+/// Everything the «Hogar» section renders (TD-066 F3).
+///
+/// Shared only. There is deliberately no wallet, budget or streak here: those
+/// are personal (PDR-012), they never leave the personal room, and the
+/// household read endpoint does not send them. What IS shared is household XP
+/// and level, the roster with each member's personal level/XP (owner decision,
+/// 2026-08-27) and the joint savings goal with its per-member breakdown —
+/// which UX-P1-SPEC §4 renders in as many words as «Tú: 40 · Ana: 28».
 class HouseholdEconomyState extends Equatable {
   final HouseholdEconomyStatus status;
 
@@ -121,7 +144,7 @@ class HouseholdEconomyState extends Equatable {
 
   /// Whether the viewer is a household admin (TD-066 F4).
   ///
-  /// Carried from load time so the cancel surface can use it. The BACKEND is
+  /// Only used to decide whether «Cancelar meta» is offered. The BACKEND is
   /// the authority — it refuses a cancel from anyone but the creator or an
   /// admin with a 403 — so a wrong value here costs a button, never a
   /// permission. Roles cannot change while the app runs, since
@@ -143,6 +166,7 @@ class HouseholdEconomyState extends Equatable {
 
   final bool isOnline;
   final bool isCreatingGoal;
+  final bool isCancellingGoal;
 
   /// Modal-class: a household level-up or an unlocked goal.
   final HouseholdEconomyNotice? celebration;
@@ -164,6 +188,7 @@ class HouseholdEconomyState extends Equatable {
     this.actionError,
     this.isOnline = true,
     this.isCreatingGoal = false,
+    this.isCancellingGoal = false,
     this.celebration,
     this.notice,
   });
@@ -178,6 +203,17 @@ class HouseholdEconomyState extends Equatable {
   /// XP still needed for the next shared level — the «200 XP para nivel 6»
   /// figure UX-P1-SPEC §4 asks the household card to show.
   int get xpToNextLevel => householdProgress.xpToNextLevel;
+
+  /// Whether the viewer may dissolve the goal: its creator, or an admin.
+  ///
+  /// The same rule the backend enforces. Duplicated deliberately — the
+  /// backend's copy is the one that decides, this one only decides whether to
+  /// OFFER the button, and a button that 403s on tap is worse than no button.
+  bool get canCancelGoal {
+    final goal = activeSavingsGoal;
+    if (goal == null) return false;
+    return currentUserIsAdmin || goal.createdBy == currentUserId;
+  }
 
   GoalCreateUnavailableReason get createGoalReason {
     if (!enabled) return GoalCreateUnavailableReason.flagOff;
@@ -194,6 +230,19 @@ class HouseholdEconomyState extends Equatable {
 
   bool get canCreateGoal =>
       createGoalReason == GoalCreateUnavailableReason.none;
+
+  GoalCancelUnavailableReason get cancelGoalReason {
+    if (!enabled) return GoalCancelUnavailableReason.flagOff;
+    if (isCancellingGoal) return GoalCancelUnavailableReason.inFlight;
+    final goal = activeSavingsGoal;
+    if (goal == null) return GoalCancelUnavailableReason.noGoal;
+    if (!goal.isActive) return GoalCancelUnavailableReason.goalInactive;
+    if (!canCancelGoal) return GoalCancelUnavailableReason.notAllowed;
+    if (!isOnline) return GoalCancelUnavailableReason.offline;
+    return GoalCancelUnavailableReason.none;
+  }
+
+  bool get canCancel => cancelGoalReason == GoalCancelUnavailableReason.none;
 
   /// Nullable fields use explicit `clearX` sentinels rather than
   /// unconditional assignment — the TD-056 fix. Without them a `copyWith()`
@@ -216,6 +265,7 @@ class HouseholdEconomyState extends Equatable {
     bool clearActionError = false,
     bool? isOnline,
     bool? isCreatingGoal,
+    bool? isCancellingGoal,
     HouseholdEconomyNotice? celebration,
     bool clearCelebration = false,
     HouseholdEconomyNotice? notice,
@@ -236,6 +286,7 @@ class HouseholdEconomyState extends Equatable {
         actionError: clearActionError ? null : (actionError ?? this.actionError),
         isOnline: isOnline ?? this.isOnline,
         isCreatingGoal: isCreatingGoal ?? this.isCreatingGoal,
+        isCancellingGoal: isCancellingGoal ?? this.isCancellingGoal,
         celebration: clearCelebration ? null : (celebration ?? this.celebration),
         notice: clearNotice ? null : (notice ?? this.notice),
       );
@@ -255,6 +306,7 @@ class HouseholdEconomyState extends Equatable {
         actionError,
         isOnline,
         isCreatingGoal,
+        isCancellingGoal,
         celebration,
         notice,
       ];
@@ -286,14 +338,15 @@ class HouseholdEconomyState extends Equatable {
 /// Improvements for the shape a fix would take.
 ///
 /// ── Which writes live here, and which do not ─────────────────────────────
-/// Opening a goal does (TD-066 F4): it acts on a HOUSEHOLD resource and needs
-/// no wallet balance to decide anything. Contributing does not — it is a
-/// debit that has to be validated against a live personal balance, which only
-/// EconomyP1Cubit has; it hands the resulting goal back through [applyGoal].
+/// Opening a goal and cancelling one do (TD-066 F4): both act on a HOUSEHOLD
+/// resource and neither needs a wallet balance to decide anything. The third,
+/// contributing, lives on EconomyP1Cubit instead — it is a debit that has to
+/// be validated against a live personal balance, which only that cubit has.
+/// It hands the resulting goal back through [applyGoal].
 ///
-/// The write is never queued offline. PDR-018 makes a goal real money, and
-/// TD-066-DESIGN §7 rules out queueing any of it until offline compensation
-/// is designed.
+/// Neither write is ever queued offline. PDR-018 makes a goal real money —
+/// cancelling one moves coins back into several wallets — and TD-066-DESIGN
+/// §7 rules out queueing any of it until offline compensation is designed.
 class HouseholdEconomyCubit extends Cubit<HouseholdEconomyState> {
   final EconomyP1Repository _repo;
   final DeviceTimeZoneService _timeZone;
@@ -815,6 +868,54 @@ class HouseholdEconomyCubit extends Cubit<HouseholdEconomyState> {
     }
   }
 
+  /// Cancel the active goal and refund every contributor (PDR-018).
+  ///
+  /// The refunds are the server's work, inside one transaction: this only
+  /// asks. Each contributor learns what came back to them privately, through
+  /// `economy:savings_refunded` on their own room — nothing about the amounts
+  /// is announced to the household.
+  Future<void> cancelGoal() async {
+    final householdId = _householdId;
+    final goal = state.activeSavingsGoal;
+    if (householdId == null || goal == null || isClosed) return;
+    if (!state.canCancel) return;
+
+    final online = await _connectivity.checkConnectivity();
+    if (isClosed) return;
+    if (!online) {
+      emit(state.copyWith(
+        actionError: 'Sin conexión: no se puede cancelar la meta ahora.',
+      ));
+      return;
+    }
+
+    emit(state.copyWith(isCancellingGoal: true, clearActionError: true));
+
+    // Minted once per logical cancel, not per attempt: cancelling writes a
+    // refund entry per contributor, so a replay under a fresh key would be a
+    // second set of refunds.
+    final operationId = _uuid.v4();
+
+    try {
+      await _repo.cancelSavingsGoal(
+        householdId,
+        goal.id,
+        operationId: operationId,
+      );
+      if (isClosed) return;
+      emit(state.copyWith(isCancellingGoal: false, clearGoal: true));
+    } catch (e) {
+      if (isClosed) return;
+      emit(state.copyWith(
+        isCancellingGoal: false,
+        actionError: _cancelMessageFor(e),
+      ));
+      // Already cancelled or already unlocked elsewhere: the local picture is
+      // behind, and only a read can say which.
+      if (e is ConflictFailure) unawaited(refresh());
+    }
+  }
+
   void clearActionError() {
     if (isClosed) return;
     emit(state.copyWith(clearActionError: true));
@@ -841,6 +942,22 @@ class HouseholdEconomyCubit extends Cubit<HouseholdEconomyState> {
       return 'Ese artículo ya no está disponible. Actualiza la app y prueba otro.';
     }
     return 'No se pudo crear la meta. Inténtalo de nuevo.';
+  }
+
+  String _cancelMessageFor(Object error) {
+    if (error is ConflictFailure) {
+      return 'Esta meta ya no está activa.';
+    }
+    if (error is NetworkFailure) {
+      return 'Sin conexión: no se pudo cancelar la meta.';
+    }
+    if (error is ServerFailure && error.statusCode == 403) {
+      return 'Solo quien creó la meta o un admin puede cancelarla.';
+    }
+    if (error is ServerFailure && error.statusCode == 404) {
+      return 'Esa meta ya no existe.';
+    }
+    return 'No se pudo cancelar la meta. Inténtalo de nuevo.';
   }
 
   void dismissCelebration() {

@@ -460,6 +460,75 @@ class _ContributeButton extends StatelessWidget {
   }
 }
 
+/// «Cancelar meta», offered only to the goal's creator or a household admin.
+///
+/// The same rule the backend enforces, duplicated on purpose: the backend's
+/// copy is the one that DECIDES — it answers 403 to anyone else — while this
+/// one only decides whether to offer the button, and a button that 403s on
+/// tap is worse than no button at all.
+///
+/// [GoalCancelUnavailableReason.notAllowed] renders no label. Telling a
+/// member «solo quien creó la meta puede cancelarla» under a greyed button
+/// they never asked about is noise; the button simply is not there.
+class _CancelGoalButton extends StatelessWidget {
+  final HouseholdEconomyState state;
+  const _CancelGoalButton({required this.state});
+
+  static String? _reasonLabel(GoalCancelUnavailableReason reason) =>
+      switch (reason) {
+        GoalCancelUnavailableReason.offline =>
+          'Sin conexión: no se puede cancelar ahora',
+        GoalCancelUnavailableReason.none ||
+        GoalCancelUnavailableReason.inFlight ||
+        GoalCancelUnavailableReason.flagOff ||
+        GoalCancelUnavailableReason.noGoal ||
+        GoalCancelUnavailableReason.goalInactive ||
+        GoalCancelUnavailableReason.notAllowed =>
+          null,
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final reason = state.cancelGoalReason;
+    // Not merely disabled — ABSENT. A member who may not cancel has no
+    // business being shown the control at all, and the same is true of a goal
+    // that is already unlocked: there is nothing left to dissolve.
+    if (reason == GoalCancelUnavailableReason.notAllowed ||
+        reason == GoalCancelUnavailableReason.goalInactive ||
+        reason == GoalCancelUnavailableReason.noGoal) {
+      return const SizedBox.shrink();
+    }
+
+    final label = _reasonLabel(reason);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: 4),
+        TextButton(
+          onPressed: state.canCancel
+              ? () => showCancelSavingsGoalDialog(context)
+              : null,
+          style: TextButton.styleFrom(foregroundColor: AppColors.error),
+          child: state.isCancellingGoal
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Cancelar meta'),
+        ),
+        if (label != null)
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+          ),
+      ],
+    );
+  }
+}
+
 /// The joint savings goal and its per-member breakdown (PDR-018).
 class _SavingsGoalBlock extends StatelessWidget {
   final HouseholdEconomyState state;
@@ -522,6 +591,7 @@ class _SavingsGoalBlock extends StatelessWidget {
         ],
         const SizedBox(height: 10),
         _ContributeButton(goal: goal),
+        _CancelGoalButton(state: state),
       ],
     );
   }

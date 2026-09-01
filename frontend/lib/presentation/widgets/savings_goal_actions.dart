@@ -215,3 +215,40 @@ class _ContributeDialogState extends State<_ContributeDialog> {
     );
   }
 }
+
+/// «Cancelar meta» — dissolve the goal and give everyone their coins back.
+///
+/// A confirmation, and an explicit one: UX-P1-SPEC §4 says «la confirmación
+/// de cancelación avisa del reembolso», and it is the only action in P1 that
+/// moves other people's money. The member tapping it may have contributed
+/// nothing at all — an admin can cancel a goal someone else opened — so the
+/// sentence names the effect on EVERYONE, not on them.
+Future<void> showCancelSavingsGoalDialog(BuildContext context) {
+  final cubit = context.read<HouseholdEconomyCubit>();
+  return showDialog<void>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('¿Cancelar la meta?'),
+      content: const Text(
+        'Esto reembolsará a todos los que aportaron. Cada persona recuperará '
+        'exactamente lo que puso.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(),
+          child: const Text('Volver'),
+        ),
+        // Destructive styling, and NOT the default action: the safe choice is
+        // the one a stray tap should land on.
+        TextButton(
+          onPressed: () {
+            cubit.cancelGoal();
+            Navigator.of(dialogContext).pop();
+          },
+          style: TextButton.styleFrom(foregroundColor: AppColors.error),
+          child: const Text('Cancelar meta'),
+        ),
+      ],
+    ),
+  );
+}
