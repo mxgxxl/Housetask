@@ -4,7 +4,11 @@ import { authMiddleware } from '../middleware/auth.middleware';
 import { requireMembership } from '../middleware/membership.middleware';
 import { idempotency } from '../middleware/idempotency.middleware';
 import { validate } from '../middleware/validate';
-import { createHouseholdSchema, joinHouseholdSchema } from '../schemas/household.schema';
+import {
+  createHouseholdSchema,
+  joinHouseholdSchema,
+  transferOwnershipSchema,
+} from '../schemas/household.schema';
 import { asyncHandler } from '../utils/asyncHandler';
 
 const router = Router();
@@ -40,6 +44,40 @@ router.delete(
   '/:householdId/members/:userId',
   requireMembership,
   asyncHandler(householdController.removeMember),
+);
+
+// Governance (TD-067, PDR-022). requireMembership answers 401/403/404 for a
+// caller outside the household; being the CREATOR is checked in the service,
+// inside the same transaction that writes, because `createdBy` is a live
+// permission that a concurrent transfer can move (Hard Rule 3).
+//
+// PATCH, not POST: promote/demote set a member's role to a known value, so a
+// replay lands on the same state rather than creating anything. That is also
+// why they carry no `Idempotency-Key` — Hard Rule 13 governs POSTs that create
+// a resource, and these create nothing. `leave` and `transfer-ownership` are
+// POST because they are commands rather than field edits, and are likewise
+// idempotent by construction: the second call finds the caller already gone,
+// or already not the owner, and answers 403.
+router.patch(
+  '/:householdId/members/:userId/promote',
+  requireMembership,
+  asyncHandler(householdController.promoteMember),
+);
+router.patch(
+  '/:householdId/members/:userId/demote',
+  requireMembership,
+  asyncHandler(householdController.demoteMember),
+);
+router.post(
+  '/:householdId/transfer-ownership',
+  requireMembership,
+  validate(transferOwnershipSchema),
+  asyncHandler(householdController.transferOwnership),
+);
+router.post(
+  '/:householdId/leave',
+  requireMembership,
+  asyncHandler(householdController.leave),
 );
 
 export default router;

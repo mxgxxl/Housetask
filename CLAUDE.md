@@ -192,7 +192,9 @@ Detailed ADRs live in docs/ADRs.md. Index:
 | `shopping:purchased` | ShoppingItem | Item marked purchased |
 | `shopping:deleted` | `{ id, householdId }` | Item removed |
 | `household:member_joined` | `{ householdId, userId }` | User joined household |
-| `household:member_left` | `{ householdId, userId }` | User left/removed |
+| `household:member_left` | `{ householdId, userId }` | User left/removed — by expulsion (`DELETE .../members/:userId`) or voluntarily (`POST .../leave`, TD-067) |
+| `household:member_role_changed` | `{ householdId, userId, previousRole, role }` | A role actually changed (TD-067, PDR-022 D1). Not emitted when the request asked for the role the member already had, and not emitted for a rejected one — an event announcing a transition that did not happen would make every client re-render for nothing. Also fires for the automatic promotion `POST .../leave` performs when the last admin walks out (D3) |
+| `household:ownership_transferred` | `{ householdId, previousOwnerId, ownerId }` | `Household.createdBy` moved (TD-067, PDR-022 D2) — either an explicit `POST .../transfer-ownership` or the automatic succession when the creator leaves without transferring first. PDR-022 turned `createdBy` from a historical field into a live permission, so this event changes what the receiving client is allowed to DO, not just what it displays |
 | `tasks:batch_created` | `{ tasks[], count }` | Recurring catch-up generation |
 | `tasks:purged` | `{ householdId, deleted }` | Admin purges the trash (TD-048); only emitted when `deleted > 0` |
 | `pet:adopt_requested` | AdoptionRequest: `{ id, householdId, species, name, requestedBy, status: 'pending', createdAt, updatedAt }` | 2+ member household proposes an adoption (PDR-001) |

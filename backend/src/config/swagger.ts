@@ -429,6 +429,123 @@ export const swaggerSpec: Record<string, unknown> = {
         },
       },
     },
+    '/households/{householdId}/members/{userId}/promote': {
+      patch: {
+        tags: ['Households'],
+        summary: 'Promote a member to admin (creator only — PDR-022 D1)',
+        description:
+          'Only the household creator may change roles. Idempotent: promoting an existing admin succeeds and changes nothing.',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          '200': { description: 'The household, with the updated member list' },
+          '403': { description: 'Not a member, or not the household creator' },
+          '404': { description: 'Household not found, or target is not a member' },
+        },
+      },
+    },
+    '/households/{householdId}/members/{userId}/demote': {
+      patch: {
+        tags: ['Households'],
+        summary: 'Demote an admin to member (creator only — PDR-022 D1)',
+        description:
+          'Only the household creator may change roles, and the creator can never be the target: they are indegradable. Rejected with 400 if it would leave the household with no admin (Hard Rule 9).',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          '200': { description: 'The household, with the updated member list' },
+          '400': {
+            description: 'The household must keep at least one admin',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
+          '403': {
+            description: 'Not a member, not the creator, or the target IS the creator',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
+          '404': { description: 'Household not found, or target is not a member' },
+        },
+      },
+    },
+    '/households/{householdId}/transfer-ownership': {
+      post: {
+        tags: ['Households'],
+        summary: 'Transfer household ownership to another admin (PDR-022 D2)',
+        description:
+          'Rewrites `createdBy`. The receiver must already be an admin; the outgoing creator stays in the household as an admin.',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['userId'],
+                properties: { userId: { type: 'string', description: 'The receiving admin' } },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'The household, with the new createdBy' },
+          '400': {
+            description: 'Receiver is not an admin, or is the caller',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
+          '403': { description: 'Not a member, or not the household creator' },
+          '404': { description: 'Household not found, or receiver is not a member' },
+        },
+      },
+    },
+    '/households/{householdId}/leave': {
+      post: {
+        tags: ['Households'],
+        summary: 'Leave the household (PDR-022 D3)',
+        description:
+          'Any member may leave. Inside one transaction the server promotes the most senior remaining member if the caller was the last admin, auto-transfers ownership to the most senior remaining admin if the caller owned the household, and refunds the caller active joint-savings contributions (Hard Rule 16b) before deleting the membership. The last member of a household cannot leave — they must delete it instead.',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          '200': {
+            description: 'What the departure changed. Deliberately NOT the household: the caller is no longer entitled to its roster or invite code.',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    data: {
+                      type: 'object',
+                      properties: {
+                        left: { type: 'boolean' },
+                        promotedUserId: { type: 'string', nullable: true },
+                        newOwnerId: { type: 'string', nullable: true },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          '400': {
+            description: 'The caller is the last member; delete the household instead',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
+          '403': { description: 'Not a member of this household' },
+          '404': { description: 'Household not found' },
+        },
+      },
+    },
     '/households/{householdId}/tasks/timeline': {
       get: {
         tags: ['Tasks'],

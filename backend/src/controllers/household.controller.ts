@@ -80,3 +80,69 @@ export async function getStats(req: AuthenticatedRequest, res: Response): Promis
   const stats = await householdStatsService.getHouseholdStats(req.params.householdId, period);
   sendSuccess(res, stats);
 }
+
+/**
+ * PATCH /api/households/:householdId/members/:userId/promote
+ * Makes a member an admin. Creator only (PDR-022 D1).
+ */
+export async function promoteMember(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const household = await householdService.changeMemberRole(
+    req.params.householdId,
+    req.user!.userId,
+    req.params.userId,
+    'admin',
+  );
+  sendSuccess(res, await householdService.serializeHousehold(household));
+}
+
+/**
+ * PATCH /api/households/:householdId/members/:userId/demote
+ * Makes an admin a plain member. Creator only, and never the creator
+ * themselves (PDR-022 D1).
+ */
+export async function demoteMember(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const household = await householdService.changeMemberRole(
+    req.params.householdId,
+    req.user!.userId,
+    req.params.userId,
+    'member',
+  );
+  sendSuccess(res, await householdService.serializeHousehold(household));
+}
+
+/**
+ * POST /api/households/:householdId/transfer-ownership
+ * Body: { userId } — shape validated by transferOwnershipSchema.
+ * Hands `createdBy` to another admin; the outgoing creator stays an admin
+ * and stays in the household (PDR-022 D2).
+ */
+export async function transferOwnership(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const household = await householdService.transferOwnership(
+    req.params.householdId,
+    req.user!.userId,
+    req.body.userId,
+  );
+  sendSuccess(res, await householdService.serializeHousehold(household));
+}
+
+/**
+ * POST /api/households/:householdId/leave
+ * The caller leaves the household (PDR-022 D3).
+ *
+ * Returns the succession rather than the household: the caller is no longer a
+ * member, so serializing the household back to them would hand a former member
+ * its current roster and invite code. The two optional ids are what the client
+ * needs to explain what happened ("Ana is now the admin"), and both name
+ * people the caller was a housemate of a moment ago.
+ */
+export async function leave(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const outcome = await householdService.leaveHousehold(
+    req.params.householdId,
+    req.user!.userId,
+  );
+  sendSuccess(res, {
+    left: true,
+    promotedUserId: outcome.promoteUserId ?? null,
+    newOwnerId: outcome.newOwnerId ?? null,
+  });
+}

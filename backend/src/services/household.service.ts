@@ -327,14 +327,11 @@ async function removeMemberInTransaction(
   // (and leaves removals in different households unaffected, since they touch
   // different documents). `matchedCount` doubles as the 404 check, so this
   // costs no extra round trip.
-  const touched = await HouseholdModel.updateOne(
-    { _id: householdId },
-    { $currentDate: { updatedAt: true } },
-    { session },
-  );
-  if (touched.matchedCount === 0) {
-    throw new AppError('Household not found', 404);
-  }
+  // `lockHousehold` performs exactly the write this function used to do inline
+  // — and for exactly the reason documented above — and additionally returns
+  // the household document, which PDR-022 now needs here to know who the
+  // creator is.
+  const household = await lockHousehold(householdId, session);
 
   const householdObjectId = new Types.ObjectId(householdId);
 
@@ -358,6 +355,26 @@ async function removeMemberInTransaction(
     throw new AppError('Cannot remove the last admin of the household', 400);
   }
 
+  // PDR-022 D1: the creator cannot be demoted, and being expelled is strictly
+  // stronger than being demoted — an admin who cannot take the creator's role
+  // away must not be able to take their membership away either. Without this,
+  // any second admin could remove the creator and leave `createdBy` pointing
+  // at a non-member: a household with nobody able to manage roles, transfer
+  // ownership or delete it. The creator's own exit is `leaveHousehold` (which
+  // auto-transfers) or destruction (D4).
+  //
+  // Deliberately AFTER the last-admin check, not before. When the creator is
+  // also the only admin, both rules reject the same request, and Hard Rule 9 is
+  // the one that should say so: it is the older invariant, it is what the
+  // caller actually has to fix (find another admin), and half a dozen tests
+  // across the TD-001 suites pin that exact 400 as the evidence that the admin
+  // count is read from the authoritative collection. This guard only changes
+  // the answer where the request would otherwise have SUCCEEDED — a second
+  // admin expelling the creator.
+  if (household.createdBy.toString() === targetUserId) {
+    throw new AppError('The household creator cannot be removed', 403);
+  }
+
   // TD-066 B10: give the departing member their still-active savings
   // contributions back, BEFORE their membership goes (TD-066-DESIGN §4). The
   // order is the point: once the row is gone they are no longer a member, and
@@ -379,6 +396,413 @@ async function removeMemberInTransaction(
     { householdId: householdObjectId, userId: new Types.ObjectId(targetUserId) },
     { session },
   );
+}
+
+/**
+ * Order a household's memberships the way governance decisions read them:
+ * oldest first (TD-067 / PDR-022 D2 and D3).
+ *
+ * `joinedAt` ascending with `_id` as tiebreak, identical to `loadMembers`.
+ * The tiebreak is not cosmetic here the way it is there: seniority now decides
+ * who inherits the household's administration and its ownership, so two
+ * memberships sharing a timestamp — which a backfill can produce — must still
+ * resolve to the same successor on every request, not to whichever the index
+ * happened to yield first.
+ */
+async function loadMembersBySeniority(
+  householdId: Types.ObjectId,
+  session: ClientSession,
+): Promise<IHouseholdMember[]> {
+  return HouseholdMemberModel.find({ householdId })
+    .sort({ joinedAt: 1, _id: 1 })
+    .session(session)
+    .exec();
+}
+
+/**
+ * Re-read the household inside a transaction AND make it that transaction's
+ * serialization point (TD-067).
+ *
+ * Every governance operation added by PDR-022 is a read-then-write across two
+ * different documents — count the admins, then change a role; find the oldest
+ * admin, then rewrite `createdBy` — which is exactly the shape snapshot
+ * isolation does NOT serialize on its own. `removeMemberInTransaction` already
+ * documents this at length: two transactions that only read the household and
+ * write different membership rows never conflict, so both can pass a check the
+ * other invalidates.
+ *
+ * Touching `updatedAt` here puts every governance operation on the same
+ * household document, so they conflict with each other and with member
+ * removal, and MongoDB retries the loser against fresh state. `matchedCount`
+ * doubles as the 404 check, so the guarantee costs no extra round trip.
+ */
+async function lockHousehold(householdId: string, session: ClientSession): Promise<IHousehold> {
+  const touched = await HouseholdModel.updateOne(
+    { _id: householdId },
+    { $currentDate: { updatedAt: true } },
+    { session },
+  );
+  if (touched.matchedCount === 0) {
+    throw new AppError('Household not found', 404);
+  }
+
+  // Read AFTER the write, so `createdBy` is the value this transaction just
+  // serialized on rather than one a concurrent transfer may have replaced.
+  const household = await HouseholdModel.findById(householdId).session(session);
+  if (!household) {
+    throw new AppError('Household not found', 404);
+  }
+  return household;
+}
+
+/**
+ * Turn a `:userId` path segment into an ObjectId, or answer 404.
+ *
+ * `new Types.ObjectId('nope')` throws a BSONError, which the error middleware
+ * can only render as a 500 — an unhandled server fault for what is really a
+ * client sending a malformed id. `removeMember` never hits that because it
+ * filters the target through `memberIds` first; the governance endpoints take
+ * the id straight to a query, so they need the guard explicitly. 404 rather
+ * than 400 keeps it indistinguishable from "that user is not a member", which
+ * is the same answer from the caller's side and leaks nothing about which ids
+ * exist.
+ */
+function memberObjectId(userId: string): Types.ObjectId {
+  if (!Types.ObjectId.isValid(userId)) {
+    throw new AppError('Target user is not a member of this household', 404);
+  }
+  return new Types.ObjectId(userId);
+}
+
+/**
+ * PDR-022 D1: only the household's creator may change roles.
+ *
+ * `createdBy` stopped being a historical field with PDR-022 and became a live
+ * permission — which is also why it is read from the household document inside
+ * the transaction rather than from anything the caller sent or the membership
+ * middleware cached (Hard Rule 3).
+ */
+function assertCreator(household: IHousehold, userId: string): void {
+  if (household.createdBy.toString() !== userId) {
+    throw new AppError('Only the household creator can perform this action', 403);
+  }
+}
+
+/**
+ * Promote a member to admin, or demote an admin to member (PDR-022 D1).
+ *
+ * Only the creator may call this, and the creator is never a valid demotion
+ * target: demoting them would leave the household with nobody able to manage
+ * roles at all, since D1 makes that authority exclusively theirs. Promoting
+ * them is a no-op rather than an error — they are already an admin, and
+ * answering 400 to a request asking for a state the system is already in would
+ * make a retry fail where the original succeeded.
+ *
+ * Hard Rule 9 is re-checked even though D1 makes it unreachable (the creator
+ * cannot be demoted, so an admin always remains): the invariant is cheap to
+ * assert inside a transaction already held, and it should survive a future
+ * change to D1 rather than silently depend on it.
+ */
+export async function changeMemberRole(
+  householdId: string,
+  requesterUserId: string,
+  targetUserId: string,
+  role: Role,
+): Promise<IHousehold> {
+  const session = await mongoose.startSession();
+  let previousRole: Role | null = null;
+
+  try {
+    await session.withTransaction(async () => {
+      // Reset per attempt: withTransaction may re-run this callback, and a
+      // value left over from an aborted attempt would be emitted as if it had
+      // committed.
+      previousRole = null;
+
+      const household = await lockHousehold(householdId, session);
+      assertCreator(household, requesterUserId);
+
+      const householdObjectId = new Types.ObjectId(householdId);
+      const target = await HouseholdMemberModel.findOne({
+        householdId: householdObjectId,
+        userId: memberObjectId(targetUserId),
+      }).session(session);
+      if (!target) {
+        throw new AppError('Target user is not a member of this household', 404);
+      }
+
+      if (household.createdBy.toString() === targetUserId && role === 'member') {
+        throw new AppError('The household creator cannot be demoted', 403);
+      }
+
+      if (target.role === role) {
+        // Already there. Idempotent success, and deliberately no event: a
+        // socket event announcing a transition that did not happen would make
+        // every client re-render for nothing.
+        return;
+      }
+
+      if (role === 'member') {
+        const adminCount = await HouseholdMemberModel.countDocuments({
+          householdId: householdObjectId,
+          role: 'admin',
+        }).session(session);
+        if (adminCount <= 1) {
+          throw new AppError('The household must keep at least one admin', 400);
+        }
+      }
+
+      previousRole = target.role;
+      target.role = role;
+      await target.save({ session });
+    });
+  } finally {
+    await session.endSession();
+  }
+
+  const household = await getHousehold(householdId);
+
+  // After the commit, never inside it — same contract as every other emit in
+  // this file: withTransaction can re-run its callback and a socket event
+  // cannot be un-emitted.
+  if (previousRole) {
+    emitToHousehold(householdId, 'household:member_role_changed', {
+      householdId,
+      userId: targetUserId,
+      previousRole,
+      role,
+    });
+  }
+
+  return household;
+}
+
+/**
+ * Hand the household over to another admin (PDR-022 D2).
+ *
+ * The receiver must ALREADY be an admin. Ownership carries the authority to
+ * promote and demote, so handing it to a plain member would skip the step
+ * where the creator deliberately decided that person can administer anything
+ * at all — the two-step promotion is a feature, not friction.
+ *
+ * The outgoing creator stays `admin`, not `member`: they lose authority over
+ * roles (D1) and keep the day-to-day administration they had. Nobody is
+ * removed — this transfers responsibility, not membership.
+ */
+export async function transferOwnership(
+  householdId: string,
+  requesterUserId: string,
+  targetUserId: string,
+): Promise<IHousehold> {
+  const session = await mongoose.startSession();
+
+  try {
+    await session.withTransaction(async () => {
+      const household = await lockHousehold(householdId, session);
+      assertCreator(household, requesterUserId);
+
+      if (targetUserId === requesterUserId) {
+        throw new AppError('You already own this household', 400);
+      }
+
+      const householdObjectId = new Types.ObjectId(householdId);
+      const target = await HouseholdMemberModel.findOne({
+        householdId: householdObjectId,
+        userId: memberObjectId(targetUserId),
+      }).session(session);
+      if (!target) {
+        throw new AppError('Target user is not a member of this household', 404);
+      }
+      if (target.role !== 'admin') {
+        throw new AppError('Ownership can only be transferred to an admin', 400);
+      }
+
+      // The outgoing creator keeps admin. Written explicitly rather than
+      // assumed: it is what makes this operation total, and the assumption
+      // would be silently wrong for any household whose creator was demoted
+      // before D1 forbade it.
+      await HouseholdMemberModel.updateOne(
+        { householdId: householdObjectId, userId: new Types.ObjectId(requesterUserId) },
+        { $set: { role: 'admin' } },
+        { session },
+      );
+
+      household.createdBy = new Types.ObjectId(targetUserId);
+      await household.save({ session });
+    });
+  } finally {
+    await session.endSession();
+  }
+
+  emitToHousehold(householdId, 'household:ownership_transferred', {
+    householdId,
+    previousOwnerId: requesterUserId,
+    ownerId: targetUserId,
+  });
+
+  return getHousehold(householdId);
+}
+
+/** What a departure has to change before the membership row can go. */
+interface SuccessionPlan {
+  promoteUserId?: string;
+  newOwnerId?: string;
+}
+
+/**
+ * Decide who inherits administration and/or ownership when `leavingUserId`
+ * walks out (PDR-022 D2 and D3).
+ *
+ * Two separate successions, resolved from the same seniority order:
+ *   - administration goes to the most senior remaining member whenever the
+ *     leaver was the last admin;
+ *   - ownership goes to the most senior remaining ADMIN when the leaver owned
+ *     the household — or, if there is none, to whoever was just promoted, who
+ *     is by construction the most senior member and inherits both.
+ *
+ * Returns what has to change so the caller can apply it inside the same
+ * transaction as the delete. Nothing is written here.
+ */
+function planSuccession(
+  members: IHouseholdMember[],
+  leavingUserId: string,
+  creatorId: string,
+): SuccessionPlan {
+  // `members` arrives sorted oldest-first, so [0] IS the most senior.
+  const others = members.filter((m) => m.userId.toString() !== leavingUserId);
+  const leaverIsAdmin =
+    members.find((m) => m.userId.toString() === leavingUserId)?.role === 'admin';
+  const remainingAdmins = others.filter((m) => m.role === 'admin');
+
+  const plan: SuccessionPlan = {};
+
+  if (leaverIsAdmin && remainingAdmins.length === 0) {
+    // Hard Rule 9: the household would be left with no admin. D3 promotes the
+    // most senior member rather than refusing the exit — leaving is a right,
+    // and the pre-existing refusal only ever applied to expulsion.
+    plan.promoteUserId = others[0].userId.toString();
+  }
+
+  if (creatorId === leavingUserId) {
+    // D2: ownership never evaporates.
+    plan.newOwnerId = remainingAdmins[0]
+      ? remainingAdmins[0].userId.toString()
+      : (plan.promoteUserId as string);
+  }
+
+  return plan;
+}
+
+/**
+ * Leave a household voluntarily (PDR-022 D3).
+ *
+ * Any member may leave. What the server guarantees, in this order and inside
+ * one transaction:
+ *   1. the household keeps an admin (Hard Rule 9) — promoting the most senior
+ *      remaining member if the leaver was the last one;
+ *   2. the household keeps an owner (D2) — auto-transferring to the most
+ *      senior remaining admin if the leaver never transferred;
+ *   3. the leaver's active savings contributions come back to them (Hard Rule
+ *      16b, PDR-018) BEFORE the membership row disappears;
+ *   4. only then is the membership deleted.
+ *
+ * The order is the contract. Promoting after the delete would momentarily
+ * leave a household with no admin, and refunding after it would be refunding
+ * someone who is no longer a member — the exact failure Hard Rule 16b exists
+ * to forbid.
+ *
+ * The last member of a household cannot leave: doing so would strand the
+ * household with zero members — unreadable (requireMembership answers 403),
+ * undeletable, and holding its unique invite code forever, the state
+ * `createHousehold`'s transaction exists to prevent. PDR-022 D4 gives that
+ * person the intended exit: destroy the household, which they can always do
+ * because D2 guarantees the last member is its creator.
+ */
+export async function leaveHousehold(
+  householdId: string,
+  userId: string,
+): Promise<SuccessionPlan> {
+  const session = await mongoose.startSession();
+  let outcome: SuccessionPlan = {};
+
+  try {
+    await session.withTransaction(async () => {
+      outcome = {};
+
+      const household = await lockHousehold(householdId, session);
+      const householdObjectId = new Types.ObjectId(householdId);
+
+      const members = await loadMembersBySeniority(householdObjectId, session);
+      const leaving = members.find((m) => m.userId.toString() === userId);
+      if (!leaving) {
+        throw new AppError('You are not a member of this household', 403);
+      }
+
+      if (members.length === 1) {
+        throw new AppError(
+          'You are the last member of this household. Delete the household instead of leaving it.',
+          400,
+        );
+      }
+
+      const plan = planSuccession(members, userId, household.createdBy.toString());
+
+      if (plan.promoteUserId) {
+        await HouseholdMemberModel.updateOne(
+          { householdId: householdObjectId, userId: new Types.ObjectId(plan.promoteUserId) },
+          { $set: { role: 'admin' } },
+          { session },
+        );
+      }
+
+      if (plan.newOwnerId) {
+        household.createdBy = new Types.ObjectId(plan.newOwnerId);
+        await household.save({ session });
+      }
+
+      // Money before membership (Hard Rule 16b). Not wrapped in try/catch, on
+      // purpose: an exit that cannot return someone's coins must fail as a
+      // unit rather than complete and lose them.
+      await refundDepartingMember(householdId, userId, session);
+
+      await HouseholdMemberModel.deleteOne(
+        { householdId: householdObjectId, userId: new Types.ObjectId(userId) },
+        { session },
+      );
+
+      outcome = plan;
+    });
+  } finally {
+    await session.endSession();
+  }
+
+  if (outcome.promoteUserId) {
+    emitToHousehold(householdId, 'household:member_role_changed', {
+      householdId,
+      userId: outcome.promoteUserId,
+      previousRole: 'member',
+      role: 'admin',
+    });
+  }
+  if (outcome.newOwnerId) {
+    emitToHousehold(householdId, 'household:ownership_transferred', {
+      householdId,
+      previousOwnerId: userId,
+      ownerId: outcome.newOwnerId,
+    });
+  }
+  emitToHousehold(householdId, 'household:member_left', { householdId, userId });
+
+  // TD-018 (Hard Rule 16): same follow-up as removeMember, and same
+  // fire-and-forget contract — a successful exit must not come back as an
+  // error because the task cleanup hit a problem.
+  try {
+    await unassignDepartedMemberTasks(householdId, userId);
+  } catch (err) {
+    logger.error('Error unassigning departed member from tasks', (err as Error).message);
+  }
+
+  return outcome;
 }
 
 /**

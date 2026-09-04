@@ -36,3 +36,19 @@ export const joinHouseholdSchema = z.object({
     .trim()
     .min(1, 'Invite code is required'),
 });
+
+/**
+ * POST /api/households/:householdId/transfer-ownership body (TD-067, PDR-022 D2).
+ *
+ * The receiver travels in the body rather than the path because ownership is
+ * a property OF the household, not of a member: the request mutates
+ * `Household.createdBy`, and `.../members/:userId/...` would read as a
+ * mutation of that member's row. Whether the id names a real, admin member is
+ * decided in the service against the database — Zod can only check its shape.
+ */
+export const transferOwnershipSchema = z.object({
+  userId: z
+    .string({ error: 'userId is required' })
+    .trim()
+    .min(1, 'userId is required'),
+});
