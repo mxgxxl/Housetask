@@ -212,6 +212,54 @@ Los PDRs registran decisiones de producto con Context / Decision / Consequences,
 - **Razón:** El primer techo es «never overspend» y es el que el servidor ya defiende. El segundo no lo defiende nadie más: PDR-018 reembolsa las aportaciones de una meta CANCELADA, no el exceso sobre una que se desbloquea. Sin este tope, aportar 30 🪙 a una meta a la que le faltaban 4 quema 26 monedas sin que nada avise, y el miembro no tiene forma de recuperarlas.
 - **Consequences:** Es validación de cliente sobre una regla que el servidor no comparte: el backend aceptaría el exceso. Si en el futuro se quiere permitir la generosidad deliberada —aportar de más a sabiendas— hay que decidirlo aquí primero, no en el widget. El tope se calcula en el cubit que tiene el saldo vivo (`EconomyP1Cubit`), no en el que tiene la meta, precisamente para que no se valide contra un saldo de hace un rato.
 
+## PDR-022: Gobernanza del hogar — creador, roles, salida y destrucción
+
+**Status:** Accepted (2026-09-01)
+
+- **Context:** El hogar no tiene hoy ninguna operación de gobernanza. Sólo existen dos roles (`admin`/`member`), el creador entra como admin y quien se une por código entra como member, y a partir de ahí nada se puede mover: no hay promoción, degradación, transferencia, salida voluntaria ni destrucción. La única salida existente es `DELETE /households/:id/members/:userId`, que es una expulsión y sólo la puede ejecutar un admin. La protección del último admin (Hard Rule 9) cubre exclusivamente esa ruta. `docs/TD-067-DESIGN.md` diseñó este espacio en 2026-08-20, pero lo hizo bajo tres supuestos que el dueño ha decidido de otra manera (ver «Relación con TD-067-DESIGN.md» al final).
+
+- **Decision:** Cinco reglas de gobernanza, todas server-authoritative y todas verificadas dentro de la misma transacción que escribe:
+
+  **D1 — El creador es la única autoridad sobre roles.** Sólo `Household.createdBy` puede promover un miembro a admin o degradar un admin a miembro. Un admin que no sea el creador administra tareas, papelera, expulsiones y adopciones como hasta ahora, pero no toca roles. El creador no puede ser degradado por nadie, ni siquiera por sí mismo: intentarlo responde 403. `createdBy` deja de ser un campo histórico y pasa a ser un permiso.
+
+  **D2 — La propiedad se transfiere, no se hereda por accidente.** El creador puede transferir la propiedad a otro miembro que ya sea admin; la transferencia reescribe `Household.createdBy` y degrada al creador saliente a `admin` (no a `member`: pierde la autoridad sobre roles, no la administración del día a día). Si el creador sale del hogar sin haber transferido antes, la propiedad pasa **automáticamente** al admin más antiguo por `joinedAt`. Un hogar nunca queda sin creador mientras tenga miembros.
+
+  **D3 — Salir es un derecho de cualquier miembro, y nunca deja el hogar roto.** `POST /households/:id/leave` siempre pide confirmación en cliente y siempre reembolsa las aportaciones activas a huchas conjuntas (PDR-018) dentro de la misma transacción que borra la membresía. Si quien sale es el único admin, el miembro con mayor antigüedad (`joinedAt` más bajo) es promovido a admin **antes** de borrar la membresía saliente. Si quien sale es además el creador, se aplica primero la auto-transferencia de D2. El orden es el contrato: promover, transferir, reembolsar, borrar — nunca al revés.
+
+  **D4 — Destruir el hogar es del creador y tiene período de gracia.** Sólo el creador puede agendar la destrucción. Agendar abre una ventana de 24 horas (constante configurable) durante la cual cualquiera con acceso ve que el hogar está marcado y el creador puede cancelar. Pasada la ventana, la destrucción se confirma (por el creador o por el job programado) y ejecuta un borrado lógico del hogar con cascada controlada sobre tareas, compras, hucha, mascota, economía de hogar y membresías. Confirmar antes de que venza la ventana es 400, no un atajo.
+
+  **D5 — Toda acción de gobernanza pasa por un diálogo.** Degradar, transferir, destruir y salir siendo último admin requieren confirmación explícita en cliente. Destruir exige además escribir el nombre del hogar. El diálogo es UX, no seguridad: el servidor revalida cada regla por su cuenta (Hard Rule 3), porque un cliente que se salte el diálogo no debe poder saltarse la regla.
+
+- **Razón:** Las cinco decisiones responden a la misma pregunta —¿quién manda y qué pasa cuando esa persona se va?— y la responden concentrando la autoridad en una sola persona identificable en lugar de repartirla entre N admins simétricos. Un hogar de pareja o familia tiene de hecho un dueño de la cuenta; modelar N admins iguales genera la clase de conflicto que PDR-018 evita en la economía (sin monedero común que disputar) y UX-P1-SPEC §0 evita en el progreso (sin marcador entre convivientes). El período de gracia de D4 existe porque la destrucción es la única operación de este PDR que no tiene deshacer: un borrado lógico con 24 horas de margen convierte un toque accidental —o rencoroso— en algo recuperable, mientras que reembolsos y promociones ya son reversibles a mano.
+
+- **Reglas duras que sostienen cada decisión:**
+
+| Decisión | Hard Rule | Cómo la sostiene |
+|---|---|---|
+| D1 | 3 (nunca confiar en el cliente) | El servidor compara el `userId` del token contra `Household.createdBy` releído en transacción, no contra un rol que el cliente afirme. |
+| D1 | 4 (nada de lógica en controladores) | La comparación creador/target vive en `household.service.ts`; el controlador sólo parsea y responde. |
+| D1, D2, D3 | 9 (nunca borrar al último admin) | Contar admins y escribir ocurre en una transacción, serializada por la escritura a `Household` que ya usa `removeMemberInTransaction`. D3 la refuerza: promociona antes de borrar en lugar de rechazar la salida. |
+| D2 | 9 | La auto-transferencia al admin más antiguo es lo que impide que la salida del creador deje el hogar sin autoridad sobre roles. |
+| D3 | 16 (no dejar referencias huérfanas) | La salida voluntaria reutiliza el desasignado de tareas pendientes de TD-018, igual que la expulsión. |
+| D3, D4 | 16b (reembolsar antes de borrar la membresía) | El reembolso va dentro de la transacción de membresía, no después; una salida que no puede devolver monedas falla entera. La cascada de D4 hereda la misma obligación sobre la hucha. |
+| D4 | 13 (idempotencia en POST) | Agendar, cancelar y confirmar son POST y aceptan `Idempotency-Key`; un reintento devuelve el resultado original sin reprogramar ni volver a emitir sockets. |
+| D4 | 8 (sin sockets sin comprobar membresía) | Los eventos de destrucción se emiten después del commit a la sala capturada mientras la membresía todavía existía. |
+| D5 | 3 | El diálogo no autoriza nada: cada endpoint revalida creador, rol del objetivo, antigüedad y ventana temporal en servidor. |
+
+- **Consequences:**
+  - `createdBy` pasa de dato histórico a permiso vivo, y por tanto es mutable: la transferencia lo reescribe. Cualquier código que asumiera que `createdBy` es inmutable deja de ser correcto.
+  - Aparece una tercera categoría de permiso —creador / admin / miembro— donde antes había dos. La matriz de autorización crece y conviene consolidarla en capacidades declarativas antes de que un cuarto endpoint la disperse más.
+  - `joinedAt` se convierte en criterio de desempate con consecuencias reales (quién hereda la administración, quién hereda la propiedad). Deja de ser un dato de presentación y pasa a ser parte del contrato; un backfill que lo escribiera mal cambiaría quién manda.
+  - El borrado lógico de D4 contradice el hard delete que TD-067-DESIGN.md había fijado: quedan filas de hogar marcadas como destruidas que ninguna lectura debe devolver. Toda consulta de hogar necesita filtrar por ese estado, igual que las tareas filtran `isDeleted` desde PDR-006.
+  - El período de gracia introduce el primer estado diferido del backend: algo tiene que ejecutar la confirmación cuando vence. Mientras no exista un scheduler real, el job comparte servicio con la confirmación manual, igual que `scripts/purge-trash.ts` comparte `purgeDeletedTasks` con su endpoint admin (TD-048).
+
+- **Relación con `docs/TD-067-DESIGN.md`:** este PDR **supersede** tres decisiones de ese diseño, que es anterior (2026-08-20) y se escribió sin estas instrucciones del dueño:
+  1. «El creador no tiene privilegios especiales» → **superseded por D1**: el creador es la única autoridad sobre roles y es indegradable.
+  2. «D1 — Destrucción inmediata en v1, sin grace period» → **superseded por D4**: 24 horas cancelables.
+  3. «D2 — Hard delete limpio» → **superseded por D4**: borrado lógico con cascada controlada.
+
+  El resto de ese documento sigue vigente y es la referencia de implementación: la atomicidad transaccional, el orden de operaciones de la destrucción, la tabla de retención por recurso, el copy exacto de los diálogos y la lista de casos borde. Donde la tabla de retención dice «hard delete», léase «alcanzado por la cascada del borrado lógico».
+
 ## 2026-08-18 — Cambio de rol no expuesto en API
 
 ### Decisión
