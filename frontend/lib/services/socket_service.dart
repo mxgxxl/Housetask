@@ -72,9 +72,24 @@ class SocketService {
     }
   }
 
-  /// Subscribe to household membership events.
+  /// Subscribe to household membership and governance events.
+  ///
+  /// The three governance events (TD-067, PDR-022) ride the same channel as
+  /// joins and leaves because they change the same thing: who is in this
+  /// household and what they may do. Two of them change what the RECEIVING
+  /// client is allowed to do, not just what it displays — a transfer moves the
+  /// D1 authority, and a destruction ends the household entirely — so a client
+  /// that ignored them would keep offering actions the server now refuses.
   void onHouseholdUpdated(void Function(String event, dynamic data) cb) {
-    for (final e in ['household:member_joined', 'household:member_left']) {
+    for (final e in [
+      'household:member_joined',
+      'household:member_left',
+      'household:member_role_changed',
+      'household:ownership_transferred',
+      'household:destruction_scheduled',
+      'household:destruction_cancelled',
+      'household:destroyed',
+    ]) {
       _socket?.on(e, (data) => cb(e, data));
     }
   }

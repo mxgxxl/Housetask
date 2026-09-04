@@ -108,6 +108,17 @@ class SocketCubit extends Cubit<bool> {
     _socket.joinHousehold(householdId);
   }
 
+  /// Leave a household room (call after leaving or deleting a household —
+  /// TD-067, PDR-022 D3/D4).
+  ///
+  /// The server has already removed the membership, so nothing sensitive
+  /// would reach this socket anyway. Leaving the room explicitly keeps the
+  /// client from processing events about a household it can no longer read,
+  /// which would otherwise trigger a reload that answers 403 or 404.
+  void leaveHousehold(String householdId) {
+    _socket.leaveHousehold(householdId);
+  }
+
   void disconnect() {
     _socket.disconnect();
     _listenersBound = false;

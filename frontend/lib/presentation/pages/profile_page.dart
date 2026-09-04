@@ -8,16 +8,37 @@ import '../cubit/household_cubit.dart';
 import '../cubit/shopping_cubit.dart';
 import '../cubit/socket_cubit.dart';
 import '../cubit/task_cubit.dart';
+import '../../data/models/member.dart';
+import '../cubit/household_economy_cubit.dart';
 import '../widgets/common.dart';
+import '../widgets/governance_dialogs.dart';
+import '../widgets/household_admin_section.dart';
 import '../widgets/logout_dialog.dart';
 import '../widgets/user_avatar.dart';
 import 'household_setup_page.dart';
 import 'stats_page.dart';
 
 /// Profile: user info, household details + invite code, members, and actions
-/// to switch households or log out.
-class ProfilePage extends StatelessWidget {
+/// to manage the household, switch households or log out.
+class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
+
+  @override
+  State<ProfilePage> createState() => _ProfilePageState();
+}
+
+class _ProfilePageState extends State<ProfilePage> {
+  @override
+  void initState() {
+    super.initState();
+    // Whether a deletion is pending (PDR-022 D4) is not part of the household
+    // document, so it needs its own read. Done here rather than on app start
+    // because this is the only screen that shows it, and a failed read is
+    // swallowed by the cubit — a missing banner, never an error toast.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) context.read<HouseholdCubit>().loadDestructionStatus();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -132,6 +153,32 @@ class ProfilePage extends StatelessWidget {
               ),
               const SizedBox(height: 20),
 
+              // ---- Manage household (TD-067, PDR-022) ----
+              BlocBuilder<HouseholdCubit, HouseholdState>(
+                builder: (context, hhState) {
+                  final household = hhState.current;
+                  if (household == null) return const SizedBox.shrink();
+
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: HouseholdAdminSection(
+                      household: household,
+                      currentUserId: user.id,
+                      destruction: hhState.destruction,
+                      hasSavingsContribution: _hasSavingsContribution(context, user.id),
+                      onPromote: (m) => _promote(context, m),
+                      onDemote: (m) => _demote(context, m),
+                      onTransferOwnership: (m) => _transferOwnership(context, m),
+                      onLeave: () => _leave(context, household.name),
+                      onScheduleDestruction: () =>
+                          _scheduleDestruction(context, household.name),
+                      onCancelDestruction: () => _cancelDestruction(context),
+                      onConfirmDestruction: () => _confirmDestruction(context),
+                    ),
+                  );
+                },
+              ),
+
               // ---- Actions ----
               _ActionTile(
                 icon: Icons.group_add_outlined,
@@ -158,6 +205,135 @@ class ProfilePage extends StatelessWidget {
         },
       ),
     );
+  }
+
+  // ---- Governance handlers (TD-067, PDR-022) ----
+
+  /// Whether the reader has coins locked in the household's active savings
+  /// goal, so the leave dialog can promise them back (PDR-018).
+  ///
+  /// Read from the economy cubit that already holds the goal rather than
+  /// fetched: this only decides whether one sentence appears, and a network
+  /// round trip to decide that would delay the dialog for everyone.
+  static bool _hasSavingsContribution(BuildContext context, String userId) {
+    final goal = context.read<HouseholdEconomyCubit>().state.activeSavingsGoal;
+    if (goal == null) return false;
+    return goal.contributions.any((c) => c.userId == userId && c.amount > 0);
+  }
+
+  static String _memberName(Member m) =>
+      m.user.name.isEmpty ? m.user.email : m.user.name;
+
+  /// Promotion is the only governance action with no dialog: it GRANTS a
+  /// permission rather than removing one, and PDR-022 D5 asks for confirmation
+  /// on the destructive half. Demoting the person again is one tap away.
+  Future<void> _promote(BuildContext context, Member member) async {
+    final ok = await context.read<HouseholdCubit>().promoteMember(member.user.id);
+    if (!context.mounted) return;
+    _report(context, ok, '${_memberName(member)} ya es administrador');
+  }
+
+  Future<void> _demote(BuildContext context, Member member) async {
+    if (!await showDemoteDialog(context, _memberName(member))) return;
+    if (!context.mounted) return;
+    final ok = await context.read<HouseholdCubit>().demoteMember(member.user.id);
+    if (!context.mounted) return;
+    _report(context, ok, '${_memberName(member)} ya no es administrador');
+  }
+
+  Future<void> _transferOwnership(BuildContext context, Member member) async {
+    if (!await showTransferOwnershipDialog(context, _memberName(member))) return;
+    if (!context.mounted) return;
+    final ok =
+        await context.read<HouseholdCubit>().transferOwnership(member.user.id);
+    if (!context.mounted) return;
+    _report(context, ok, '${_memberName(member)} es ahora propietario del hogar');
+  }
+
+  Future<void> _leave(BuildContext context, String householdName) async {
+    final cubit = context.read<HouseholdCubit>();
+    final household = cubit.state.current;
+    final userId = context.read<AuthCubit>().state.user?.id;
+    if (household == null || userId == null) return;
+
+    // Both warnings are computed from state already in hand, so the dialog
+    // opens immediately and says only what actually applies to this member.
+    final me = household.members.where((m) => m.user.id == userId);
+    final willPromote = me.isNotEmpty &&
+        me.first.isAdmin &&
+        household.members.where((m) => m.isAdmin).length == 1;
+
+    final confirmed = await showLeaveHouseholdDialog(
+      context,
+      householdName: householdName,
+      willPromoteSuccessor: willPromote,
+      hasSavingsContribution: _hasSavingsContribution(context, userId),
+    );
+    if (!confirmed || !context.mounted) return;
+
+    final outcome = await cubit.leaveHousehold();
+    if (!context.mounted) return;
+    if (outcome == null) {
+      showSnack(context, cubit.state.error ?? 'No se pudo salir del hogar');
+      return;
+    }
+    context.read<SocketCubit>().leaveHousehold(household.id);
+    _resetHouseholdScopedState(context);
+    showSnack(context, 'Has salido de $householdName');
+  }
+
+  Future<void> _scheduleDestruction(
+    BuildContext context,
+    String householdName,
+  ) async {
+    final confirmed = await showDestroyHouseholdDialog(
+      context,
+      householdName: householdName,
+      gracePeriod: const Duration(hours: 24),
+    );
+    if (!confirmed || !context.mounted) return;
+    final cubit = context.read<HouseholdCubit>();
+    final ok = await cubit.scheduleDestruction();
+    if (!context.mounted) return;
+    _report(context, ok, 'El hogar se eliminará en 24 horas');
+  }
+
+  Future<void> _cancelDestruction(BuildContext context) async {
+    final ok = await context.read<HouseholdCubit>().cancelDestruction();
+    if (!context.mounted) return;
+    _report(context, ok, 'Eliminación cancelada');
+  }
+
+  Future<void> _confirmDestruction(BuildContext context) async {
+    final cubit = context.read<HouseholdCubit>();
+    final household = cubit.state.current;
+    if (household == null) return;
+    final ok = await cubit.confirmDestruction();
+    if (!context.mounted) return;
+    if (!ok) {
+      showSnack(context, cubit.state.error ?? 'No se pudo eliminar el hogar');
+      return;
+    }
+    context.read<SocketCubit>().leaveHousehold(household.id);
+    _resetHouseholdScopedState(context);
+    showSnack(context, 'Hogar eliminado');
+  }
+
+  /// Drop everything scoped to the household the user just left or deleted.
+  ///
+  /// Same set the session-expiry listener resets (TD-055/TD-058), minus auth:
+  /// the session is fine, it is the household that is gone. Without this the
+  /// tasks and shopping tabs would keep rendering a household the user can no
+  /// longer read, and the next request would 403 or 404 into an error state.
+  static void _resetHouseholdScopedState(BuildContext context) {
+    context.read<TaskCubit>().reset();
+    context.read<ShoppingCubit>().reset();
+  }
+
+  /// Snack the success line, or whatever the server said went wrong.
+  static void _report(BuildContext context, bool ok, String success) {
+    final cubit = context.read<HouseholdCubit>();
+    showSnack(context, ok ? success : (cubit.state.error ?? 'No se pudo completar la acción'));
   }
 
   Future<void> _editName(BuildContext context, String current) async {

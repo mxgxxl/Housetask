@@ -7,6 +7,7 @@ import 'package:homesync/core/errors/failures.dart';
 import 'package:homesync/data/models/economy.dart';
 import 'package:homesync/data/models/economy_p1/economy_p1.dart';
 import 'package:homesync/data/models/household.dart';
+import 'package:homesync/data/models/household_governance.dart';
 import 'package:homesync/data/models/household_stats.dart';
 import 'package:homesync/data/models/member.dart';
 import 'package:homesync/data/models/paginated_response.dart';
@@ -521,11 +522,121 @@ class FakeHouseholdRepository implements HouseholdRepository {
     return result;
   }
 
+  // ---- Governance (TD-067, PDR-022) ----
+
+  /// Result the next governance call returns. Set by the test; when null the
+  /// call throws [governanceFailure] instead.
+  Household? governanceResult;
+
+  /// What the next governance call fails with. Only consulted when
+  /// [governanceResult] is null, so a test opts into the failure path by
+  /// simply not configuring a success.
+  Failure governanceFailure = const ServerFailure('nope');
+
+  /// Every governance call made, as `'<verb>:<userId>'`, in order. Lets a test
+  /// assert not just the resulting state but that the right call was made —
+  /// promote and demote produce the same shape of success otherwise.
+  final List<String> governanceCalls = [];
+
+  /// What [leave] answers. Null means the call fails.
+  LeaveOutcome? leaveResult;
+
+  /// What [destructionStatus] and [scheduleDestruction] answer.
+  DestructionStatus? destructionResult;
+
+  /// True once [setCurrentHouseholdId] has been called with null — the
+  /// evidence that leaving or deleting forgot the active household rather
+  /// than leaving the app pointed at one the user can no longer read.
+  bool clearedCurrentHousehold = false;
+
+  Future<Household> _governance(String call) async {
+    governanceCalls.add(call);
+    final result = governanceResult;
+    if (result == null) throw governanceFailure;
+    return result;
+  }
+
+  @override
+  Future<Household> promoteMember(String householdId, String userId) =>
+      _governance('promote:$userId');
+
+  @override
+  Future<Household> demoteMember(String householdId, String userId) =>
+      _governance('demote:$userId');
+
+  @override
+  Future<Household> transferOwnership(String householdId, String userId) =>
+      _governance('transfer:$userId');
+
+  @override
+  Future<LeaveOutcome> leave(String householdId) async {
+    governanceCalls.add('leave');
+    final result = leaveResult;
+    if (result == null) throw governanceFailure;
+    return result;
+  }
+
+  @override
+  Future<DestructionStatus> scheduleDestruction(String householdId) async {
+    governanceCalls.add('schedule');
+    final result = destructionResult;
+    if (result == null) throw governanceFailure;
+    return result;
+  }
+
+  @override
+  Future<void> cancelDestruction(String householdId) async {
+    governanceCalls.add('cancel');
+    if (destructionResult == null) throw governanceFailure;
+  }
+
+  @override
+  Future<void> confirmDestruction(String householdId) async {
+    governanceCalls.add('confirm');
+    if (destructionResult == null) throw governanceFailure;
+  }
+
+  @override
+  Future<DestructionStatus> destructionStatus(String householdId) async {
+    governanceCalls.add('status');
+    final result = destructionResult;
+    if (result == null) throw governanceFailure;
+    return result;
+  }
+
   @override
   Future<String?> currentHouseholdId() async => null;
 
   @override
-  Future<void> setCurrentHouseholdId(String? id) async {}
+  Future<void> setCurrentHouseholdId(String? id) async {
+    if (id == null) clearedCurrentHousehold = true;
+  }
+}
+
+/// A household with [memberRoles] as its roster, in the order given.
+///
+/// Order is load-bearing for PDR-022: seniority decides succession, and the
+/// server returns members sorted by `joinedAt`, so the list a widget receives
+/// IS the seniority order.
+Household buildHousehold({
+  String id = 'h1',
+  String name = 'Casa',
+  String inviteCode = 'CASADEMO',
+  required String createdBy,
+  Map<String, String> memberRoles = const {},
+}) {
+  return Household(
+    id: id,
+    name: name,
+    inviteCode: inviteCode,
+    createdBy: createdBy,
+    members: memberRoles.entries
+        .map((e) => Member(
+              user: User(id: e.key, email: '${e.key}@test.com', name: e.key),
+              role: e.value,
+            ))
+        .toList(),
+  );
 }
 
 /// Controllable connectivity signal for cubit tests: no platform channel, no
