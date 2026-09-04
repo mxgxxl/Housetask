@@ -56,7 +56,14 @@ export const requireMembership = asyncHandler(
       // missing household would leak nothing but would break the contract
       // households.test.ts pins. Members, the overwhelming majority, never
       // reach this branch.
-      const exists = await HouseholdModel.exists({ _id: householdId });
+      // `isDeleted` filtered here, so a destroyed household (PDR-022 D4)
+      // answers 404 rather than 403. Its memberships are gone, so every
+      // caller lands in this branch; without the filter they would be told
+      // "you are not a member" of something that no longer exists.
+      const exists = await HouseholdModel.exists({
+        _id: householdId,
+        isDeleted: { $ne: true },
+      });
       if (!exists) {
         throw new AppError('Household not found', 404);
       }

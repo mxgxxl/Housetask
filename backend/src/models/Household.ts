@@ -21,6 +21,9 @@ export interface IHousehold extends Document {
   name: string;
   inviteCode: string;
   createdBy: Types.ObjectId;
+  /** Destroyed (PDR-022 D4). Soft delete: the document survives, access does not. */
+  isDeleted: boolean;
+  deletedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -38,6 +41,16 @@ const householdSchema = new Schema<IHousehold>(
       index: true,
     },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    // PDR-022 D4: destruction is a soft delete, matching what PDR-006 already
+    // does for tasks. The alternative — removing the document — would free the
+    // unique invite code for reuse, so a code someone still has in a chat
+    // would one day resolve to a stranger's household. A destroyed household
+    // keeps its code precisely so that never happens.
+    //
+    // Indexed because every read of a household now filters on it, the same
+    // reason Task indexes its own `isDeleted` (TD-046).
+    isDeleted: { type: Boolean, default: false, index: true },
+    deletedAt: { type: Date },
   },
   { timestamps: true, ...jsonSchemaOptions },
 );

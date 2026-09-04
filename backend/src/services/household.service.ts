@@ -185,7 +185,13 @@ export async function getHousehold(householdId: string): Promise<IHousehold> {
   // from the HouseholdMember collection by serializeHousehold. Populating the
   // embedded array here would fetch the same users a second time to build a
   // list nobody reads.
-  const household = await HouseholdModel.findById(householdId);
+  // `isDeleted` excluded since PDR-022 D4: a destroyed household is gone as
+  // far as the API is concerned, even though its row survives to keep its
+  // invite code out of circulation.
+  const household = await HouseholdModel.findOne({
+    _id: householdId,
+    isDeleted: { $ne: true },
+  });
   if (!household) {
     throw new AppError('Household not found', 404);
   }
@@ -196,7 +202,15 @@ export async function getHousehold(householdId: string): Promise<IHousehold> {
  * Join a household by invite code. Idempotent for existing members.
  */
 export async function joinHousehold(userId: string, inviteCode: string): Promise<IHousehold> {
-  const household = await HouseholdModel.findOne({ inviteCode: inviteCode.toUpperCase().trim() });
+  // A destroyed household's code still exists and still belongs to it — it is
+  // never handed to a new household (PDR-022 D4) — but it stops resolving.
+  // "Invalid invite code" rather than "that household was deleted": the caller
+  // holding a code is not entitled to learn anything about a household they
+  // were never in.
+  const household = await HouseholdModel.findOne({
+    inviteCode: inviteCode.toUpperCase().trim(),
+    isDeleted: { $ne: true },
+  });
   if (!household) {
     throw new AppError('Invalid invite code', 404);
   }
@@ -438,11 +452,15 @@ async function loadMembersBySeniority(
  */
 async function lockHousehold(householdId: string, session: ClientSession): Promise<IHousehold> {
   const touched = await HouseholdModel.updateOne(
-    { _id: householdId },
+    { _id: householdId, isDeleted: { $ne: true } },
     { $currentDate: { updatedAt: true } },
     { session },
   );
   if (touched.matchedCount === 0) {
+    // Either it never existed or it was destroyed (PDR-022 D4). Both are 404,
+    // and the filter belongs on the WRITE rather than on a separate read: a
+    // destruction committing between the two would otherwise let a governance
+    // operation mutate a household that is already gone.
     throw new AppError('Household not found', 404);
   }
 

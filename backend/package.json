@@ -14,7 +14,8 @@
     "test": "jest --runInBand --forceExit",
     "test:coverage": "jest --runInBand --forceExit --coverage",
     "migrate:refresh-tokens": "node dist/scripts/migrate-refresh-tokens.js",
-    "backfill:household-members": "node dist/scripts/backfill-household-members.js"
+    "backfill:household-members": "node dist/scripts/backfill-household-members.js",
+    "destroy:scheduled-households": "node dist/scripts/destroy-scheduled-households.js"
   },
   "keywords": [
     "homesync",

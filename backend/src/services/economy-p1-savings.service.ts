@@ -361,3 +361,26 @@ export async function refundDepartingMember(
     session,
   );
 }
+
+/**
+ * Give EVERY active contribution in a household back, inside the caller's
+ * transaction (TD-067, PDR-022 D4).
+ *
+ * The third caller of the same refund, after cancelling a goal and a member
+ * leaving. Destroying a household ends its goals, and PDR-018 is explicit that
+ * a goal that never completes returns what people put into it — Hard Rule 16b
+ * applies here exactly as it does to a departure, and for the same reason: the
+ * memberships are about to be deleted, so this is the last moment at which the
+ * contributors are still reachable as members of anything.
+ *
+ * Unscoped by goal on purpose: a household can hold at most one ACTIVE goal
+ * (PDR-018), but it can hold older cancelled ones, and filtering on
+ * `status: 'active'` inside `refundContributions` already excludes both those
+ * and the `applied` contributions of a goal that unlocked.
+ */
+export async function refundContributionsForHousehold(
+  householdId: string,
+  session: ClientSession,
+): Promise<RefundLine[]> {
+  return refundContributions({ householdId: new Types.ObjectId(householdId) }, session);
+}

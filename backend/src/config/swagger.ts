@@ -546,6 +546,123 @@ export const swaggerSpec: Record<string, unknown> = {
         },
       },
     },
+    '/households/{householdId}/schedule-destruction': {
+      post: {
+        tags: ['Households'],
+        summary: 'Schedule the household for deletion (creator only — PDR-022 D4)',
+        description:
+          'Starts a 24-hour grace period. Nothing is deleted yet. Idempotent: a second call returns the FIRST deadline rather than setting a new one.',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+          {
+            name: 'Idempotency-Key',
+            in: 'header',
+            required: false,
+            schema: { type: 'string' },
+          },
+        ],
+        responses: {
+          '200': {
+            description: 'The pending deadline',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    data: {
+                      type: 'object',
+                      properties: {
+                        scheduledAt: { type: 'string', format: 'date-time' },
+                        scheduledBy: { type: 'string' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          '403': { description: 'Not a member, or not the household creator' },
+          '404': { description: 'Household not found' },
+        },
+      },
+    },
+    '/households/{householdId}/cancel-destruction': {
+      post: {
+        tags: ['Households'],
+        summary: 'Call off a scheduled deletion (creator only — PDR-022 D4)',
+        description:
+          'There is nothing to undo: the grace period exists so that no destructive work happens until it expires.',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          '200': { description: 'Cancelled' },
+          '403': { description: 'Not a member, or not the household creator' },
+          '404': { description: 'Household not found, or not scheduled for deletion' },
+        },
+      },
+    },
+    '/households/{householdId}/confirm-destruction': {
+      post: {
+        tags: ['Households'],
+        summary: 'Destroy the household once the grace period has expired (creator only)',
+        description:
+          'Soft-deletes the household and cascades over its tasks, shopping, pet, shared economy and memberships in one transaction, refunding every active joint-savings contribution first (Hard Rule 16b). Personal XP, level and wallet are untouched (PDR-017). The invite code is never recycled. 400 while the deadline is still in the future.',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          '200': { description: 'Destroyed' },
+          '400': {
+            description: 'Not scheduled, or the grace period has not expired yet',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
+          '403': { description: 'Not a member, or not the household creator' },
+          '404': { description: 'Household not found' },
+        },
+      },
+    },
+    '/households/{householdId}/destruction-status': {
+      get: {
+        tags: ['Households'],
+        summary: 'Whether the household is scheduled for deletion (any member)',
+        description:
+          'Only the creator can schedule or cancel a deletion, but everyone living in the household is entitled to know one is pending.',
+        security: bearerAuth,
+        parameters: [
+          { name: 'householdId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          '200': {
+            description: 'The pending deletion, or scheduled=false',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    data: {
+                      type: 'object',
+                      properties: {
+                        scheduled: { type: 'boolean' },
+                        scheduledAt: { type: 'string', format: 'date-time', nullable: true },
+                        scheduledBy: { type: 'string', nullable: true },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          '403': { description: 'Not a member of this household' },
+          '404': { description: 'Household not found' },
+        },
+      },
+    },
     '/households/{householdId}/tasks/timeline': {
       get: {
         tags: ['Tasks'],

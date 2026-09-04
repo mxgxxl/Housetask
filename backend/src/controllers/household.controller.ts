@@ -1,5 +1,6 @@
 import { Response } from 'express';
 import * as householdService from '../services/household.service';
+import * as destructionService from '../services/household-destruction.service';
 import * as householdStatsService from '../services/household-stats.service';
 import { StatsPeriod } from '../services/household-stats.service';
 import { AppError } from '../middleware/error.middleware';
@@ -144,5 +145,66 @@ export async function leave(req: AuthenticatedRequest, res: Response): Promise<v
     left: true,
     promotedUserId: outcome.promoteUserId ?? null,
     newOwnerId: outcome.newOwnerId ?? null,
+  });
+}
+
+/**
+ * POST /api/households/:householdId/schedule-destruction
+ * Starts the 24h grace period. Creator only (PDR-022 D4).
+ */
+export async function scheduleDestruction(
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> {
+  const scheduled = await destructionService.scheduleDestruction(
+    req.params.householdId,
+    req.user!.userId,
+  );
+  sendSuccess(res, {
+    scheduledAt: scheduled.scheduledAt,
+    scheduledBy: scheduled.scheduledBy.toString(),
+  });
+}
+
+/**
+ * POST /api/households/:householdId/cancel-destruction
+ * Calls the deletion off. Creator only (PDR-022 D4).
+ */
+export async function cancelDestruction(
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> {
+  await destructionService.cancelDestruction(req.params.householdId, req.user!.userId);
+  sendSuccess(res, { cancelled: true });
+}
+
+/**
+ * POST /api/households/:householdId/confirm-destruction
+ * Destroys the household once the grace period has expired. Creator only;
+ * 400 while the deadline is still in the future (PDR-022 D4).
+ */
+export async function confirmDestruction(
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> {
+  await destructionService.confirmDestruction(req.params.householdId, req.user!.userId);
+  sendSuccess(res, { destroyed: true });
+}
+
+/**
+ * GET /api/households/:householdId/destruction-status
+ * Any member may read it: a pending deletion is something everyone living in
+ * the household is entitled to know about, even though only the creator can
+ * schedule or cancel one.
+ */
+export async function getDestructionStatus(
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> {
+  const scheduled = await destructionService.destructionStatus(req.params.householdId);
+  sendSuccess(res, {
+    scheduled: scheduled !== null,
+    scheduledAt: scheduled?.scheduledAt ?? null,
+    scheduledBy: scheduled?.scheduledBy?.toString() ?? null,
   });
 }

@@ -80,4 +80,35 @@ router.post(
   asyncHandler(householdController.leave),
 );
 
+// Destruction with a grace period (PDR-022 D4). Creator-only, checked in the
+// service; `requireMembership` still runs first so a non-member never learns
+// whether the household exists.
+//
+// Only `schedule` carries `idempotency`: it is the one that CREATES a resource
+// (the HouseholdDestruction row), which is what Hard Rule 13 is about. Cancel
+// and confirm act on a row that must already exist, and the unique index makes
+// a duplicate schedule impossible anyway — the middleware is the retry-safety
+// net, not the uniqueness guarantee.
+router.post(
+  '/:householdId/schedule-destruction',
+  requireMembership,
+  idempotency,
+  asyncHandler(householdController.scheduleDestruction),
+);
+router.post(
+  '/:householdId/cancel-destruction',
+  requireMembership,
+  asyncHandler(householdController.cancelDestruction),
+);
+router.post(
+  '/:householdId/confirm-destruction',
+  requireMembership,
+  asyncHandler(householdController.confirmDestruction),
+);
+router.get(
+  '/:householdId/destruction-status',
+  requireMembership,
+  asyncHandler(householdController.getDestructionStatus),
+);
+
 export default router;
